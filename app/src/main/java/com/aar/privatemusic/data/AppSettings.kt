@@ -20,6 +20,9 @@ class AppSettings(context: Context) {
     private val _sponsorBlock = MutableStateFlow(prefs.getBoolean(KEY_SPONSORBLOCK, true))
     val sponsorBlock: StateFlow<Boolean> = _sponsorBlock
 
+    private val _autoMix = MutableStateFlow(prefs.getBoolean(KEY_AUTOMIX, false))
+    val autoMix: StateFlow<Boolean> = _autoMix
+
     private val _listenBrainzToken = MutableStateFlow(prefs.getString(KEY_LISTENBRAINZ, "") ?: "")
     val listenBrainzToken: StateFlow<String> = _listenBrainzToken
 
@@ -38,6 +41,11 @@ class AppSettings(context: Context) {
         _sponsorBlock.value = value
     }
 
+    fun setAutoMix(value: Boolean) {
+        prefs.edit().putBoolean(KEY_AUTOMIX, value).apply()
+        _autoMix.value = value
+    }
+
     fun setListenBrainzToken(value: String) {
         prefs.edit().putString(KEY_LISTENBRAINZ, value.trim()).apply()
         _listenBrainzToken.value = value.trim()
@@ -48,6 +56,7 @@ class AppSettings(context: Context) {
         private const val KEY_NORMALIZE = "normalize_volume"
         private const val KEY_SPONSORBLOCK = "sponsorblock"
         private const val KEY_LISTENBRAINZ = "listenbrainz_token"
+        private const val KEY_AUTOMIX = "automix"
 
         fun readSponsorBlock(context: Context): Boolean =
             context.getSharedPreferences("settings", Context.MODE_PRIVATE)
@@ -80,6 +89,9 @@ class AppSettings(context: Context) {
 
         fun readNormalizeVolume(context: Context): Boolean =
             context.getSharedPreferences("settings", Context.MODE_PRIVATE).getBoolean(KEY_NORMALIZE, false)
+
+        fun readAutoMix(context: Context): Boolean =
+            context.getSharedPreferences("settings", Context.MODE_PRIVATE).getBoolean(KEY_AUTOMIX, false)
 
         /** Spotify-style target loudness; louder tracks are attenuated down to it. */
         const val TARGET_LOUDNESS_DB = -14f

@@ -125,6 +125,9 @@ interface MusicDao {
     @Query("SELECT loudnessDb FROM songs WHERE id = :id")
     suspend fun getLoudness(id: String): Float?
 
+    @Query("SELECT bpm FROM songs WHERE id = :id")
+    suspend fun getBpm(id: String): Float?
+
     @Query("UPDATE songs SET title = :title, artist = :artist WHERE id = :id")
     suspend fun updateSongMeta(id: String, title: String, artist: String)
 

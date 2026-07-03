@@ -68,6 +68,9 @@ class PlaybackService : MediaLibraryService() {
         player.addListener(object : Player.Listener {
             override fun onMediaItemTransition(item: MediaItem?, reason: Int) {
                 fadingIn = reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO
+                // The outgoing track may have been tempo-bent by AutoMix to land
+                // on the incoming track's BPM; the incoming one plays natural.
+                if (player.playbackParameters.speed != 1f) player.setPlaybackSpeed(1f)
             }
         })
         startVolumeLoop(player, dao)
@@ -87,9 +90,13 @@ class PlaybackService : MediaLibraryService() {
             var gainFactor = 1f
             var gainForId: String? = null
             var touchedVolume = false
+            // AutoMix: target speed ratio for the current transition, cached per track pair.
+            var mixRatio = 1f
+            var mixForIds: Pair<String, String>? = null
             while (isActive) {
                 val crossfadeMs = AppSettings.readCrossfadeSec(this@PlaybackService) * 1000L
                 val normalize = AppSettings.readNormalizeVolume(this@PlaybackService)
+                val autoMix = AppSettings.readAutoMix(this@PlaybackService)
 
                 if (crossfadeMs == 0L && !normalize) {
                     if (touchedVolume) {
@@ -128,6 +135,25 @@ class PlaybackService : MediaLibraryService() {
                         // Equal-power fade-out, only when another track follows.
                         fade = kotlin.math.sqrt(remaining / crossfadeMs.toFloat()).coerceIn(0f, 1f)
                         phase = "out"
+                        if (autoMix) {
+                            // DJ-style beatmatch: bend the outgoing tempo to the incoming
+                            // BPM so the handoff keeps a continuous pulse. Applied ONCE per
+                            // transition: repeated speed changes flush the audio pipeline
+                            // every tick and stall playback near the end of the stream.
+                            val curId = player.currentMediaItem?.mediaId
+                            val nextId = player.getMediaItemAt(player.nextMediaItemIndex).mediaId
+                            if (curId != null && mixForIds != curId to nextId) {
+                                mixForIds = curId to nextId
+                                val (curBpm, nextBpm) = withContext(Dispatchers.IO) {
+                                    runCatching { dao.getBpm(curId) to dao.getBpm(nextId) }
+                                        .getOrDefault(null to null)
+                                }
+                                mixRatio = if (curBpm != null && nextBpm != null && curBpm > 0f)
+                                    (nextBpm / curBpm).coerceIn(0.9f, 1.1f) else 1f
+                                if (mixRatio != 1f) player.setPlaybackSpeed(mixRatio)
+                                android.util.Log.d("AutoMix", "pair=$curId->$nextId ratio=$mixRatio")
+                            }
+                        }
                     } else if (fadingIn && position < fadeInMs) {
                         // Ramp-in only after an automatic transition, never after a skip.
                         fade = kotlin.math.sqrt((position + 150) / fadeInMs.toFloat()).coerceIn(0.1f, 1f)
@@ -135,6 +161,12 @@ class PlaybackService : MediaLibraryService() {
                     } else if (fadingIn) {
                         fadingIn = false
                     }
+                }
+
+                if (phase != "out") {
+                    mixForIds = null
+                    // Undo any leftover tempo bend (seek back out of the fade window, etc.).
+                    if (player.playbackParameters.speed != 1f) player.setPlaybackSpeed(1f)
                 }
 
                 if (phase != lastFadePhase) {

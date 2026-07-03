@@ -46,6 +46,7 @@ import kotlinx.coroutines.launch
 fun SettingsScreen(app: PrivateMusicApp, onOpenStats: () -> Unit, onOpenEq: () -> Unit = {}) {
     val crossfade by app.settings.crossfadeSec.collectAsState()
     val normalize by app.settings.normalizeVolume.collectAsState()
+    val autoMix by app.settings.autoMix.collectAsState()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
@@ -119,6 +120,29 @@ fun SettingsScreen(app: PrivateMusicApp, onOpenStats: () -> Unit, onOpenEq: () -
             valueRange = 0f..12f,
             steps = 11,
         )
+
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text("AutoMix (igualar BPM)", style = MaterialTheme.typography.bodyLarge)
+                Text(
+                    if (crossfade == 0)
+                        "Requiere el fundido activado"
+                    else "Al mezclar, desliza el tempo de la canción saliente hasta el BPM de la siguiente (sin cambiar el tono)",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Switch(
+                checked = autoMix,
+                enabled = crossfade > 0,
+                onCheckedChange = { app.settings.setAutoMix(it) },
+            )
+        }
 
         Row(
             Modifier
