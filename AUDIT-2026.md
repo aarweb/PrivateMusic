@@ -55,8 +55,8 @@
 10. **SponsorBlock** al descargar (API pública, recorta segmentos no-música con el ffmpeg embebido).
 11. **Scrobbling Last.fm/ListenBrainz** opcional.
 
-### Fase 6 — Inteligencia on-device ✅ NÚCLEO COMPLETADO (v1.8, 2026-07-03)
-*Implementado: análisis BPM/tonalidad Camelot/huella sónica (DSP propio, sin ML), radio por similitud, Smart Reorder, EQ con presets. Pendiente como apuestas XL: AutoMix con time-stretch real (requiere doble pipeline de audio con SoundTouch/Oboe) y karaoke Demucs-ONNX (~300 MB de modelo).*
+### Fase 6 — Inteligencia on-device ✅ COMPLETADA (v1.8–v1.14, 2026-07-03)
+*Implementado: análisis BPM/tonalidad Camelot/huella sónica (DSP propio, sin ML), radio por similitud, Smart Reorder, EQ con presets. Las apuestas XL también cayeron: Sonic Adventure (v1.12), AutoMix con time-stretch de Media3/Sonic sin código nativo (v1.13) y karaoke offline con Open-Unmix ONNX de 36 MB descargado bajo demanda (v1.14) — correlación 0.994 con la referencia numpy, ~75 s por canción de 6 min en un Pixel 7 Pro.*
 12. **Análisis de biblioteca en background**: BPM + tonalidad (TarsosDSP/Essentia) + embeddings (MusiCNN/Essentia-TF) al descargar. Habilita todo lo siguiente.
 13. **Radio de similitud** ("reproducir similares", autoplay infinito) + **Sonic Adventure** (ruta entre dos canciones).
 14. **Smart Reorder** de playlists por BPM/rueda de Camelot (feature Premium de Spotify, gratis aquí).
