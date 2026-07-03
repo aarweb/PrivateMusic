@@ -13,12 +13,12 @@ android {
         applicationId = "com.aar.privatemusic"
         minSdk = 26
         targetSdk = 35
-        versionCode = 11
-        versionName = "1.10"
+        versionCode = 12
+        versionName = "1.11"
 
         ndk {
-            // yt-dlp binaries ship per-ABI; keep the two real-device ABIs.
-            abiFilters += listOf("arm64-v8a", "armeabi-v7a")
+            // arm64 only: every phone since ~2016. Halves the APK (yt-dlp/ffmpeg per ABI).
+            abiFilters += listOf("arm64-v8a")
         }
     }
 

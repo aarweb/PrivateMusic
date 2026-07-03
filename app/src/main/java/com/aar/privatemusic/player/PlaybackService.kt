@@ -8,6 +8,7 @@ import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
+import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.session.LibraryResult
 import androidx.media3.session.MediaLibraryService
@@ -62,8 +63,19 @@ class PlaybackService : MediaLibraryService() {
             .setSessionActivity(sessionActivity)
             .build()
         EqHolder.init(this, player.audioSessionId)
+        // Crossfade must distinguish automatic track changes from manual skips:
+        // fading in after a manual skip feels like broken volume.
+        player.addListener(object : Player.Listener {
+            override fun onMediaItemTransition(item: MediaItem?, reason: Int) {
+                fadingIn = reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO
+            }
+        })
         startVolumeLoop(player, dao)
     }
+
+    /** True while the current track should ramp up (started via auto-transition). */
+    private var fadingIn = false
+    private var lastFadePhase = "full"
 
     /**
      * Drives the player volume for crossfade (fade-out/in at track edges)
@@ -103,19 +115,32 @@ class PlaybackService : MediaLibraryService() {
                 }
 
                 var fade = 1f
-                if (crossfadeMs > 0 && player.isPlaying) {
-                    val duration = player.duration
+                var phase = "full"
+                val duration = player.duration
+                if (crossfadeMs > 0 && player.isPlaying &&
+                    duration != androidx.media3.common.C.TIME_UNSET &&
+                    duration > crossfadeMs * 2
+                ) {
                     val position = player.currentPosition
-                    if (duration > crossfadeMs * 2) {
-                        val remaining = duration - position
-                        fade = minOf(
-                            1f,
-                            remaining / crossfadeMs.toFloat(),
-                            (position + 400) / crossfadeMs.toFloat(),
-                        ).coerceIn(0f, 1f)
+                    val remaining = duration - position
+                    val fadeInMs = crossfadeMs / 2
+                    if (remaining in 1 until crossfadeMs && player.hasNextMediaItem()) {
+                        // Equal-power fade-out, only when another track follows.
+                        fade = kotlin.math.sqrt(remaining / crossfadeMs.toFloat()).coerceIn(0f, 1f)
+                        phase = "out"
+                    } else if (fadingIn && position < fadeInMs) {
+                        // Ramp-in only after an automatic transition, never after a skip.
+                        fade = kotlin.math.sqrt((position + 150) / fadeInMs.toFloat()).coerceIn(0.1f, 1f)
+                        phase = "in"
+                    } else if (fadingIn) {
+                        fadingIn = false
                     }
                 }
 
+                if (phase != lastFadePhase) {
+                    lastFadePhase = phase
+                    android.util.Log.d("Crossfade", "phase=$phase fade=$fade")
+                }
                 player.volume = gainFactor * fade
                 touchedVolume = true
                 delay(200)

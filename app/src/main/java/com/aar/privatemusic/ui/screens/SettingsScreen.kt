@@ -370,16 +370,25 @@ fun SettingsScreen(app: PrivateMusicApp, onOpenStats: () -> Unit, onOpenEq: () -
                     }
                 },
                 confirmButton = {
+                    val cached = AppUpdater.hasCached(context, info.version)
                     TextButton(onClick = {
                         val url = info.apkUrl
+                        val version = info.version
                         updateInfo = null
                         scope.launch {
-                            downloadProgress = 0
-                            val ok = AppUpdater.downloadAndInstall(context, url) { downloadProgress = it }
-                            downloadProgress = null
-                            updateStatus = if (ok) "Instalador abierto" else "Error al descargar la actualización"
+                            if (cached) {
+                                updateStatus = if (AppUpdater.installCached(context))
+                                    "Instalador abierto" else "Error al abrir el instalador"
+                            } else {
+                                downloadProgress = 0
+                                val ok = AppUpdater.downloadAndInstall(context, url, version) {
+                                    downloadProgress = it
+                                }
+                                downloadProgress = null
+                                updateStatus = if (ok) "Instalador abierto" else "Error al descargar la actualización"
+                            }
                         }
-                    }) { Text("Descargar e instalar") }
+                    }) { Text(if (cached) "Instalar (ya descargada)" else "Descargar e instalar") }
                 },
                 dismissButton = { TextButton(onClick = { updateInfo = null }) { Text("Ahora no") } },
             )

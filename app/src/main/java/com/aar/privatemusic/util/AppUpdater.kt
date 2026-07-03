@@ -74,15 +74,30 @@ object AppUpdater {
         return false
     }
 
+    private fun cachedApk(context: Context) = File(context.cacheDir, "updates/update.apk")
+
+    /** True if the APK for this exact version is already downloaded. */
+    fun hasCached(context: Context, version: String): Boolean {
+        val prefs = context.getSharedPreferences("settings", Context.MODE_PRIVATE)
+        return prefs.getString("cached_update_version", null) == version &&
+            cachedApk(context).length() > 1_000_000
+    }
+
+    /** Re-launches the installer with the already-downloaded APK (no re-download). */
+    fun installCached(context: Context): Boolean = runCatching {
+        launchInstaller(context, cachedApk(context))
+        true
+    }.getOrDefault(false)
+
     /** Downloads the APK and opens the system installer. */
     suspend fun downloadAndInstall(
         context: Context,
         apkUrl: String,
+        version: String,
         onProgress: (Int) -> Unit,
     ): Boolean = withContext(Dispatchers.IO) {
         try {
-            val dir = File(context.cacheDir, "updates").apply { mkdirs() }
-            val apk = File(dir, "update.apk")
+            val apk = cachedApk(context).apply { parentFile?.mkdirs() }
 
             val conn = URL(apkUrl).openConnection() as HttpURLConnection
             conn.instanceFollowRedirects = true
@@ -103,17 +118,24 @@ object AppUpdater {
             }
             conn.disconnect()
 
-            val uri = FileProvider.getUriForFile(
-                context, "${context.packageName}.fileprovider", apk,
-            )
-            val intent = Intent(Intent.ACTION_VIEW).apply {
-                setDataAndType(uri, "application/vnd.android.package-archive")
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-            context.startActivity(intent)
+            context.getSharedPreferences("settings", Context.MODE_PRIVATE)
+                .edit().putString("cached_update_version", version).apply()
+
+            launchInstaller(context, apk)
             true
         } catch (e: Exception) {
             false
         }
+    }
+
+    private fun launchInstaller(context: Context, apk: File) {
+        val uri = FileProvider.getUriForFile(
+            context, "${context.packageName}.fileprovider", apk,
+        )
+        val intent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(uri, "application/vnd.android.package-archive")
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        context.startActivity(intent)
     }
 }
