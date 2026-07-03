@@ -213,6 +213,20 @@ class YtDownloader(
         return result
     }
 
+    /**
+     * Direct URL of the best audio stream, for previewing a result
+     * without downloading it. Expires after a while (YouTube signs it).
+     */
+    suspend fun streamUrl(id: String): String? = withContext(Dispatchers.IO) {
+        runCatching {
+            val request = YoutubeDLRequest("https://www.youtube.com/watch?v=$id").apply {
+                addOption("-f", "bestaudio/best")
+                addOption("--no-playlist")
+            }
+            ytdl.getInfo(request).url?.takeIf { it.startsWith("http") }
+        }.onFailure { Log.e("YtDownloader", "streamUrl failed for $id", it) }.getOrNull()
+    }
+
     /** Resolve a raw YouTube URL (e.g. shared from another app) and queue it. */
     fun enqueueUrl(url: String) {
         scope.launch(Dispatchers.IO) {

@@ -243,6 +243,27 @@ class PlayerController(
         controller = null
     }
 
+    /** Streams a search result (preview before downloading). */
+    fun playStream(id: String, title: String, artist: String, streamUrl: String, artworkUrl: String?) {
+        val c = controller ?: return
+        val uri = Uri.parse(streamUrl)
+        val item = MediaItem.Builder()
+            .setMediaId("preview:$id")
+            .setUri(uri)
+            .setRequestMetadata(MediaItem.RequestMetadata.Builder().setMediaUri(uri).build())
+            .setMediaMetadata(
+                MediaMetadata.Builder()
+                    .setTitle("$title · Preescucha")
+                    .setArtist(artist)
+                    .setArtworkUri(artworkUrl?.let { Uri.parse(it) })
+                    .build()
+            )
+            .build()
+        c.setMediaItems(listOf(item), 0, 0L)
+        c.prepare()
+        c.play()
+    }
+
     /** Plays [file] (e.g. an instrumental WAV) as if it were the song itself. */
     fun playKaraoke(song: Song, file: File) {
         val c = controller ?: return

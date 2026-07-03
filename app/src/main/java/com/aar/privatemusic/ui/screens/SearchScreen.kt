@@ -15,7 +15,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.ErrorOutline
+import androidx.compose.material.icons.filled.PlayCircleOutline
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.StopCircle
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -68,6 +70,28 @@ fun SearchScreen(app: PrivateMusicApp) {
 
     val downloads by app.downloader.downloads.collectAsState()
     val libraryIds by app.repository.observeSongIds().collectAsState(initial = emptyList())
+    val nowPlaying by app.playerController.nowPlaying.collectAsState()
+    val isPlaying by app.playerController.isPlaying.collectAsState()
+    var previewLoadingId by remember { mutableStateOf<String?>(null) }
+
+    fun togglePreview(result: SearchResult) {
+        if (nowPlaying?.songId == "preview:${result.id}" && isPlaying) {
+            app.playerController.togglePlayPause()
+            return
+        }
+        if (previewLoadingId != null) return
+        previewLoadingId = result.id
+        scope.launch {
+            val url = app.downloader.streamUrl(result.id)
+            if (url != null) {
+                app.playerController.playStream(result.id, result.title, result.artist, url, result.thumbnailUrl)
+            } else {
+                error = null
+                actionMessage = "No se pudo obtener el stream de \"${result.title}\""
+            }
+            previewLoadingId = null
+        }
+    }
 
     fun isPlaylistUrl(q: String): Boolean =
         q.contains("list=") || q.contains("/playlist") ||
@@ -162,6 +186,17 @@ fun SearchScreen(app: PrivateMusicApp) {
             },
         )
 
+        if (playlistTitle == null) {
+            actionMessage?.let {
+                Text(
+                    it,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(horizontal = 16.dp),
+                )
+            }
+        }
+
         when {
             searching -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator()
@@ -228,6 +263,9 @@ fun SearchScreen(app: PrivateMusicApp) {
                         result = result,
                         inLibrary = inLibrary,
                         state = state,
+                        previewResolving = previewLoadingId == result.id,
+                        previewPlaying = isPlaying && nowPlaying?.songId == "preview:${result.id}",
+                        onPreview = { togglePreview(result) },
                         onDownload = { app.downloader.enqueue(result) },
                     )
                 }
@@ -241,6 +279,9 @@ private fun SearchResultRow(
     result: SearchResult,
     inLibrary: Boolean,
     state: DownloadState?,
+    previewResolving: Boolean,
+    previewPlaying: Boolean,
+    onPreview: () -> Unit,
     onDownload: () -> Unit,
 ) {
     Row(
@@ -264,6 +305,19 @@ private fun SearchResultRow(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+        }
+        // Preview: listen before deciding to download.
+        when {
+            previewResolving ->
+                CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+            previewPlaying ->
+                IconButton(onClick = onPreview) {
+                    Icon(Icons.Filled.StopCircle, "Parar preescucha", tint = MaterialTheme.colorScheme.primary)
+                }
+            else ->
+                IconButton(onClick = onPreview) {
+                    Icon(Icons.Filled.PlayCircleOutline, "Escuchar sin descargar")
+                }
         }
         when {
             inLibrary || state is DownloadState.Done ->

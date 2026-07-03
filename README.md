@@ -16,6 +16,7 @@ Requiere Android 8.0+ (arm64).
 
 **Descarga a máxima calidad real**
 - Stream `bestaudio` original de YouTube (Opus/AAC) **sin recodificar** — nada de "MP3 320 kbps" falsos.
+- **Preescucha en streaming**: escucha cualquier resultado antes de decidir si lo descargas.
 - yt-dlp embebido y auto-actualizable (sobrevive a los cambios de YouTube).
 - SponsorBlock: recorta intros/outros y partes sin música al descargar.
 - Badge con la calidad real del archivo: códec, bitrate, sample rate.
