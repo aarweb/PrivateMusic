@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "WebFetch(domain:github.com)",
+      "Read(//opt/**)",
+      "Read(//home/aar/.local/share/**)",
+      "Bash(find / -maxdepth 3 -name \"android-studio\" -o -maxdepth 3 -name \"cmdline-tools\")",
+      "Bash(pacman -Q jdk17-openjdk jdk21-openjdk android-tools)",
+      "Bash(flatpak list *)",
+      "Bash(scp /home/aar/Projects/PrivateMusic/app/build/outputs/apk/debug/app-debug.apk mimovil:/data/data/com.termux/files/home/)",
+      "Bash(ssh mimovil *)",
+      "WebFetch(domain:newsroom.spotify.com)",
+      "WebFetch(domain:www.techloy.com)"
+    ]
+  }
+}
