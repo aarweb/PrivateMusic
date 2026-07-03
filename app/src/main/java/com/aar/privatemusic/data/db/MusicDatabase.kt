@@ -8,8 +8,8 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
-    entities = [Song::class, Playlist::class, PlaylistSongCrossRef::class, PlayEvent::class, SmartPlaylist::class, WatchedSource::class],
-    version = 7,
+    entities = [Song::class, Playlist::class, PlaylistSongCrossRef::class, PlayEvent::class, SmartPlaylist::class, WatchedSource::class, PlaylistFolder::class],
+    version = 8,
     exportSchema = false,
 )
 abstract class MusicDatabase : RoomDatabase() {
@@ -85,6 +85,18 @@ abstract class MusicDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """CREATE TABLE IF NOT EXISTS playlist_folders (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        name TEXT NOT NULL,
+                        createdAt INTEGER NOT NULL)"""
+                )
+                db.execSQL("ALTER TABLE playlists ADD COLUMN folderId INTEGER")
+            }
+        }
+
         fun get(context: Context): MusicDatabase =
             instance ?: synchronized(this) {
                 instance ?: Room.databaseBuilder(
@@ -93,7 +105,7 @@ abstract class MusicDatabase : RoomDatabase() {
                     "music.db",
                 ).addMigrations(
                     MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4,
-                    MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7,
+                    MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8,
                 )
                     .build().also { instance = it }
             }

@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -68,6 +69,7 @@ fun LibraryScreen(app: PrivateMusicApp) {
     var songForPlaylist by remember { mutableStateOf<Song?>(null) }
     var songForEdit by remember { mutableStateOf<Song?>(null) }
     var songForArt by remember { mutableStateOf<Song?>(null) }
+    var songForAdventure by remember { mutableStateOf<Song?>(null) }
     var query by remember { mutableStateOf("") }
 
     val context = LocalContext.current
@@ -238,6 +240,15 @@ fun LibraryScreen(app: PrivateMusicApp) {
                                         }
                                     },
                                 )
+                                if (song.sonicFeatures != null) {
+                                    DropdownMenuItem(
+                                        text = { Text("Aventura sónica hasta…") },
+                                        onClick = {
+                                            menuOpen = false
+                                            songForAdventure = song
+                                        },
+                                    )
+                                }
                                 DropdownMenuItem(
                                     text = { Text("Reproducir a continuación") },
                                     onClick = {
@@ -359,4 +370,82 @@ fun LibraryScreen(app: PrivateMusicApp) {
             dismissButton = { TextButton(onClick = { songForEdit = null }) { Text("Cancelar") } },
         )
     }
+
+    songForAdventure?.let { from ->
+        SonicAdventureDialog(
+            from = from,
+            candidates = songs,
+            onPick = { to ->
+                songForAdventure = null
+                scope.launch {
+                    val journey = app.repository.sonicAdventure(from, to)
+                    if (journey.size > 1) app.playerController.playQueue(journey, 0)
+                    else app.playerController.playQueue(listOf(from, to), 0)
+                }
+            },
+            onDismiss = { songForAdventure = null },
+        )
+    }
+}
+
+/** Picks the destination song for a Sonic Adventure starting from [from]. */
+@Composable
+private fun SonicAdventureDialog(
+    from: Song,
+    candidates: List<Song>,
+    onPick: (Song) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var query by remember { mutableStateOf("") }
+    val options = remember(candidates, query, from.id) {
+        candidates
+            .filter { it.id != from.id && it.sonicFeatures != null }
+            .filter {
+                query.isBlank() ||
+                    it.title.contains(query, ignoreCase = true) ||
+                    it.artist.contains(query, ignoreCase = true)
+            }
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Aventura sónica") },
+        text = {
+            Column {
+                Text(
+                    "Un viaje que transforma gradualmente “${from.title}” en la canción que elijas.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(bottom = 8.dp),
+                )
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = { query = it },
+                    placeholder = { Text("Buscar destino") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                LazyColumn(Modifier.heightIn(max = 320.dp)) {
+                    items(options, key = { it.id }) { song ->
+                        Column(
+                            Modifier
+                                .fillMaxWidth()
+                                .clickable { onPick(song) }
+                                .padding(vertical = 12.dp),
+                        ) {
+                            Text(song.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(
+                                song.artist,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancelar") } },
+    )
 }

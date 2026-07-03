@@ -6,6 +6,7 @@ import com.aar.privatemusic.data.db.MusicDao
 import com.aar.privatemusic.data.db.PlayCount
 import com.aar.privatemusic.data.db.PlayEvent
 import com.aar.privatemusic.data.db.Playlist
+import com.aar.privatemusic.data.db.PlaylistFolder
 import com.aar.privatemusic.data.db.PlaylistSongCrossRef
 import com.aar.privatemusic.data.db.SmartPlaylist
 import com.aar.privatemusic.data.db.Song
@@ -55,6 +56,24 @@ class MusicRepository(
         dao.clearPlaylist(playlist.id)
         dao.deletePlaylist(playlist)
     }
+
+    // ---- Playlist folders ----
+
+    fun observeFolders(): Flow<List<PlaylistFolder>> = dao.observeFolders()
+
+    suspend fun createFolder(name: String): Long =
+        dao.insertFolder(PlaylistFolder(name = name.trim(), createdAt = System.currentTimeMillis()))
+
+    suspend fun renameFolder(id: Long, name: String) = dao.renameFolder(id, name.trim())
+
+    /** Deletes a folder and loosens its playlists back to the top level. */
+    suspend fun deleteFolder(folder: PlaylistFolder) {
+        dao.clearFolder(folder.id)
+        dao.deleteFolder(folder)
+    }
+
+    suspend fun movePlaylistToFolder(playlistId: Long, folderId: Long?) =
+        dao.setPlaylistFolder(playlistId, folderId)
 
     suspend fun addToPlaylist(playlistId: Long, songId: String) {
         val position = dao.playlistSize(playlistId)
@@ -270,6 +289,43 @@ class MusicRepository(
             .take(size - 1)
             .map { it.first }
         return listOf(seed) + candidates
+    }
+
+    /**
+     * "Sonic Adventure": a queue that morphs gradually from one song to another.
+     * Interpolates a straight line between the two feature vectors and, at each
+     * step, picks the still-unused library song nearest that interpolated point.
+     * The two chosen songs stay fixed as the endpoints of the journey.
+     */
+    suspend fun sonicAdventure(from: Song, to: Song, steps: Int = 8): List<Song> {
+        val startF = from.sonicFeatures?.let { AnalysisResult.parseFeatures(it) } ?: return emptyList()
+        val endF = to.sonicFeatures?.let { AnalysisResult.parseFeatures(it) } ?: return emptyList()
+        if (startF.size != endF.size) return emptyList()
+        val now = System.currentTimeMillis()
+        val pool = dao.songsOnce()
+            .filter { it.id != from.id && it.id != to.id && it.snoozedUntil < now && it.sonicFeatures != null }
+            .mapNotNull { s -> AnalysisResult.parseFeatures(s.sonicFeatures!!)?.let { s to it } }
+            .toMutableList()
+        val path = mutableListOf(from)
+        val innerSteps = steps.coerceAtLeast(2)
+        for (i in 1 until innerSteps) {
+            if (pool.isEmpty()) break
+            val t = i.toFloat() / innerSteps
+            val target = FloatArray(startF.size) { startF[it] + (endF[it] - startF[it]) * t }
+            val bestIdx = pool.indices.minByOrNull { squaredDistance(target, pool[it].second) } ?: break
+            path.add(pool.removeAt(bestIdx).first)
+        }
+        path.add(to)
+        return path
+    }
+
+    private fun squaredDistance(a: FloatArray, b: FloatArray): Float {
+        var sum = 0f
+        for (i in a.indices) {
+            val d = a[i] - b[i]
+            sum += d * d
+        }
+        return sum
     }
 
     /**

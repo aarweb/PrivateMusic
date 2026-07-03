@@ -291,4 +291,25 @@ interface MusicDao {
 
     @Query("DELETE FROM playlist_songs WHERE playlistId = :playlistId AND songId = :songId")
     suspend fun removeFromPlaylist(playlistId: Long, songId: String)
+
+    // ---- Playlist folders ----
+
+    @Query("SELECT * FROM playlist_folders ORDER BY createdAt ASC")
+    fun observeFolders(): Flow<List<PlaylistFolder>>
+
+    @Insert
+    suspend fun insertFolder(folder: PlaylistFolder): Long
+
+    @Delete
+    suspend fun deleteFolder(folder: PlaylistFolder)
+
+    @Query("UPDATE playlist_folders SET name = :name WHERE id = :id")
+    suspend fun renameFolder(id: Long, name: String)
+
+    @Query("UPDATE playlists SET folderId = :folderId WHERE id = :id")
+    suspend fun setPlaylistFolder(id: Long, folderId: Long?)
+
+    /** Loosen every playlist inside a folder (used before deleting the folder). */
+    @Query("UPDATE playlists SET folderId = NULL WHERE folderId = :folderId")
+    suspend fun clearFolder(folderId: Long)
 }

@@ -28,7 +28,7 @@ Requiere Android 8.0+ (arm64).
 
 **Biblioteca y playlists**
 - Favoritos, historial, búsqueda en vivo, ordenación, snooze de canciones.
-- Playlists normales (drag & drop, portadas personalizadas, pins), **smart playlists** por reglas y automáticas (Más escuchadas, Olvidadas, Top de tu temporada, **Mix de hoy**).
+- Playlists normales (drag & drop, portadas personalizadas, pins), **carpetas** para organizarlas, **smart playlists** por reglas y automáticas (Más escuchadas, Olvidadas, Top de tu temporada, **Mix de hoy**).
 - Carátulas de canción personalizables y editor de metadatos.
 - Backup de base de datos + export/import M3U/CSV. Sin lock-in.
 
@@ -42,6 +42,7 @@ Requiere Android 8.0+ (arm64).
 **Inteligencia on-device (sin nube)**
 - Análisis de cada canción al descargarla: **BPM**, **tonalidad Camelot** y huella sónica.
 - **Radio de esta canción**: cola infinita por similitud sónica de tu propia biblioteca.
+- **Aventura sónica**: una cola que transforma gradualmente una canción en otra, interpolando en el espacio de huellas sónicas.
 - **Ordenar para mezclar**: reordena playlists por BPM y rueda de Camelot (transiciones DJ).
 
 **Ritual**

@@ -59,6 +59,16 @@ data class Playlist(
     val createdAt: Long,
     val coverPath: String? = null,
     val isPinned: Boolean = false,
+    // Optional grouping folder; null = loose at the top level.
+    val folderId: Long? = null,
+)
+
+/** A folder that groups playlists in the library. */
+@Entity(tableName = "playlist_folders")
+data class PlaylistFolder(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val name: String,
+    val createdAt: Long,
 )
 
 data class DayPlays(val day: String, val plays: Int)

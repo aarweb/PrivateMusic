@@ -16,7 +16,12 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material.icons.filled.PushPin
@@ -36,6 +41,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -46,6 +52,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.aar.privatemusic.PrivateMusicApp
 import com.aar.privatemusic.data.db.Playlist
+import com.aar.privatemusic.data.db.PlaylistFolder
 import com.aar.privatemusic.ui.components.ArtImage
 import kotlinx.coroutines.launch
 import java.io.File
@@ -59,11 +66,16 @@ fun PlaylistsScreen(
 ) {
     val playlists by app.repository.observePlaylists().collectAsState(initial = emptyList())
     val smartPlaylists by app.repository.observeSmartPlaylists().collectAsState(initial = emptyList())
+    val folders by app.repository.observeFolders().collectAsState(initial = emptyList())
     val scope = rememberCoroutineScope()
     var creating by remember { mutableStateOf(false) }
     var creatingSmart by remember { mutableStateOf(false) }
+    var creatingFolder by remember { mutableStateOf(false) }
+    var folderForRename by remember { mutableStateOf<PlaylistFolder?>(null) }
+    var playlistForFolder by remember { mutableStateOf<Playlist?>(null) }
     var fabMenuOpen by remember { mutableStateOf(false) }
     var playlistForCover by remember { mutableStateOf<Playlist?>(null) }
+    val collapsedFolders = remember { mutableStateListOf<Long>() }
 
     val context = LocalContext.current
     val coverPicker = rememberLauncherForActivityResult(
@@ -97,7 +109,14 @@ fun PlaylistsScreen(
                             creatingSmart = true
                         },
                     )
-                }
+                    DropdownMenuItem(
+                        text = { Text("Carpeta") },
+                        onClick = {
+                            fabMenuOpen = false
+                            creatingFolder = true
+                        },
+                    )
+}
             }
         },
     ) { padding ->
@@ -207,10 +226,13 @@ fun PlaylistsScreen(
                     )
                 }
             }
-            items(playlists.sortedByDescending { it.isPinned }, key = { it.id }) { pl ->
+
+            val playlistRowItem: @Composable (Playlist, Boolean) -> Unit = { pl, indent ->
                 PlaylistRow(
                     app = app,
                     playlist = pl,
+                    hasFolders = folders.isNotEmpty(),
+                    indent = indent,
                     onClick = { onOpenPlaylist(pl.id) },
                     onDelete = { scope.launch { app.repository.deletePlaylist(pl) } },
                     onChangeCover = {
@@ -219,8 +241,34 @@ fun PlaylistsScreen(
                             PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
                         )
                     },
+                    onMoveToFolder = { playlistForFolder = pl },
                 )
             }
+
+            for (folder in folders) {
+                val collapsed = folder.id in collapsedFolders
+                val inFolder = playlists.filter { it.folderId == folder.id }
+                    .sortedByDescending { it.isPinned }
+                item(key = "folder-${folder.id}") {
+                    FolderHeader(
+                        folder = folder,
+                        count = inFolder.size,
+                        collapsed = collapsed,
+                        onToggle = {
+                            if (collapsed) collapsedFolders.remove(folder.id)
+                            else collapsedFolders.add(folder.id)
+                        },
+                        onRename = { folderForRename = folder },
+                        onDelete = { scope.launch { app.repository.deleteFolder(folder) } },
+                    )
+                }
+                if (!collapsed) {
+                    items(inFolder, key = { "pl-${it.id}" }) { pl -> playlistRowItem(pl, true) }
+                }
+            }
+
+            val looseFolder = playlists.filter { it.folderId == null }.sortedByDescending { it.isPinned }
+            items(looseFolder, key = { it.id }) { pl -> playlistRowItem(pl, false) }
         }
     }
 
@@ -255,15 +303,162 @@ fun PlaylistsScreen(
     if (creatingSmart) {
         CreateSmartPlaylistDialog(app, onDismiss = { creatingSmart = false })
     }
+
+    if (creatingFolder) {
+        var name by remember { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = { creatingFolder = false },
+            title = { Text("Nueva carpeta") },
+            text = {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    placeholder = { Text("Nombre") },
+                    singleLine = true,
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val trimmed = name.trim()
+                    if (trimmed.isNotEmpty()) scope.launch { app.repository.createFolder(trimmed) }
+                    creatingFolder = false
+                }) { Text("Crear") }
+            },
+            dismissButton = { TextButton(onClick = { creatingFolder = false }) { Text("Cancelar") } },
+        )
+    }
+
+    folderForRename?.let { folder ->
+        var name by remember(folder.id) { mutableStateOf(folder.name) }
+        AlertDialog(
+            onDismissRequest = { folderForRename = null },
+            title = { Text("Renombrar carpeta") },
+            text = {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    singleLine = true,
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val trimmed = name.trim()
+                    if (trimmed.isNotEmpty()) scope.launch { app.repository.renameFolder(folder.id, trimmed) }
+                    folderForRename = null
+                }) { Text("Guardar") }
+            },
+            dismissButton = { TextButton(onClick = { folderForRename = null }) { Text("Cancelar") } },
+        )
+    }
+
+    playlistForFolder?.let { pl ->
+        AlertDialog(
+            onDismissRequest = { playlistForFolder = null },
+            title = { Text("Mover “${pl.name}”") },
+            text = {
+                Column {
+                    if (pl.folderId != null) {
+                        DropdownMenuItem(
+                            text = { Text("Sacar de la carpeta") },
+                            onClick = {
+                                scope.launch { app.repository.movePlaylistToFolder(pl.id, null) }
+                                playlistForFolder = null
+                            },
+                        )
+                    }
+                    folders.forEach { folder ->
+                        DropdownMenuItem(
+                            text = { Text(folder.name) },
+                            trailingIcon = {
+                                if (folder.id == pl.folderId) {
+                                    Icon(Icons.Filled.Check, contentDescription = "Actual")
+                                }
+                            },
+                            onClick = {
+                                scope.launch { app.repository.movePlaylistToFolder(pl.id, folder.id) }
+                                playlistForFolder = null
+                            },
+                        )
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = { TextButton(onClick = { playlistForFolder = null }) { Text("Cerrar") } },
+        )
+    }
+}
+
+@Composable
+private fun FolderHeader(
+    folder: PlaylistFolder,
+    count: Int,
+    collapsed: Boolean,
+    onToggle: () -> Unit,
+    onRename: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    var menuOpen by remember { mutableStateOf(false) }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onToggle)
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            if (collapsed) Icons.Filled.Folder else Icons.Filled.FolderOpen,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.secondary,
+        )
+        Text(
+            folder.name,
+            style = MaterialTheme.typography.titleSmall,
+            modifier = Modifier.weight(1f).padding(horizontal = 16.dp),
+        )
+        Text(
+            "$count",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Icon(
+            if (collapsed) Icons.Filled.ExpandMore else Icons.Filled.ExpandLess,
+            contentDescription = if (collapsed) "Expandir" else "Contraer",
+            modifier = Modifier.padding(start = 8.dp),
+        )
+        Box {
+            IconButton(onClick = { menuOpen = true }) {
+                Icon(Icons.Filled.MoreVert, contentDescription = "Opciones de carpeta")
+            }
+            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                DropdownMenuItem(
+                    text = { Text("Renombrar") },
+                    onClick = {
+                        menuOpen = false
+                        onRename()
+                    },
+                )
+                DropdownMenuItem(
+                    text = { Text("Eliminar carpeta") },
+                    onClick = {
+                        menuOpen = false
+                        onDelete()
+                    },
+                )
+            }
+        }
+    }
 }
 
 @Composable
 private fun PlaylistRow(
     app: PrivateMusicApp,
     playlist: Playlist,
+    hasFolders: Boolean,
+    indent: Boolean,
     onClick: () -> Unit,
     onDelete: () -> Unit,
     onChangeCover: () -> Unit,
+    onMoveToFolder: () -> Unit,
 ) {
     val count by app.repository.observePlaylistSize(playlist.id).collectAsState(initial = 0)
     var menuOpen by remember { mutableStateOf(false) }
@@ -272,7 +467,8 @@ private fun PlaylistRow(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 12.dp),
+            .padding(start = if (indent) 32.dp else 16.dp, end = 16.dp)
+            .padding(vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (playlist.coverPath != null) {
@@ -328,6 +524,15 @@ private fun PlaylistRow(
                         onChangeCover()
                     },
                 )
+                if (hasFolders || playlist.folderId != null) {
+                    DropdownMenuItem(
+                        text = { Text(if (playlist.folderId != null) "Cambiar de carpeta" else "Mover a carpeta") },
+                        onClick = {
+                            menuOpen = false
+                            onMoveToFolder()
+                        },
+                    )
+                }
                 DropdownMenuItem(
                     text = { Text("Eliminar playlist") },
                     onClick = {
