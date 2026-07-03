@@ -19,6 +19,17 @@ jobs:
           distribution: temurin
           java-version: '21'
 
+      # Sin esto, cada runner genera un debug.keystore distinto y las
+      # actualizaciones entre releases fallan con "aplicación no instalada".
+      - name: Clave de firma estable
+        env:
+          KEYSTORE_B64: ${{ secrets.DEBUG_KEYSTORE_B64 }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            mkdir -p ~/.android
+            echo "$KEYSTORE_B64" | base64 -d > ~/.android/debug.keystore
+          fi
+
       - name: Compilar APK
         run: ./gradlew assembleDebug --no-daemon
 
