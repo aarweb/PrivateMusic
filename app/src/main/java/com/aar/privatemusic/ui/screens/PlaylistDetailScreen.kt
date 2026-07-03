@@ -1,5 +1,6 @@
 package com.aar.privatemusic.ui.screens
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -42,6 +43,7 @@ import java.io.File
 @Composable
 fun PlaylistDetailScreen(app: PrivateMusicApp, playlistId: Long) {
     val songs by app.repository.observePlaylistSongs(playlistId).collectAsState(initial = emptyList())
+    val nowPlaying by app.playerController.nowPlaying.collectAsState()
     val scope = rememberCoroutineScope()
 
     val lazyListState = rememberLazyListState()
@@ -66,11 +68,16 @@ fun PlaylistDetailScreen(app: PrivateMusicApp, playlistId: Long) {
         itemsIndexed(songs, key = { _, s -> s.id }) { index, song ->
             ReorderableItem(reorderableState, key = song.id) { isDragging ->
                 var menuOpen by remember { mutableStateOf(false) }
+                val isCurrent = song.id == nowPlaying?.songId
                 Surface(tonalElevation = if (isDragging) 4.dp else 0.dp) {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clickable { app.playerController.playQueue(songs, index) }
+                            .background(
+                                if (isCurrent) MaterialTheme.colorScheme.primary.copy(alpha = 0.10f)
+                                else androidx.compose.ui.graphics.Color.Transparent
+                            )
                             .padding(horizontal = 16.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
@@ -85,6 +92,8 @@ fun PlaylistDetailScreen(app: PrivateMusicApp, playlistId: Long) {
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                                 style = MaterialTheme.typography.bodyLarge,
+                                color = if (isCurrent) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.onSurface,
                             )
                             Text(
                                 "${song.artist} · ${formatDuration(song.durationSec)}",

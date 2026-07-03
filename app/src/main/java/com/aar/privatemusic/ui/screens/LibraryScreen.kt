@@ -60,6 +60,7 @@ private enum class SortMode(val label: String) {
 @Composable
 fun LibraryScreen(app: PrivateMusicApp) {
     val songs by app.repository.observeSongs().collectAsState(initial = emptyList())
+    val nowPlaying by app.playerController.nowPlaying.collectAsState()
     val recent by app.repository.observeRecentlyPlayed(10).collectAsState(initial = emptyList())
     val playlists by app.repository.observePlaylists().collectAsState(initial = emptyList())
     val scope = rememberCoroutineScope()
@@ -205,6 +206,7 @@ fun LibraryScreen(app: PrivateMusicApp) {
                 var menuOpen by remember { mutableStateOf(false) }
                 SongRow(
                     song = song,
+                    isCurrent = song.id == nowPlaying?.songId,
                     onClick = {
                         val index = visibleSongs.indexOfFirst { it.id == song.id }
                         app.playerController.playQueue(visibleSongs, index)

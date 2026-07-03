@@ -13,8 +13,8 @@ android {
         applicationId = "com.aar.privatemusic"
         minSdk = 26
         targetSdk = 35
-        versionCode = 10
-        versionName = "1.9"
+        versionCode = 11
+        versionName = "1.10"
 
         ndk {
             // yt-dlp binaries ship per-ABI; keep the two real-device ABIs.

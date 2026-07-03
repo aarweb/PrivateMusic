@@ -36,6 +36,7 @@ fun AutoPlaylistScreen(app: PrivateMusicApp, type: AutoPlaylistType) {
         }
     }
     val songs by flow.collectAsState(initial = emptyList())
+    val nowPlaying by app.playerController.nowPlaying.collectAsState()
 
     Column(Modifier.fillMaxSize()) {
         Text(
@@ -56,6 +57,7 @@ fun AutoPlaylistScreen(app: PrivateMusicApp, type: AutoPlaylistType) {
             itemsIndexed(songs, key = { _, s -> s.id }) { index, song ->
                 SongRow(
                     song = song,
+                    isCurrent = song.id == nowPlaying?.songId,
                     onClick = { app.playerController.playQueue(songs, index) },
                 )
             }

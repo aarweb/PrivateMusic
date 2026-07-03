@@ -110,6 +110,7 @@ fun CreateSmartPlaylistDialog(app: PrivateMusicApp, onDismiss: () -> Unit) {
 fun SmartPlaylistDetailScreen(app: PrivateMusicApp, smartPlaylistId: Long) {
     val sp by app.repository.observeSmartPlaylist(smartPlaylistId).collectAsState(initial = null)
     val songs by app.repository.observeSongs().collectAsState(initial = emptyList())
+    val nowPlaying by app.playerController.nowPlaying.collectAsState()
     val counts by app.repository.observePlayCounts().collectAsState(initial = emptyList())
 
     val playlist = sp ?: return
@@ -151,6 +152,7 @@ fun SmartPlaylistDetailScreen(app: PrivateMusicApp, smartPlaylistId: Long) {
             itemsIndexed(matching, key = { _, s -> s.id }) { index, song ->
                 SongRow(
                     song = song,
+                    isCurrent = song.id == nowPlaying?.songId,
                     onClick = { app.playerController.playQueue(matching, index) },
                 )
             }

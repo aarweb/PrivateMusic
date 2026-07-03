@@ -8,7 +8,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.background
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
@@ -68,12 +70,17 @@ fun ArtImage(model: Any?, size: androidx.compose.ui.unit.Dp) {
 fun SongRow(
     song: Song,
     onClick: () -> Unit,
+    isCurrent: Boolean = false,
     trailing: @Composable () -> Unit = {},
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
+            .background(
+                if (isCurrent) MaterialTheme.colorScheme.primary.copy(alpha = 0.10f)
+                else androidx.compose.ui.graphics.Color.Transparent
+            )
             .padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -83,7 +90,24 @@ fun SongRow(
                 .weight(1f)
                 .padding(horizontal = 12.dp),
         ) {
-            Text(song.title, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyLarge)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (isCurrent) {
+                    Icon(
+                        Icons.Filled.GraphicEq,
+                        contentDescription = "Sonando",
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(16.dp).padding(end = 2.dp),
+                    )
+                }
+                Text(
+                    song.title,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = if (isCurrent) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.onSurface,
+                )
+            }
             Text(
                 "${song.artist} · ${formatDuration(song.durationSec)}",
                 maxLines = 1,

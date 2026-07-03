@@ -1,6 +1,9 @@
 package com.aar.privatemusic.player
 
+import android.app.PendingIntent
+import android.content.Intent
 import android.net.Uri
+import com.aar.privatemusic.MainActivity
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
@@ -48,7 +51,15 @@ class PlaybackService : MediaLibraryService() {
             .setHandleAudioBecomingNoisy(true)
             .build()
         val dao = MusicDatabase.get(this).musicDao()
+        // Tapping the media notification opens the app.
+        val sessionActivity = PendingIntent.getActivity(
+            this,
+            0,
+            Intent(this, MainActivity::class.java),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
         mediaSession = MediaLibrarySession.Builder(this, player, LibraryCallback(dao, serviceScope))
+            .setSessionActivity(sessionActivity)
             .build()
         EqHolder.init(this, player.audioSessionId)
         startVolumeLoop(player, dao)
