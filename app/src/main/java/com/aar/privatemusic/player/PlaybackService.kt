@@ -183,6 +183,17 @@ class PlaybackService : MediaLibraryService() {
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibrarySession? =
         mediaSession
 
+    // Swiping the app away from recents should stop the music; without this,
+    // Media3 keeps the foreground service (and the playback) alive.
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        mediaSession?.player?.run {
+            stop()
+            clearMediaItems()
+        }
+        stopSelf()
+        super.onTaskRemoved(rootIntent)
+    }
+
     override fun onDestroy() {
         mediaSession?.run {
             player.release()
