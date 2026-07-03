@@ -243,6 +243,27 @@ class PlayerController(
         controller = null
     }
 
+    /** Plays [file] (e.g. an instrumental WAV) as if it were the song itself. */
+    fun playKaraoke(song: Song, file: File) {
+        val c = controller ?: return
+        val uri = Uri.fromFile(file)
+        val item = MediaItem.Builder()
+            .setMediaId(song.id)
+            .setUri(uri)
+            .setRequestMetadata(MediaItem.RequestMetadata.Builder().setMediaUri(uri).build())
+            .setMediaMetadata(
+                MediaMetadata.Builder()
+                    .setTitle("${song.title} · Karaoke")
+                    .setArtist(song.artist)
+                    .setArtworkUri(song.artPath?.let { Uri.fromFile(File(it)) })
+                    .build()
+            )
+            .build()
+        c.setMediaItems(listOf(item), 0, 0L)
+        c.prepare()
+        c.play()
+    }
+
     private fun Song.toMediaItem(): MediaItem =
         MediaItem.Builder()
             .setMediaId(id)

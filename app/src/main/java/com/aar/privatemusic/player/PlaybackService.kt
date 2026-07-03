@@ -258,8 +258,13 @@ private class LibraryCallback(
         mediaItems: MutableList<MediaItem>,
     ): ListenableFuture<MutableList<MediaItem>> = scope.future {
         mediaItems.map { item ->
-            if (item.localConfiguration != null) item
-            else dao.getSong(item.mediaId)?.toPlayableItem() ?: item
+            val requestUri = item.requestMetadata.mediaUri
+            when {
+                item.localConfiguration != null -> item
+                // Karaoke & co.: an explicit file travels in requestMetadata.
+                requestUri != null -> item.buildUpon().setUri(requestUri).build()
+                else -> dao.getSong(item.mediaId)?.toPlayableItem() ?: item
+            }
         }.toMutableList()
     }
 }

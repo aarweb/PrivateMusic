@@ -26,6 +26,8 @@ class MusicRepository(
     private val dao: MusicDao,
     private val downloader: YtDownloader,
 ) {
+    val musicDir: java.io.File get() = downloader.musicDir
+
     fun observeSongs(): Flow<List<Song>> = dao.observeSongs()
     fun observeSongIds(): Flow<List<String>> = dao.observeSongIds()
     fun observeSong(id: String): Flow<Song?> = dao.observeSong(id)

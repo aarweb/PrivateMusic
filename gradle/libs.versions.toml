@@ -38,6 +38,7 @@ androidx-work = { group = "androidx.work", name = "work-runtime-ktx", version = 
 youtubedl-library = { group = "io.github.junkfood02.youtubedl-android", name = "library", version.ref = "youtubedl" }
 youtubedl-ffmpeg = { group = "io.github.junkfood02.youtubedl-android", name = "ffmpeg", version.ref = "youtubedl" }
 kotlinx-coroutines = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
+onnxruntime = { group = "com.microsoft.onnxruntime", name = "onnxruntime-android", version = "1.20.0" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

@@ -70,6 +70,7 @@ fun LibraryScreen(app: PrivateMusicApp) {
     var songForEdit by remember { mutableStateOf<Song?>(null) }
     var songForArt by remember { mutableStateOf<Song?>(null) }
     var songForAdventure by remember { mutableStateOf<Song?>(null) }
+    var songForKaraoke by remember { mutableStateOf<Song?>(null) }
     var query by remember { mutableStateOf("") }
 
     val context = LocalContext.current
@@ -250,6 +251,13 @@ fun LibraryScreen(app: PrivateMusicApp) {
                                     )
                                 }
                                 DropdownMenuItem(
+                                    text = { Text("Karaoke (quitar la voz)") },
+                                    onClick = {
+                                        menuOpen = false
+                                        songForKaraoke = song
+                                    },
+                                )
+                                DropdownMenuItem(
                                     text = { Text("Reproducir a continuación") },
                                     onClick = {
                                         menuOpen = false
@@ -369,6 +377,10 @@ fun LibraryScreen(app: PrivateMusicApp) {
             },
             dismissButton = { TextButton(onClick = { songForEdit = null }) { Text("Cancelar") } },
         )
+    }
+
+    songForKaraoke?.let { song ->
+        KaraokeDialog(app, song, onDismiss = { songForKaraoke = null })
     }
 
     songForAdventure?.let { from ->
