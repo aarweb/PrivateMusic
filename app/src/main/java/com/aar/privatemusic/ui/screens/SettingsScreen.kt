@@ -39,6 +39,7 @@ import com.aar.privatemusic.PrivateMusicApp
 import com.aar.privatemusic.data.BackupManager
 import com.aar.privatemusic.data.MusicRepository
 import com.aar.privatemusic.downloader.SpotifySync
+import com.aar.privatemusic.util.AppUpdater
 import kotlinx.coroutines.launch
 
 @Composable
@@ -317,8 +318,75 @@ fun SettingsScreen(app: PrivateMusicApp, onOpenStats: () -> Unit, onOpenEq: () -
             subtitle = "Fuerza la actualización de yt-dlp (también se hace al arrancar)",
         ) { app.downloader.updateYtDlp() }
 
+        HorizontalDivider(Modifier.padding(vertical = 16.dp))
+
+        // --- Aplicación ---
         Text(
-            "PrivateMusic 1.8",
+            "Aplicación",
+            style = MaterialTheme.typography.titleSmall,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.padding(bottom = 8.dp),
+        )
+
+        var updateInfo by remember { mutableStateOf<AppUpdater.UpdateInfo?>(null) }
+        var updateStatus by remember { mutableStateOf<String?>(null) }
+        var downloadProgress by remember { mutableStateOf<Int?>(null) }
+
+        SettingsAction(
+            title = "Buscar actualizaciones",
+            subtitle = downloadProgress?.let { "Descargando… $it%" }
+                ?: updateStatus
+                ?: "Versión actual ${com.aar.privatemusic.BuildConfig.VERSION_NAME} · desde GitHub Releases",
+        ) {
+            updateStatus = "Comprobando…"
+            scope.launch {
+                val info = AppUpdater.check()
+                when {
+                    info == null -> updateStatus = "No se pudo comprobar (¿sin conexión o sin releases?)"
+                    info.isNewer -> {
+                        updateInfo = info
+                        updateStatus = "Nueva versión ${info.version} disponible"
+                    }
+                    else -> updateStatus = "Estás al día (${com.aar.privatemusic.BuildConfig.VERSION_NAME})"
+                }
+            }
+        }
+
+        updateInfo?.let { info ->
+            AlertDialog(
+                onDismissRequest = { updateInfo = null },
+                title = { Text("Actualizar a ${info.version}") },
+                text = {
+                    Column {
+                        if (info.notes.isNotBlank()) {
+                            Text(info.notes, style = MaterialTheme.typography.bodySmall)
+                        }
+                        Text(
+                            "Se descargará el APK y Android te pedirá confirmar la instalación.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 8.dp),
+                        )
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        val url = info.apkUrl
+                        updateInfo = null
+                        scope.launch {
+                            downloadProgress = 0
+                            val ok = AppUpdater.downloadAndInstall(context, url) { downloadProgress = it }
+                            downloadProgress = null
+                            updateStatus = if (ok) "Instalador abierto" else "Error al descargar la actualización"
+                        }
+                    }) { Text("Descargar e instalar") }
+                },
+                dismissButton = { TextButton(onClick = { updateInfo = null }) { Text("Ahora no") } },
+            )
+        }
+
+        Text(
+            "PrivateMusic ${com.aar.privatemusic.BuildConfig.VERSION_NAME}",
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(top = 24.dp),
