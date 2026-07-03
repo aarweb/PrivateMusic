@@ -13,12 +13,20 @@ android {
         applicationId = "com.aar.privatemusic"
         minSdk = 26
         targetSdk = 35
-        versionCode = 18
-        versionName = "1.17"
+        versionCode = 19
+        versionName = "1.18"
 
         ndk {
             // arm64 only: every phone since ~2016. Halves the APK (yt-dlp/ffmpeg per ABI).
             abiFilters += listOf("arm64-v8a")
+        }
+    }
+
+    signingConfigs {
+        // CI: PM_KEYSTORE apunta a un debug.keystore estable para que todas
+        // las releases compartan firma y las actualizaciones se instalen.
+        getByName("debug").apply {
+            System.getenv("PM_KEYSTORE")?.let { storeFile = file(it) }
         }
     }
 

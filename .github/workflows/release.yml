@@ -26,12 +26,18 @@ jobs:
           KEYSTORE_B64: ${{ secrets.DEBUG_KEYSTORE_B64 }}
         run: |
           if [ -n "$KEYSTORE_B64" ]; then
-            mkdir -p ~/.android
-            echo "$KEYSTORE_B64" | base64 -d > ~/.android/debug.keystore
+            echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/debug.keystore"
+            echo "PM_KEYSTORE=$RUNNER_TEMP/debug.keystore" >> "$GITHUB_ENV"
           fi
 
       - name: Compilar APK
         run: ./gradlew assembleDebug --no-daemon
+
+      - name: Comprobar firma
+        run: |
+          BT=$(ls "$ANDROID_HOME/build-tools" | tail -1)
+          "$ANDROID_HOME/build-tools/$BT/apksigner" verify --print-certs \
+            app/build/outputs/apk/debug/app-debug.apk | grep "SHA-256 digest"
 
       - name: Renombrar APK con la versión
         run: cp app/build/outputs/apk/debug/app-debug.apk "privatemusic-${GITHUB_REF_NAME#v}.apk"
