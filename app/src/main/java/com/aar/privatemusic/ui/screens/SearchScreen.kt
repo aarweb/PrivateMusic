@@ -117,6 +117,7 @@ fun SearchScreen(app: PrivateMusicApp) {
 
     val downloads by app.downloader.downloads.collectAsState()
     val torrentDownloads by app.torrents.downloads.collectAsState()
+    val deezerDownloads by app.deezerDownloader.downloads.collectAsState()
     val libraryIds by app.repository.observeSongIds().collectAsState(initial = emptyList())
     val nowPlaying by app.playerController.nowPlaying.collectAsState()
     val isPlaying by app.playerController.isPlaying.collectAsState()
@@ -167,9 +168,14 @@ fun SearchScreen(app: PrivateMusicApp) {
                 searching = false
                 return@launch
             }
-            if (source == "deezer" && !query.trim().startsWith("http") &&
+            if ((source == "deezer" || source == "deezerhq") && !query.trim().startsWith("http") &&
                 !SpotifyResolver.isSpotifyUrl(query.trim())
             ) {
+                if (source == "deezerhq" && app.settings.deezerArl.value.isBlank()) {
+                    error = "Inicia sesión en Deezer en Ajustes para descargar en HQ"
+                    searching = false
+                    return@launch
+                }
                 runCatching { com.aar.privatemusic.downloader.DeezerSource.search(query.trim()) }
                     .onSuccess { results = emptyList(); deezerTracks = it }
                     .onFailure { error = "Error al buscar en Deezer: ${it.message}" }
@@ -252,6 +258,9 @@ fun SearchScreen(app: PrivateMusicApp) {
         SearchSource("deezer", "Deezer", androidx.compose.ui.graphics.Color(0xFFA238FF)) {
             Icon(Icons.Filled.GraphicEq, null, tint = androidx.compose.ui.graphics.Color.White)
         },
+        SearchSource("deezerhq", "Deezer HQ", androidx.compose.ui.graphics.Color(0xFFFF6B00)) {
+            Icon(Icons.Filled.Download, null, tint = androidx.compose.ui.graphics.Color.White)
+        },
         SearchSource("1337x", "1337x · Torrents música", androidx.compose.ui.graphics.Color(0xFFE0592A)) {
             Icon(Icons.Filled.Search, null, tint = androidx.compose.ui.graphics.Color.White)
         },
@@ -321,6 +330,7 @@ fun SearchScreen(app: PrivateMusicApp) {
                 Text(
                     when (source) {
                         "deezer" -> "Buscar en Deezer…"
+                        "deezerhq" -> "Buscar en Deezer (descarga HQ)…"
                         "ytmusic" -> "Buscar en YouTube Music…"
                         "1337x" -> "Buscar torrents de música…"
                         else -> "Buscar en YouTube o pegar URL…"
@@ -418,11 +428,16 @@ fun SearchScreen(app: PrivateMusicApp) {
                             durationSec = track.durationSec,
                             thumbnailUrl = track.coverUrl,
                         )
+                        // "deezerhq": descarga directa FLAC/MP3 con la sesión del
+                        // usuario. "deezer": empareja en YouTube (audio DRM).
+                        val isHq = source == "deezerhq"
+                        val hqKey = app.deezerDownloader.stateKey(track.id)
                         val matchedId = SearchCache.deezerMatches[dzId]
                         SearchResultRow(
                             result = display,
-                            inLibrary = matchedId != null && matchedId in libraryIds,
-                            state = when {
+                            inLibrary = if (isHq) hqKey in libraryIds
+                            else matchedId != null && matchedId in libraryIds,
+                            state = if (isHq) deezerDownloads[hqKey] else when {
                                 dzId in deezerResolving -> DownloadState.Queued
                                 else -> matchedId?.let { downloads[it] }
                             },
@@ -442,9 +457,12 @@ fun SearchScreen(app: PrivateMusicApp) {
                                 }
                             },
                             onDownload = {
-                                // Deezer audio is DRM'd: match the track on YouTube
-                                // and download that, keeping Deezer's clean metadata.
-                                if (dzId !in deezerResolving) {
+                                if (isHq) {
+                                    app.deezerDownloader.enqueue(track, app.settings.deezerQuality.value)
+                                    actionMessage = "Descargando \"${track.title}\" de Deezer…"
+                                } else if (dzId !in deezerResolving) {
+                                    // Deezer audio is DRM'd: match the track on YouTube
+                                    // and download that, keeping Deezer's clean metadata.
                                     deezerResolving = deezerResolving + dzId
                                     scope.launch {
                                         val match = app.downloader.searchBestMatch(

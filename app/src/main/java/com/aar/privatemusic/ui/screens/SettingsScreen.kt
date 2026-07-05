@@ -308,6 +308,8 @@ fun SettingsScreen(app: PrivateMusicApp, onOpenStats: () -> Unit, onOpenEq: () -
             subtitle = "Busca cada canción en YouTube y la descarga a una playlist nueva",
         ) { csvImportLauncher.launch(arrayOf("*/*")) }
 
+        DeezerSettings(app)
+
         val watchedSources by app.repository.observeWatchedSources().collectAsState(initial = emptyList())
         if (watchedSources.isNotEmpty()) {
             Text(
@@ -543,6 +545,76 @@ fun SettingsScreen(app: PrivateMusicApp, onOpenStats: () -> Unit, onOpenEq: () -
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(top = 24.dp),
         )
+    }
+}
+
+/** Sección de Deezer: login por WebView, estado del plan y calidad de descarga. */
+@Composable
+private fun DeezerSettings(app: PrivateMusicApp) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val arl by app.settings.deezerArl.collectAsState()
+    val user by app.settings.deezerUser.collectAsState()
+    val quality by app.settings.deezerQuality.collectAsState()
+    var loginOpen by remember { mutableStateOf(false) }
+    val connected = arl.isNotBlank()
+
+    Text(
+        "Deezer HQ",
+        style = MaterialTheme.typography.bodyLarge,
+        modifier = Modifier.padding(top = 12.dp),
+    )
+    if (connected) {
+        Text(
+            "🟢 Conectado como $user" +
+                (app.settings.deezerCountry.takeIf { it.isNotBlank() }?.let { " · $it" } ?: "") +
+                " · Máx: " + when {
+                    app.settings.deezerHasFlac -> "FLAC (HiFi)"
+                    app.settings.deezerHasHq -> "MP3 320"
+                    else -> "MP3 128"
+                },
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        // Calidad de descarga: sólo las que permite el plan.
+        val options = buildList {
+            if (app.settings.deezerHasFlac) add("FLAC" to "FLAC (lossless)")
+            if (app.settings.deezerHasHq) add("MP3_320" to "MP3 320 kbps")
+            add("MP3_128" to "MP3 128 kbps")
+        }
+        options.forEach { (value, label) ->
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clickable { app.settings.setDeezerQuality(value) }
+                    .padding(vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                androidx.compose.material3.RadioButton(
+                    selected = quality == value,
+                    onClick = { app.settings.setDeezerQuality(value) },
+                )
+                Text(label, Modifier.padding(start = 4.dp), style = MaterialTheme.typography.bodyMedium)
+            }
+        }
+        SettingsAction(
+            title = "Cerrar sesión en Deezer",
+            subtitle = "Olvida tu sesión en este dispositivo",
+        ) {
+            app.settings.clearDeezerSession()
+            scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                runCatching { android.webkit.CookieManager.getInstance().removeAllCookies(null) }
+            }
+        }
+    } else {
+        SettingsAction(
+            title = "Iniciar sesión en Deezer",
+            subtitle = "🔴 No conectado — descarga FLAC/MP3 directo con tu cuenta",
+        ) { loginOpen = true }
+    }
+
+    if (loginOpen) {
+        DeezerLoginDialog(app) { loginOpen = false }
     }
 }
 

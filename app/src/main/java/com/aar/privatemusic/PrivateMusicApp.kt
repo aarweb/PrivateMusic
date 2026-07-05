@@ -10,6 +10,7 @@ import androidx.work.WorkManager
 import com.aar.privatemusic.data.AppSettings
 import com.aar.privatemusic.data.MusicRepository
 import com.aar.privatemusic.data.db.MusicDatabase
+import com.aar.privatemusic.downloader.DeezerDownloader
 import com.aar.privatemusic.downloader.TorrentDownloader
 import com.aar.privatemusic.downloader.WatchWorker
 import com.aar.privatemusic.downloader.YtDownloader
@@ -33,6 +34,8 @@ class PrivateMusicApp : Application() {
         private set
     lateinit var torrents: TorrentDownloader
         private set
+    lateinit var deezerDownloader: DeezerDownloader
+        private set
     lateinit var repository: MusicRepository
         private set
     lateinit var playerController: PlayerController
@@ -50,6 +53,7 @@ class PrivateMusicApp : Application() {
         settings = AppSettings(this)
         downloader = YtDownloader(this, dao, appScope)
         torrents = TorrentDownloader(this, dao, appScope)
+        deezerDownloader = DeezerDownloader(this, dao, appScope)
         repository = MusicRepository(dao, downloader)
         playerController = PlayerController(this) { songId ->
             appScope.launch {

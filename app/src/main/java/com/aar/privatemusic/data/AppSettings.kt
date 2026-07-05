@@ -26,6 +26,18 @@ class AppSettings(context: Context) {
     private val _listenBrainzToken = MutableStateFlow(prefs.getString(KEY_LISTENBRAINZ, "") ?: "")
     val listenBrainzToken: StateFlow<String> = _listenBrainzToken
 
+    // --- Deezer (descarga directa FLAC/MP3 con la sesión del propio usuario) ---
+    private val _deezerArl = MutableStateFlow(prefs.getString(KEY_DZ_ARL, "") ?: "")
+    /** Cookie de sesión de Deezer del usuario; vacío = no autenticado. */
+    val deezerArl: StateFlow<String> = _deezerArl
+
+    private val _deezerUser = MutableStateFlow(prefs.getString(KEY_DZ_USER, "") ?: "")
+    val deezerUser: StateFlow<String> = _deezerUser
+
+    private val _deezerQuality = MutableStateFlow(prefs.getString(KEY_DZ_QUALITY, "FLAC") ?: "FLAC")
+    /** "FLAC" | "MP3_320" | "MP3_128". */
+    val deezerQuality: StateFlow<String> = _deezerQuality
+
     fun setCrossfadeSec(value: Int) {
         prefs.edit().putInt(KEY_CROSSFADE, value).apply()
         _crossfadeSec.value = value
@@ -51,12 +63,52 @@ class AppSettings(context: Context) {
         _listenBrainzToken.value = value.trim()
     }
 
+    /** Guarda (o limpia, con arl en blanco) la sesión de Deezer. */
+    fun setDeezerSession(arl: String, user: String, country: String, hasFlac: Boolean, hasHq: Boolean) {
+        prefs.edit()
+            .putString(KEY_DZ_ARL, arl)
+            .putString(KEY_DZ_USER, user)
+            .putString(KEY_DZ_COUNTRY, country)
+            .putBoolean(KEY_DZ_HAS_FLAC, hasFlac)
+            .putBoolean(KEY_DZ_HAS_HQ, hasHq)
+            .apply()
+        _deezerArl.value = arl
+        _deezerUser.value = user
+        // Al bajar de plan, no dejes seleccionada una calidad que ya no tienes.
+        if (!hasFlac && _deezerQuality.value == "FLAC") setDeezerQuality(if (hasHq) "MP3_320" else "MP3_128")
+    }
+
+    fun clearDeezerSession() = setDeezerSession("", "", "", hasFlac = false, hasHq = false)
+
+    fun setDeezerQuality(value: String) {
+        prefs.edit().putString(KEY_DZ_QUALITY, value).apply()
+        _deezerQuality.value = value
+    }
+
+    val deezerCountry: String get() = prefs.getString(KEY_DZ_COUNTRY, "") ?: ""
+    val deezerHasFlac: Boolean get() = prefs.getBoolean(KEY_DZ_HAS_FLAC, false)
+    val deezerHasHq: Boolean get() = prefs.getBoolean(KEY_DZ_HAS_HQ, false)
+
     companion object {
         private const val KEY_CROSSFADE = "crossfade_sec"
         private const val KEY_NORMALIZE = "normalize_volume"
         private const val KEY_SPONSORBLOCK = "sponsorblock"
         private const val KEY_LISTENBRAINZ = "listenbrainz_token"
         private const val KEY_AUTOMIX = "automix"
+        private const val KEY_DZ_ARL = "deezer_arl"
+        private const val KEY_DZ_USER = "deezer_user"
+        private const val KEY_DZ_QUALITY = "deezer_quality"
+        private const val KEY_DZ_COUNTRY = "deezer_country"
+        private const val KEY_DZ_HAS_FLAC = "deezer_has_flac"
+        private const val KEY_DZ_HAS_HQ = "deezer_has_hq"
+
+        fun readDeezerArl(context: Context): String =
+            context.getSharedPreferences("settings", Context.MODE_PRIVATE)
+                .getString(KEY_DZ_ARL, "") ?: ""
+
+        fun readDeezerQuality(context: Context): String =
+            context.getSharedPreferences("settings", Context.MODE_PRIVATE)
+                .getString(KEY_DZ_QUALITY, "FLAC") ?: "FLAC"
 
         fun readSponsorBlock(context: Context): Boolean =
             context.getSharedPreferences("settings", Context.MODE_PRIVATE)
