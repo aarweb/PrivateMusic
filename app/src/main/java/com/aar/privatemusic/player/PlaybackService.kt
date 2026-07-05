@@ -146,6 +146,14 @@ class PlaybackService : MediaLibraryService() {
                         "mp3" -> "audio/mpeg"; "flac" -> "audio/flac"
                         "wav" -> "audio/wav"; else -> "audio/*"
                     }
+                    // Artwork must be an URL the TV can fetch: local art via our
+                    // server, else the original remote thumbnail.
+                    val artUri = when {
+                        song.artPath?.let { java.io.File(it).canRead() } == true ->
+                            "http://$ip:${com.aar.privatemusic.cast.MediaHttpServer.PORT}/art/${song.id}"
+                        !song.thumbnailUrl.isNullOrBlank() -> song.thumbnailUrl
+                        else -> null
+                    }
                     MediaItem.Builder()
                         .setMediaId(song.id)
                         .setUri("http://$ip:${com.aar.privatemusic.cast.MediaHttpServer.PORT}/song/${song.id}")
@@ -154,6 +162,7 @@ class PlaybackService : MediaLibraryService() {
                             MediaMetadata.Builder()
                                 .setTitle(song.title)
                                 .setArtist(song.artist)
+                                .apply { artUri?.let { setArtworkUri(android.net.Uri.parse(it)) } }
                                 .build()
                         )
                         .build()

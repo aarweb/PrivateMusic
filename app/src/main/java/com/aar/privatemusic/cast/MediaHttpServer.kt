@@ -18,6 +18,7 @@ class MediaHttpServer(
 
     override fun serve(session: IHTTPSession): Response {
         val path = session.uri ?: return notFound()
+        if (path.startsWith("/art/")) return serveArt(path.removePrefix("/art/").substringBefore('.'))
         if (!path.startsWith("/song/")) return notFound()
         val songId = path.removePrefix("/song/").substringBefore('.')
         val song = runBlocking { runCatching { dao.getSong(songId) }.getOrNull() }
@@ -58,6 +59,19 @@ class MediaHttpServer(
         )
         res.addHeader("Accept-Ranges", "bytes")
         return res
+    }
+
+    /** Album art for the receiver's now-playing screen. */
+    private fun serveArt(songId: String): Response {
+        val song = runBlocking { runCatching { dao.getSong(songId) }.getOrNull() }
+            ?: return notFound()
+        val file = song.artPath?.let(::File)?.takeIf { it.canRead() } ?: return notFound()
+        val mime = when (file.extension.lowercase()) {
+            "png" -> "image/png"
+            "webp" -> "image/webp"
+            else -> "image/jpeg"
+        }
+        return newFixedLengthResponse(Response.Status.OK, mime, FileInputStream(file), file.length())
     }
 
     private fun notFound(): Response =
