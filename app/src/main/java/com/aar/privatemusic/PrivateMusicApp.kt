@@ -55,6 +55,17 @@ class PrivateMusicApp : Application() {
                 }
             }
         }
+        // Restore the last session's queue (paused) after a cold start.
+        appScope.launch {
+            playerController.savedQueue()?.let { saved ->
+                val songs = saved.ids.mapNotNull { dao.getSong(it) }
+                if (songs.isNotEmpty()) {
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                        playerController.restoreQueue(songs, saved.index, saved.positionMs)
+                    }
+                }
+            }
+        }
         appScope.launch {
             downloader.updateYtDlp() // YouTube breaks old extractors regularly
             downloader.resumePending() // finish downloads cut off by process death

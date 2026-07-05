@@ -19,6 +19,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Sort
 import androidx.compose.material3.AlertDialog
@@ -59,7 +60,7 @@ private enum class SortMode(val label: String) {
 }
 
 @Composable
-fun LibraryScreen(app: PrivateMusicApp) {
+fun LibraryScreen(app: PrivateMusicApp, onOpenArtist: (String) -> Unit = {}) {
     val songs by app.repository.observeSongs().collectAsState(initial = emptyList())
     val nowPlaying by app.playerController.nowPlaying.collectAsState()
     val recent by app.repository.observeRecentlyPlayed(10).collectAsState(initial = emptyList())
@@ -92,6 +93,7 @@ fun LibraryScreen(app: PrivateMusicApp) {
         )
     ) { mutableStateOf(SortMode.RECENT) }
     var onlyFavorites by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
+    var artistView by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
 
     val visibleSongs = remember(songs, query, sortMode, onlyFavorites) {
         songs
@@ -146,6 +148,14 @@ fun LibraryScreen(app: PrivateMusicApp) {
                 label = { Text("Favoritas") },
                 leadingIcon = { Icon(Icons.Filled.Favorite, contentDescription = null) },
             )
+            FilterChip(
+                selected = artistView,
+                onClick = { artistView = !artistView },
+                label = { Text("Artistas") },
+                leadingIcon = {
+                    Icon(Icons.Filled.Person, contentDescription = null)
+                },
+            )
             Box {
                 var sortMenuOpen by remember { mutableStateOf(false) }
                 FilterChip(
@@ -168,6 +178,38 @@ fun LibraryScreen(app: PrivateMusicApp) {
             }
         }
 
+        if (artistView) {
+            val artists = remember(songs, query) {
+                songs
+                    .filter { query.isBlank() || it.artist.contains(query, ignoreCase = true) }
+                    .groupBy { it.artist.trim() }
+                    .entries
+                    .sortedByDescending { it.value.size }
+            }
+            LazyColumn(Modifier.fillMaxSize()) {
+                items(artists, key = { it.key }) { (artist, artistSongs) ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onOpenArtist(artist) }
+                            .padding(horizontal = 16.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        ArtImage(artistSongs.firstOrNull()?.artPath?.let { File(it) }, 48.dp)
+                        Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
+                            Text(artist, style = MaterialTheme.typography.bodyLarge, maxLines = 1,
+                                overflow = TextOverflow.Ellipsis)
+                            Text(
+                                "${artistSongs.size} canciones",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
+            }
+            return@Column
+        }
         LazyColumn(Modifier.fillMaxSize()) {
             if (recent.isNotEmpty() && query.isBlank() && !onlyFavorites) {
                 item(key = "recent-header") {
@@ -409,7 +451,13 @@ fun LibraryScreen(app: PrivateMusicApp) {
         AlertDialog(
             onDismissRequest = { songForDelete = null },
             title = { Text("¿Eliminar canción?") },
-            text = { Text("“${song.title}” y su archivo de audio se borrarán del dispositivo. Esta acción no se puede deshacer.") },
+            text = {
+                Text(
+                    if (song.id.startsWith("local_"))
+                        "“${song.title}” se quitará de la biblioteca. El archivo original del dispositivo NO se borra."
+                    else "“${song.title}” y su archivo de audio se borrarán del dispositivo. Esta acción no se puede deshacer."
+                )
+            },
             confirmButton = {
                 TextButton(onClick = {
                     scope.launch { app.repository.deleteSong(song) }

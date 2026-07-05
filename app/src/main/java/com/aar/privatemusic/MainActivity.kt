@@ -34,6 +34,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.aar.privatemusic.ui.components.MiniPlayer
+import com.aar.privatemusic.ui.screens.ArtistScreen
 import com.aar.privatemusic.ui.screens.AutoPlaylistScreen
 import com.aar.privatemusic.ui.screens.AutoPlaylistType
 import com.aar.privatemusic.ui.screens.EqScreen
@@ -177,7 +178,16 @@ private fun MainScaffold(app: PrivateMusicApp) {
                 )
             }
             composable("search") { SearchScreen(app) }
-            composable("library") { LibraryScreen(app) }
+            composable("library") {
+                LibraryScreen(app, onOpenArtist = { name ->
+                    navController.navigate("artist/" + android.net.Uri.encode(name))
+                })
+            }
+            composable("artist/{name}") { entry ->
+                val name = entry.arguments?.getString("name")
+                    ?.let { android.net.Uri.decode(it) } ?: return@composable
+                ArtistScreen(app, artistName = name)
+            }
             composable("playlists") {
                 PlaylistsScreen(
                     app,

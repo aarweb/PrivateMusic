@@ -59,12 +59,40 @@ fun SettingsScreen(app: PrivateMusicApp, onOpenStats: () -> Unit, onOpenEq: () -
             prefs.edit().putBoolean("bt_autoplay", true).apply()
         }
     }
+    var scanRequested by remember { mutableStateOf(false) }
+    val audioPermission = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) scanRequested = true
+    }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
     var storage by remember { mutableStateOf<MusicRepository.StorageInfo?>(null) }
     var operationResult by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(Unit) { storage = app.repository.storageInfo() }
+    LaunchedEffect(scanRequested) {
+        if (scanRequested) {
+            scanRequested = false
+            com.aar.privatemusic.util.Feedback.show("Escaneando la música del dispositivo…")
+            // App-scoped: navigating away must not cancel the scan.
+            val appContext = context.applicationContext
+            app.appScope.launch {
+                val added = runCatching {
+                    app.repository.importLocal(appContext)
+                }.onFailure {
+                    android.util.Log.e("LocalImporter", "scan failed", it)
+                }.getOrDefault(-1)
+                com.aar.privatemusic.util.Feedback.show(
+                    when {
+                        added > 0 -> "$added canciones locales añadidas a la biblioteca"
+                        added == 0 -> "No se encontró música nueva en el dispositivo"
+                        else -> "Error al escanear el dispositivo"
+                    }
+                )
+            }
+        }
+    }
 
     val csvImportLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument()
@@ -370,6 +398,16 @@ fun SettingsScreen(app: PrivateMusicApp, onOpenStats: () -> Unit, onOpenEq: () -
             title = "Importar playlist (M3U/CSV)",
             subtitle = "Crea una playlist emparejando con tu biblioteca",
         ) { importLauncher.launch(arrayOf("*/*")) }
+
+        SettingsAction(
+            title = "Escanear música del dispositivo",
+            subtitle = "Añade tus MP3/FLAC existentes a la biblioteca (sin copiarlos)",
+        ) {
+            val perm = if (android.os.Build.VERSION.SDK_INT >= 33)
+                android.Manifest.permission.READ_MEDIA_AUDIO
+            else android.Manifest.permission.READ_EXTERNAL_STORAGE
+            audioPermission.launch(perm)
+        }
 
         SettingsAction(
             title = "Copia de seguridad ahora",

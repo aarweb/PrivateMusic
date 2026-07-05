@@ -266,6 +266,10 @@ class MusicRepository(
 
     suspend fun resetTailSilence() = dao.resetTailSilence()
 
+    /** Indexes device music (MediaStore) into the library, in place. */
+    suspend fun importLocal(context: android.content.Context): Int =
+        com.aar.privatemusic.util.LocalImporter.scan(context, dao, musicDir)
+
     /** Measures the silent tail of songs missing it (crossfade anchor). */
     suspend fun backfillTailSilence() {
         dao.songsMissingTailSilence().forEach { song ->

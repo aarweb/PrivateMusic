@@ -354,7 +354,9 @@ class YtDownloader(
     }
 
     suspend fun deleteSongFiles(song: Song) = withContext(Dispatchers.IO) {
-        File(song.filePath).delete()
+        // Local (MediaStore) songs are referenced in place: removing them from
+        // the library must NOT delete the user's file.
+        if (!song.id.startsWith("local_")) File(song.filePath).delete()
         song.artPath?.let { File(it).delete() }
         // Companion files: cached lyrics and karaoke instrumental (~40 MB).
         File(musicDir, "${song.id}.lrc").delete()

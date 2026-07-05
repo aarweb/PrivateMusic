@@ -47,6 +47,10 @@ class PlayerController(
     // Resume-position store for long tracks (mixes, DJ sets, audiobooks).
     private val resumePrefs = context.getSharedPreferences("resume_positions", Context.MODE_PRIVATE)
     private var lastResumeSaveAt = 0L
+    // Session queue persistence: restore what you were listening to on relaunch.
+    private val queuePrefs = context.getSharedPreferences("queue_state", Context.MODE_PRIVATE)
+    private var lastQueueSaveAt = 0L
+    private var pendingRestore: (() -> Unit)? = null
 
     companion object {
         /** Tracks longer than this remember their playback position. */
@@ -86,6 +90,10 @@ class PlayerController(
         future.addListener({
             val c = future.get()
             controller = c
+            pendingRestore?.let { restore ->
+                pendingRestore = null
+                if (c.mediaItemCount == 0) restore()
+            }
             c.addListener(object : Player.Listener {
                 override fun onEvents(player: Player, events: Player.Events) {
                     _isPlaying.value = player.isPlaying
@@ -135,6 +143,20 @@ class PlayerController(
                     ) {
                         lastResumeSaveAt = now
                         resumePrefs.edit().putLong(id, player.currentPosition).apply()
+                    }
+                    // Persist the whole session queue (ids + index + position) so a
+                    // process death doesn't wipe what you were listening to.
+                    if (id != null && !id.startsWith("preview:") &&
+                        player.mediaItemCount > 0 && now - lastQueueSaveAt > 5000
+                    ) {
+                        lastQueueSaveAt = now
+                        val ids = (0 until player.mediaItemCount)
+                            .joinToString(",") { player.getMediaItemAt(it).mediaId }
+                        queuePrefs.edit()
+                            .putString("ids", ids)
+                            .putInt("index", player.currentMediaItemIndex)
+                            .putLong("pos", player.currentPosition)
+                            .apply()
                     }
                 }
 
@@ -338,6 +360,33 @@ class PlayerController(
         c.setMediaItems(listOf(item), 0, 0L)
         c.prepare()
         c.play()
+    }
+
+    /** Saved-session snapshot for cold-start restore. */
+    data class SavedQueue(val ids: List<String>, val index: Int, val positionMs: Long)
+
+    fun savedQueue(): SavedQueue? {
+        val ids = queuePrefs.getString("ids", null)?.split(",")?.filter { it.isNotBlank() }
+            ?: return null
+        if (ids.isEmpty()) return null
+        return SavedQueue(ids, queuePrefs.getInt("index", 0), queuePrefs.getLong("pos", 0L))
+    }
+
+    /** Restores [songs] as the queue, PAUSED, once the controller connects. */
+    fun restoreQueue(songs: List<Song>, index: Int, positionMs: Long) {
+        val doRestore = {
+            val c = controller
+            if (c != null && c.mediaItemCount == 0 && songs.isNotEmpty()) {
+                c.setMediaItems(
+                    songs.map { it.toMediaItem() },
+                    index.coerceIn(0, songs.size - 1),
+                    positionMs,
+                )
+                c.prepare()
+                c.pause()
+            }
+        }
+        if (controller != null) doRestore() else pendingRestore = doRestore
     }
 
     /** Puts the pre-preview queue back (paused, at the saved position). */
