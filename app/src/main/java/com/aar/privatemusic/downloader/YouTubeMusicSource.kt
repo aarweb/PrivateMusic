@@ -15,12 +15,24 @@ import java.net.URL
  */
 object YouTubeMusicSource {
 
-    // Public web key used by music.youtube.com; not tied to any account.
-    private const val KEY = "AIzaSyC9XL3ZjWddXya6X74dJoCTL-WEYFDNX30"
-    private const val ENDPOINT = "https://music.youtube.com/youtubei/v1/search?key=$KEY&prettyPrint=false"
+    // The InnerTube API key is the public web-client key embedded in the
+    // music.youtube.com homepage (the same one every browser downloads). We
+    // read it at runtime instead of hardcoding it, so it can't be mistaken for
+    // a leaked secret and survives Google rotating it.
+    @Volatile private var cachedKey: String? = null
+
+    private fun apiKey(): String {
+        cachedKey?.let { return it }
+        val home = fetchHome("https://music.youtube.com/")
+        val key = Regex(""""INNERTUBE_API_KEY":"([A-Za-z0-9_-]+)"""").find(home)?.groupValues?.get(1)
+            ?: throw IllegalStateException("No se pudo obtener la clave de YouTube Music")
+        cachedKey = key
+        return key
+    }
 
     suspend fun search(query: String, limit: Int = 20): List<SearchResult> =
         withContext(Dispatchers.IO) {
+            val endpoint = "https://music.youtube.com/youtubei/v1/search?key=${apiKey()}&prettyPrint=false"
             val body = JSONObject().apply {
                 put("query", query)
                 // "Songs" filter: only real tracks, no albums/artists/videos.
@@ -34,7 +46,7 @@ object YouTubeMusicSource {
                     })
                 })
             }
-            val json = post(ENDPOINT, body.toString())
+            val json = post(endpoint, body.toString())
             val root = JSONObject(json)
             val items = ArrayList<SearchResult>()
             collectSongs(root, items, limit)
@@ -124,6 +136,15 @@ object YouTubeMusicSource {
             is JSONArray -> for (i in 0 until node.length()) findLastThumb(node.opt(i))?.let { return it }
         }
         return null
+    }
+
+    private fun fetchHome(url: String): String {
+        val conn = URL(url).openConnection() as HttpURLConnection
+        conn.connectTimeout = 15_000
+        conn.readTimeout = 15_000
+        conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0 Safari/537.36")
+        conn.setRequestProperty("Cookie", "SOCS=CAI") // skip the consent interstitial
+        return conn.inputStream.bufferedReader().readText().also { conn.disconnect() }
     }
 
     private fun post(url: String, body: String): String {
