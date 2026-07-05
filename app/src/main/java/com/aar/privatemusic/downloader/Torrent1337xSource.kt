@@ -98,7 +98,36 @@ object Torrent1337xSource {
             thumbnailUrl = "",
             isTorrent = true,
             magnetUri = magnet,
+            qualityLabel = parseQuality(title),
         )
+    }
+
+    /**
+     * Deduce la calidad del nombre del release (los torrents de música suelen
+     * etiquetarla: "FLAC", "MP3 320", "24bit"…). Heurística: null si no se ve.
+     */
+    internal fun parseQuality(title: String): String? {
+        val t = " ${title.lowercase()} "
+        // Alta resolución: "24bit", "24-96", "24/44", "96khz"…
+        val hiRes = Regex("""24[ -]?bit|24[ /-]\d{2,3}|hi[ -]?res|\d{2,3}[ .]?khz""").containsMatchIn(t)
+        // Bitrate MP3 aunque venga pegado a "kbps" ("320kbps").
+        val bitrate = Regex("""\b(320|256|192|128)\s?k?(?:bps)?\b""").find(t)?.groupValues?.get(1)
+        return when {
+            "flac" in t && hiRes -> "FLAC 24-bit"
+            "flac" in t -> "FLAC"
+            "alac" in t -> "ALAC"
+            "dsd" in t || "sacd" in t -> "DSD"
+            Regex("""\bwave?\b""").containsMatchIn(t) -> "WAV"
+            Regex("""\b(ape|wavpack|tak)\b""").containsMatchIn(t) -> "Lossless"
+            bitrate == "320" -> "MP3 320"
+            Regex("""\bv0\b""").containsMatchIn(t) -> "MP3 V0"
+            bitrate == "256" -> "256 kbps"
+            Regex("""\bv2\b""").containsMatchIn(t) -> "MP3 V2"
+            bitrate != null -> "MP3 $bitrate"
+            "aac" in t || "m4a" in t -> "AAC"
+            "mp3" in t -> "MP3"
+            else -> null
+        }
     }
 
     private fun unescape(text: String): String = text
