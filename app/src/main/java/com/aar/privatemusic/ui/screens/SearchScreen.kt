@@ -117,6 +117,7 @@ fun SearchScreen(app: PrivateMusicApp) {
 
     val downloads by app.downloader.downloads.collectAsState()
     val torrentDownloads by app.torrents.downloads.collectAsState()
+    val archiveDownloads by app.archive.downloads.collectAsState()
     val deezerDownloads by app.deezerDownloader.downloads.collectAsState()
     val libraryIds by app.repository.observeSongIds().collectAsState(initial = emptyList())
     val nowPlaying by app.playerController.nowPlaying.collectAsState()
@@ -165,6 +166,18 @@ fun SearchScreen(app: PrivateMusicApp) {
                     com.aar.privatemusic.downloader.Torrent1337xSource.search(query.trim(), limit = 30)
                 results = torrents
                 if (torrents.isEmpty()) error = "Sin resultados de torrents de música"
+                searching = false
+                return@launch
+            }
+            if (source == "archive") {
+                runCatching {
+                    com.aar.privatemusic.downloader.InternetArchiveSource.search(query.trim(), limit = 30)
+                }
+                    .onSuccess {
+                        results = it
+                        if (it.isEmpty()) error = "Sin resultados en Internet Archive"
+                    }
+                    .onFailure { error = "Error al buscar en Internet Archive: ${it.message}" }
                 searching = false
                 return@launch
             }
@@ -264,6 +277,9 @@ fun SearchScreen(app: PrivateMusicApp) {
         SearchSource("1337x", "1337x · Torrents música", androidx.compose.ui.graphics.Color(0xFFE0592A)) {
             Icon(Icons.Filled.Search, null, tint = androidx.compose.ui.graphics.Color.White)
         },
+        SearchSource("archive", "Internet Archive · FLAC gratis", androidx.compose.ui.graphics.Color(0xFF2C7BB6)) {
+            Icon(Icons.Filled.Download, null, tint = androidx.compose.ui.graphics.Color.White)
+        },
     )
 
     androidx.activity.compose.BackHandler(enabled = source != null) { source = null }
@@ -333,6 +349,7 @@ fun SearchScreen(app: PrivateMusicApp) {
                         "deezerhq" -> "Buscar en Deezer (descarga HQ)…"
                         "ytmusic" -> "Buscar en YouTube Music…"
                         "1337x" -> "Buscar torrents de música…"
+                        "archive" -> "Buscar en Internet Archive…"
                         else -> "Buscar en YouTube o pegar URL…"
                     }
                 )
@@ -493,9 +510,12 @@ fun SearchScreen(app: PrivateMusicApp) {
                 }
                 items(results, key = { it.id }) { result ->
                     val inLibrary = result.id in libraryIds
-                    // Los torrents descargan por su propio motor (app.torrents).
-                    val state = if (result.isTorrent) torrentDownloads[result.id]
-                    else downloads[result.id]
+                    // Torrents e Internet Archive descargan por su propio motor.
+                    val state = when {
+                        result.isTorrent -> torrentDownloads[result.id]
+                        result.isArchive -> archiveDownloads[result.id]
+                        else -> downloads[result.id]
+                    }
                     SearchResultRow(
                         result = result,
                         inLibrary = inLibrary,
@@ -506,15 +526,21 @@ fun SearchScreen(app: PrivateMusicApp) {
                         onPreview = {
                             when {
                                 result.isTorrent -> app.torrents.enqueue(result)
+                                result.isArchive -> app.archive.enqueue(result)
                                 else -> togglePreview(result)
                             }
                         },
                         onDownload = {
-                            if (result.isTorrent) {
-                                app.torrents.enqueue(result)
-                                actionMessage = "Descargando torrent \"${result.title}\"…"
-                            } else {
-                                app.downloader.enqueue(result)
+                            when {
+                                result.isTorrent -> {
+                                    app.torrents.enqueue(result)
+                                    actionMessage = "Descargando torrent \"${result.title}\"…"
+                                }
+                                result.isArchive -> {
+                                    app.archive.enqueue(result)
+                                    actionMessage = "Descargando de Internet Archive \"${result.title}\"…"
+                                }
+                                else -> app.downloader.enqueue(result)
                             }
                         },
                     )
@@ -586,10 +612,10 @@ private fun SearchResultRow(
                 .padding(horizontal = 12.dp),
         ) {
             Text(result.title, maxLines = 2, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyLarge)
-            if (result.isTorrent) {
+            if (result.isTorrent || result.isArchive) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        "TORRENT",
+                        if (result.isTorrent) "TORRENT" else "ARCHIVE",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onPrimaryContainer,
                         modifier = Modifier
@@ -618,8 +644,8 @@ private fun SearchResultRow(
                 )
             }
         }
-        // Preview: listen before deciding to download (torrents have no stream).
-        if (!result.isTorrent) when {
+        // Preview: listen before deciding to download (torrents/archive are albums).
+        if (!result.isTorrent && !result.isArchive) when {
             previewResolving ->
                 CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
             previewPlaying ->

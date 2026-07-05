@@ -32,6 +32,8 @@ data class SearchResult(
     /** Resultado de torrent (1337x): sin preescucha, la acción copia el magnet. */
     val isTorrent: Boolean = false,
     val magnetUri: String? = null,
+    /** Ítem de Internet Archive (álbum/concierto): sin preescucha, descarga el ítem. */
+    val isArchive: Boolean = false,
 )
 
 sealed interface DownloadState {
