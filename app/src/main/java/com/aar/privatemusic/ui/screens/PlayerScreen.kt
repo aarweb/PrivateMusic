@@ -19,6 +19,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.Bedtime
+import androidx.compose.material.icons.filled.Cast
 import androidx.compose.material.icons.filled.Lyrics
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
@@ -114,6 +115,7 @@ fun PlayerScreen(app: PrivateMusicApp, onBack: () -> Unit, onOpenQueue: () -> Un
     var karaokeOpen by remember { mutableStateOf(false) }
     var speedDialogOpen by remember { mutableStateOf(false) }
     var lyricShareFrom by remember { mutableStateOf<Int?>(null) }
+    var castDialogOpen by remember { mutableStateOf(false) }
     val playbackSpeed by controller.playbackSpeed.collectAsState()
 
     val lyrics by produceState<com.aar.privatemusic.lyrics.Lyrics?>(initialValue = null, song?.id) {
@@ -144,6 +146,13 @@ fun PlayerScreen(app: PrivateMusicApp, onBack: () -> Unit, onOpenQueue: () -> Un
                 Icon(Icons.Filled.KeyboardArrowDown, contentDescription = "Cerrar")
             }
             Spacer(Modifier.weight(1f))
+            IconButton(onClick = { castDialogOpen = true }) {
+                Icon(
+                    Icons.Filled.Cast,
+                    contentDescription = "Enviar a TV/altavoz",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             IconButton(onClick = onOpenQueue) {
                 Icon(
                     Icons.AutoMirrored.Filled.QueueMusic,
@@ -315,6 +324,9 @@ fun PlayerScreen(app: PrivateMusicApp, onBack: () -> Unit, onOpenQueue: () -> Un
             )
         }
 
+        if (castDialogOpen) {
+            com.aar.privatemusic.cast.CastRouteDialog(onDismiss = { castDialogOpen = false })
+        }
         if (speedDialogOpen) {
             AlertDialog(
                 onDismissRequest = { speedDialogOpen = false },

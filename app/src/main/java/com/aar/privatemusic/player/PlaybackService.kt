@@ -96,10 +96,95 @@ class PlaybackService : MediaLibraryService() {
             }
         })
         startVolumeLoop(player, dao)
+        localPlayer = player
+        castDao = dao
+        // Cast support is best-effort: no Play Services -> no cast, no crash.
+        runCatching {
+            val castContext = com.google.android.gms.cast.framework.CastContext
+                .getSharedInstance(this)
+            castPlayer = androidx.media3.cast.CastPlayer(castContext).apply {
+                setSessionAvailabilityListener(
+                    object : androidx.media3.cast.SessionAvailabilityListener {
+                        override fun onCastSessionAvailable() = switchToCast()
+                        override fun onCastSessionUnavailable() = switchToLocal()
+                    }
+                )
+            }
+        }.onFailure { android.util.Log.w("Cast", "cast unavailable", it) }
     }
 
     private var tailPlayer: ExoPlayer? = null
     private var tailAudioAdvancing = false
+    private var localPlayer: ExoPlayer? = null
+    private var castPlayer: androidx.media3.cast.CastPlayer? = null
+    private var httpServer: com.aar.privatemusic.cast.MediaHttpServer? = null
+    private var castDao: MusicDao? = null
+
+    /** Chromecast: move the whole session (queue + position) to the TV. */
+    private fun switchToCast() {
+        val local = localPlayer ?: return
+        val cast = castPlayer ?: return
+        val dao = castDao ?: return
+        val session = mediaSession ?: return
+        val ids = (0 until local.mediaItemCount).map { local.getMediaItemAt(it).mediaId }
+        if (ids.isEmpty()) return
+        val index = local.currentMediaItemIndex
+        val position = local.currentPosition
+        val wasPlaying = local.isPlaying
+        local.pause()
+        serviceScope.launch {
+            runCatching {
+                httpServer?.stop()
+                httpServer = com.aar.privatemusic.cast.MediaHttpServer(dao).also { it.start() }
+            }
+            val ip = com.aar.privatemusic.cast.MediaHttpServer.localIp() ?: return@launch
+            val items = ids.mapNotNull { id ->
+                dao.getSong(id)?.let { song ->
+                    val ext = java.io.File(song.filePath).extension.lowercase()
+                    val mime = when (ext) {
+                        "webm" -> "audio/webm"; "m4a", "mp4" -> "audio/mp4"
+                        "mp3" -> "audio/mpeg"; "flac" -> "audio/flac"
+                        "wav" -> "audio/wav"; else -> "audio/*"
+                    }
+                    MediaItem.Builder()
+                        .setMediaId(song.id)
+                        .setUri("http://$ip:${com.aar.privatemusic.cast.MediaHttpServer.PORT}/song/${song.id}")
+                        .setMimeType(mime)
+                        .setMediaMetadata(
+                            MediaMetadata.Builder()
+                                .setTitle(song.title)
+                                .setArtist(song.artist)
+                                .build()
+                        )
+                        .build()
+                }
+            }
+            if (items.isEmpty()) return@launch
+            withContext(Dispatchers.Main) {
+                cast.setMediaItems(items, index.coerceIn(0, items.size - 1), position)
+                cast.prepare()
+                if (wasPlaying) cast.play()
+                session.player = cast
+                android.util.Log.d("Cast", "session moved to cast: ${items.size} items @$position")
+            }
+        }
+    }
+
+    private fun switchToLocal() {
+        val local = localPlayer ?: return
+        val cast = castPlayer ?: return
+        val session = mediaSession ?: return
+        val index = cast.currentMediaItemIndex
+        val position = cast.currentPosition
+        cast.stop()
+        session.player = local
+        if (local.mediaItemCount > index) {
+            local.seekTo(index, position)
+        }
+        runCatching { httpServer?.stop() }
+        httpServer = null
+        android.util.Log.d("Cast", "session back to local @$position")
+    }
 
     /**
      * Drives volume normalization and the REAL crossfade: when the current
@@ -352,6 +437,10 @@ class PlaybackService : MediaLibraryService() {
         mediaSession = null
         tailPlayer?.release()
         tailPlayer = null
+        castPlayer?.release()
+        castPlayer = null
+        runCatching { httpServer?.stop() }
+        httpServer = null
         EqHolder.release()
         serviceScope.cancel()
         mainScope.cancel()

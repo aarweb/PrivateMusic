@@ -39,6 +39,9 @@ youtubedl-library = { group = "io.github.junkfood02.youtubedl-android", name = "
 youtubedl-ffmpeg = { group = "io.github.junkfood02.youtubedl-android", name = "ffmpeg", version.ref = "youtubedl" }
 kotlinx-coroutines = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
 onnxruntime = { group = "com.microsoft.onnxruntime", name = "onnxruntime-android", version = "1.20.0" }
+media3-cast = { group = "androidx.media3", name = "media3-cast", version.ref = "media3" }
+nanohttpd = { group = "org.nanohttpd", name = "nanohttpd", version = "2.3.1" }
+mediarouter = { group = "androidx.mediarouter", name = "mediarouter", version = "1.7.0" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
