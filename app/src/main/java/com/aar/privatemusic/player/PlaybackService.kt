@@ -382,17 +382,33 @@ class PlaybackService : MediaLibraryService() {
                                 resync += 20
                             }
                         }
-                        tail.volume = xfGainA
+                        // Spin the tail up MUTED: its AudioTrack takes 100-800ms to
+                        // actually push samples, and during that warm-up the main
+                        // player keeps advancing — an audible tail would replay
+                        // that stretch of A (heard as ~1s repeating on handover).
+                        tail.volume = 0f
                         tailAudioAdvancing = false
                         tail.play()
-                        // Wait for onAudioPositionAdvancing: the AudioTrack is
-                        // genuinely pushing samples out. A keeps sounding on the
-                        // main player the whole time, so there is no gap.
                         var waited = 0
                         while (!tailAudioAdvancing && waited < 800) {
                             delay(20)
                             waited += 20
                         }
+                        // Audio is really out now; measure how far the tail's
+                        // CONTENT lags the main's and re-seek predicting the same
+                        // restart latency, so both A streams line up when audible.
+                        var drift = player.currentPosition - tail.currentPosition
+                        if (tailAudioAdvancing && drift > 60) {
+                            tailAudioAdvancing = false
+                            tail.seekTo(player.currentPosition + drift + 40)
+                            var rewait = 0
+                            while (!tailAudioAdvancing && rewait < 400) {
+                                delay(20)
+                                rewait += 20
+                            }
+                            drift = player.currentPosition - tail.currentPosition
+                        }
+                        tail.volume = xfGainA
                         // Small safety margin for output latency, then hand over
                         // with a ~100ms down-ramp instead of a hard mute.
                         delay(80)
@@ -409,7 +425,7 @@ class PlaybackService : MediaLibraryService() {
                         armedForId = null
                         android.util.Log.d(
                             "Crossfade",
-                            "overlap start durMs=$fadeLen gainA=$xfGainA gainB=$gainFactor armed=$armedReady waitedMs=$waited",
+                            "overlap start durMs=$fadeLen gainA=$xfGainA gainB=$gainFactor armed=$armedReady waitedMs=$waited driftMs=$drift",
                         )
                         touchedVolume = true
                         delay(100)
