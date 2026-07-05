@@ -106,6 +106,11 @@ class PlaybackService : MediaLibraryService() {
             var xfDurationMs = 1L
             var xfGainA = 1f
             var xfMainId: String? = null
+            // Pre-arm state: the tail player is prepared AHEAD of the window so
+            // firing is instant — preparing at fire time leaves a ~100-300ms
+            // hole while the decoder spins up (audible micro-cut).
+            var armedForId: String? = null
+            var armedAtPos = 0L
 
             fun gainOf(loudness: Float?, normalize: Boolean): Float =
                 if (normalize && loudness != null) {
@@ -145,6 +150,7 @@ class PlaybackService : MediaLibraryService() {
                     val remainingXf = xfEndsAt - android.os.SystemClock.elapsedRealtime()
                     val aborted = player.currentMediaItem?.mediaId != xfMainId || !player.isPlaying
                     if (remainingXf <= 0 || aborted) {
+                        tail.volume = 0f
                         tail.stop()
                         tail.clearMediaItems()
                         tail.setPlaybackSpeed(1f)
@@ -162,7 +168,7 @@ class PlaybackService : MediaLibraryService() {
                     continue
                 }
 
-                // ---- Arm the overlap when the outgoing track enters the window. ----
+                // ---- Pre-arm & fire the overlap around the crossfade window. ----
                 val duration = player.duration
                 if (crossfadeMs > 0 && tail != null && player.isPlaying &&
                     duration != androidx.media3.common.C.TIME_UNSET &&
@@ -175,9 +181,23 @@ class PlaybackService : MediaLibraryService() {
                     val curItem = player.currentMediaItem
                     val curUri = curItem?.localConfiguration?.uri
                     val curId = curItem?.mediaId
-                    if (remaining in 1 until crossfadeMs && curUri != null && curId != null &&
-                        !curId.startsWith("preview:")
+                    val eligible = curUri != null && curId != null && !curId.startsWith("preview:")
+
+                    // Pre-arm: prepare the tail (paused, muted) at the exact spot
+                    // where the window opens, so firing needs no decoder warm-up.
+                    if (eligible && armedForId != curId &&
+                        remaining in crossfadeMs until crossfadeMs + 2500
                     ) {
+                        armedForId = curId
+                        armedAtPos = duration - crossfadeMs
+                        tail.playWhenReady = false
+                        tail.volume = 0f
+                        tail.setMediaItem(MediaItem.Builder().setUri(curUri).build(), armedAtPos)
+                        tail.prepare()
+                        android.util.Log.d("Crossfade", "pre-armed at $armedAtPos")
+                    }
+
+                    if (eligible && remaining in 1 until crossfadeMs) {
                         val nextId = player.getMediaItemAt(player.nextMediaItemIndex).mediaId
                         // Gather gains + AutoMix ratio off the main thread.
                         val (loudA, loudB, ratio) = withContext(Dispatchers.IO) {
@@ -197,20 +217,35 @@ class PlaybackService : MediaLibraryService() {
                             val fadeLen = (duration - pos).coerceIn(500L, crossfadeMs)
                             xfGainA = gainOf(loudA, normalize)
                             xfMainId = nextId
-                            tail.setMediaItem(MediaItem.Builder().setUri(curUri).build(), pos)
-                            tail.prepare()
+                            val armedReady = armedForId == curId &&
+                                tail.playbackState == Player.STATE_READY
+                            if (!armedReady) {
+                                // Fallback (seek into the window, odd file): prepare now.
+                                tail.setMediaItem(MediaItem.Builder().setUri(curUri).build(), pos)
+                                tail.prepare()
+                            } else if (kotlin.math.abs(pos - armedAtPos) > 150) {
+                                tail.seekTo(pos + 60)
+                            }
                             if (autoMix && ratio != 1f) tail.setPlaybackSpeed(ratio)
                             tail.volume = xfGainA
                             tail.play()
+                            // Keep A audible on the MAIN player until the tail is
+                            // really producing sound — this is what kills the cut.
+                            var waited = 0
+                            while (!tail.isPlaying && waited < 500) {
+                                delay(20)
+                                waited += 20
+                            }
                             player.volume = 0f
                             player.seekToNextMediaItem()
                             gainFactor = gainOf(loudB, normalize)
                             gainForId = nextId
                             xfDurationMs = fadeLen
                             xfEndsAt = android.os.SystemClock.elapsedRealtime() + fadeLen
+                            armedForId = null
                             android.util.Log.d(
                                 "Crossfade",
-                                "overlap start durMs=$fadeLen gainA=$xfGainA gainB=$gainFactor automixRatio=$ratio",
+                                "overlap start durMs=$fadeLen gainA=$xfGainA gainB=$gainFactor automixRatio=$ratio armed=$armedReady waitedMs=$waited",
                             )
                             touchedVolume = true
                             delay(100)
