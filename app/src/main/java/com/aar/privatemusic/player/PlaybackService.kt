@@ -72,6 +72,15 @@ class PlaybackService : MediaLibraryService() {
                 // on the incoming track's BPM; the incoming one plays natural.
                 if (player.playbackParameters.speed != 1f) player.setPlaybackSpeed(1f)
             }
+
+            override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                // Stream previews use signed URLs that expire; a dead preview item
+                // would otherwise fail silently forever from the notification.
+                if (player.currentMediaItem?.mediaId?.startsWith("preview:") == true) {
+                    player.clearMediaItems()
+                }
+                android.util.Log.w("Playback", "player error", error)
+            }
         })
         startVolumeLoop(player, dao)
     }
@@ -131,7 +140,11 @@ class PlaybackService : MediaLibraryService() {
                     val position = player.currentPosition
                     val remaining = duration - position
                     val fadeInMs = crossfadeMs / 2
-                    if (remaining in 1 until crossfadeMs && player.hasNextMediaItem()) {
+                    // Repeat-one loops the same track: fading to silence (and
+                    // beatmatching against a song that won't play) is wrong there.
+                    if (remaining in 1 until crossfadeMs && player.hasNextMediaItem() &&
+                        player.repeatMode != Player.REPEAT_MODE_ONE
+                    ) {
                         // Equal-power fade-out, only when another track follows.
                         fade = kotlin.math.sqrt(remaining / crossfadeMs.toFloat()).coerceIn(0f, 1f)
                         phase = "out"
@@ -150,7 +163,14 @@ class PlaybackService : MediaLibraryService() {
                                 }
                                 mixRatio = if (curBpm != null && nextBpm != null && curBpm > 0f)
                                     (nextBpm / curBpm).coerceIn(0.9f, 1.1f) else 1f
-                                if (mixRatio != 1f) player.setPlaybackSpeed(mixRatio)
+                                // Revalidate after the suspension: a manual skip may have
+                                // changed tracks while we were querying BPMs. Always apply
+                                // the new ratio (even 1f) so a stale bend never survives.
+                                if (player.currentMediaItem?.mediaId == curId &&
+                                    player.playbackParameters.speed != mixRatio
+                                ) {
+                                    player.setPlaybackSpeed(mixRatio)
+                                }
                                 android.util.Log.d("AutoMix", "pair=$curId->$nextId ratio=$mixRatio")
                             }
                         }

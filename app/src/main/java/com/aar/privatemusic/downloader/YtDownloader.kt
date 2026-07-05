@@ -311,6 +311,10 @@ class YtDownloader(
     suspend fun deleteSongFiles(song: Song) = withContext(Dispatchers.IO) {
         File(song.filePath).delete()
         song.artPath?.let { File(it).delete() }
+        // Companion files: cached lyrics and karaoke instrumental (~40 MB).
+        File(musicDir, "${song.id}.lrc").delete()
+        File(musicDir, "${song.id}.karaoke.wav").delete()
+        File(musicDir, "${song.id}.karaoke.part").delete()
         _downloads.update { it - song.id }
     }
 

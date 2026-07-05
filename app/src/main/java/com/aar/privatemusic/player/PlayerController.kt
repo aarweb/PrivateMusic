@@ -94,8 +94,9 @@ class PlayerController(
                         )
                     }
                     // Play history: record once per track start while playing.
+                    // Previews are not library songs; they'd pollute the stats.
                     val id = item?.mediaId
-                    if (id != null && player.isPlaying && id != lastPlayedId) {
+                    if (id != null && !id.startsWith("preview:") && player.isPlaying && id != lastPlayedId) {
                         lastPlayedId = id
                         onSongPlayed(id)
                     }
@@ -116,6 +117,19 @@ class PlayerController(
                     if (_stopAfterTrack.value && reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO) {
                         _stopAfterTrack.value = false
                         controller?.pause()
+                    }
+                }
+
+                override fun onPlaybackStateChanged(state: Int) {
+                    // A finished (or errored-and-cleared) preview gives the user
+                    // their previous queue back instead of a dead player.
+                    val c = controller ?: return
+                    if (state == Player.STATE_ENDED &&
+                        c.currentMediaItem?.mediaId?.startsWith("preview:") == true
+                    ) {
+                        restoreQueueAfterPreview()
+                    } else if (state == Player.STATE_IDLE && c.mediaItemCount == 0) {
+                        restoreQueueAfterPreview()
                     }
                 }
             })
@@ -243,9 +257,21 @@ class PlayerController(
         controller = null
     }
 
+    // Queue snapshot taken when a preview replaces the user's listening session.
+    private var savedQueue: List<MediaItem> = emptyList()
+    private var savedIndex = 0
+    private var savedPositionMs = 0L
+
     /** Streams a search result (preview before downloading). */
     fun playStream(id: String, title: String, artist: String, streamUrl: String, artworkUrl: String?) {
         val c = controller ?: return
+        // Previews hijack the session player; remember what was playing so the
+        // queue comes back when the preview ends (or errors out).
+        if (c.mediaItemCount > 0 && c.currentMediaItem?.mediaId?.startsWith("preview:") != true) {
+            savedQueue = (0 until c.mediaItemCount).map { c.getMediaItemAt(it) }
+            savedIndex = c.currentMediaItemIndex
+            savedPositionMs = c.currentPosition
+        }
         val uri = Uri.parse(streamUrl)
         val item = MediaItem.Builder()
             .setMediaId("preview:$id")
@@ -262,6 +288,16 @@ class PlayerController(
         c.setMediaItems(listOf(item), 0, 0L)
         c.prepare()
         c.play()
+    }
+
+    /** Puts the pre-preview queue back (paused, at the saved position). */
+    private fun restoreQueueAfterPreview() {
+        val c = controller ?: return
+        if (savedQueue.isEmpty()) return
+        c.setMediaItems(savedQueue, savedIndex.coerceAtMost(savedQueue.size - 1), savedPositionMs)
+        c.prepare()
+        c.pause()
+        savedQueue = emptyList()
     }
 
     /** Plays [file] (e.g. an instrumental WAV) as if it were the song itself. */

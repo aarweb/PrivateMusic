@@ -96,17 +96,22 @@ object AppUpdater {
         version: String,
         onProgress: (Int) -> Unit,
     ): Boolean = withContext(Dispatchers.IO) {
+        val apk = cachedApk(context).apply { parentFile?.mkdirs() }
+        val tmp = File(apk.parentFile, "${apk.name}.part")
         try {
-            val apk = cachedApk(context).apply { parentFile?.mkdirs() }
+            // A failed download must never leave a half-written file where a
+            // previously valid cached APK was: write aside and rename on success.
+            context.getSharedPreferences("settings", Context.MODE_PRIVATE)
+                .edit().remove("cached_update_version").apply()
 
             val conn = URL(apkUrl).openConnection() as HttpURLConnection
             conn.instanceFollowRedirects = true
             conn.connectTimeout = 15_000
             val total = conn.contentLengthLong
+            var copied = 0L
             conn.inputStream.use { input ->
-                apk.outputStream().use { output ->
+                tmp.outputStream().use { output ->
                     val buffer = ByteArray(64 * 1024)
-                    var copied = 0L
                     while (true) {
                         val read = input.read(buffer)
                         if (read < 0) break
@@ -117,6 +122,10 @@ object AppUpdater {
                 }
             }
             conn.disconnect()
+            if ((total > 0 && copied != total) || !tmp.renameTo(apk)) {
+                tmp.delete()
+                return@withContext false
+            }
 
             context.getSharedPreferences("settings", Context.MODE_PRIVATE)
                 .edit().putString("cached_update_version", version).apply()
@@ -124,6 +133,7 @@ object AppUpdater {
             launchInstaller(context, apk)
             true
         } catch (e: Exception) {
+            tmp.delete()
             false
         }
     }

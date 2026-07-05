@@ -52,18 +52,34 @@ import com.aar.privatemusic.ui.components.ArtImage
 import com.aar.privatemusic.ui.components.formatDuration
 import kotlinx.coroutines.launch
 
+/** Last search kept across navigation so switching tabs doesn't wipe results. */
+private object SearchCache {
+    var query = ""
+    var results: List<SearchResult> = emptyList()
+    var playlistTitle: String? = null
+    var playlistUrl: String? = null
+    var spotifyTracks: List<SpotifyTrack>? = null
+}
+
 @Composable
 fun SearchScreen(app: PrivateMusicApp) {
-    var query by remember { mutableStateOf("") }
-    var results by remember { mutableStateOf<List<SearchResult>>(emptyList()) }
+    var query by remember { mutableStateOf(SearchCache.query) }
+    var results by remember { mutableStateOf(SearchCache.results) }
     var searching by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     // Non-null when the current results come from a playlist/channel URL.
-    var playlistTitle by remember { mutableStateOf<String?>(null) }
-    var playlistUrl by remember { mutableStateOf<String?>(null) }
+    var playlistTitle by remember { mutableStateOf(SearchCache.playlistTitle) }
+    var playlistUrl by remember { mutableStateOf(SearchCache.playlistUrl) }
     var actionMessage by remember { mutableStateOf<String?>(null) }
     // Non-null when the URL was a Spotify playlist/album/track.
-    var spotifyTracks by remember { mutableStateOf<List<SpotifyTrack>?>(null) }
+    var spotifyTracks by remember { mutableStateOf(SearchCache.spotifyTracks) }
+    androidx.compose.runtime.SideEffect {
+        SearchCache.query = query
+        SearchCache.results = results
+        SearchCache.playlistTitle = playlistTitle
+        SearchCache.playlistUrl = playlistUrl
+        SearchCache.spotifyTracks = spotifyTracks
+    }
     val scope = rememberCoroutineScope()
     val keyboard = LocalSoftwareKeyboardController.current
     val context = LocalContext.current
@@ -75,7 +91,9 @@ fun SearchScreen(app: PrivateMusicApp) {
     var previewLoadingId by remember { mutableStateOf<String?>(null) }
 
     fun togglePreview(result: SearchResult) {
-        if (nowPlaying?.songId == "preview:${result.id}" && isPlaying) {
+        // If this row's preview is already loaded (playing, paused or buffering),
+        // toggle it instead of re-extracting the stream URL from scratch.
+        if (nowPlaying?.songId == "preview:${result.id}") {
             app.playerController.togglePlayPause()
             return
         }
@@ -264,7 +282,8 @@ fun SearchScreen(app: PrivateMusicApp) {
                         inLibrary = inLibrary,
                         state = state,
                         previewResolving = previewLoadingId == result.id,
-                        previewPlaying = isPlaying && nowPlaying?.songId == "preview:${result.id}",
+                        previewPlaying = nowPlaying?.songId == "preview:${result.id}" && isPlaying,
+                        previewLoaded = nowPlaying?.songId == "preview:${result.id}",
                         onPreview = { togglePreview(result) },
                         onDownload = { app.downloader.enqueue(result) },
                     )
@@ -281,6 +300,7 @@ private fun SearchResultRow(
     state: DownloadState?,
     previewResolving: Boolean,
     previewPlaying: Boolean,
+    previewLoaded: Boolean,
     onPreview: () -> Unit,
     onDownload: () -> Unit,
 ) {
@@ -312,7 +332,12 @@ private fun SearchResultRow(
                 CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
             previewPlaying ->
                 IconButton(onClick = onPreview) {
-                    Icon(Icons.Filled.StopCircle, "Parar preescucha", tint = MaterialTheme.colorScheme.primary)
+                    Icon(Icons.Filled.StopCircle, "Pausar preescucha", tint = MaterialTheme.colorScheme.primary)
+                }
+            previewLoaded ->
+                // Loaded but paused/buffering: highlighted play resumes in place.
+                IconButton(onClick = onPreview) {
+                    Icon(Icons.Filled.PlayCircleOutline, "Reanudar preescucha", tint = MaterialTheme.colorScheme.primary)
                 }
             else ->
                 IconButton(onClick = onPreview) {

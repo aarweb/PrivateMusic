@@ -25,10 +25,12 @@ jobs:
         env:
           KEYSTORE_B64: ${{ secrets.DEBUG_KEYSTORE_B64 }}
         run: |
-          if [ -n "$KEYSTORE_B64" ]; then
-            echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/debug.keystore"
-            echo "PM_KEYSTORE=$RUNNER_TEMP/debug.keystore" >> "$GITHUB_ENV"
+          if [ -z "$KEYSTORE_B64" ]; then
+            echo "::error::Falta el secret DEBUG_KEYSTORE_B64: sin él la release saldría con una firma distinta y las actualizaciones fallarían."
+            exit 1
           fi
+          echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/debug.keystore"
+          echo "PM_KEYSTORE=$RUNNER_TEMP/debug.keystore" >> "$GITHUB_ENV"
 
       - name: Compilar APK
         run: ./gradlew assembleDebug --no-daemon
@@ -36,8 +38,14 @@ jobs:
       - name: Comprobar firma
         run: |
           BT=$(ls "$ANDROID_HOME/build-tools" | tail -1)
-          "$ANDROID_HOME/build-tools/$BT/apksigner" verify --print-certs \
-            app/build/outputs/apk/debug/app-debug.apk | grep "SHA-256 digest"
+          DIGEST=$("$ANDROID_HOME/build-tools/$BT/apksigner" verify --print-certs \
+            app/build/outputs/apk/debug/app-debug.apk | grep -oE "SHA-256 digest: [0-9a-f]+" | head -1 | awk '{print $3}')
+          EXPECTED="e1fefae098e1bbab44660dc2527184ea3bbc6dac1d524eaf75b86669dc0b8ed4"
+          echo "firma: $DIGEST"
+          if [ "$DIGEST" != "$EXPECTED" ]; then
+            echo "::error::El APK NO está firmado con la clave estable (esperado $EXPECTED)."
+            exit 1
+          fi
 
       - name: Renombrar APK con la versión
         run: cp app/build/outputs/apk/debug/app-debug.apk "privatemusic-${GITHUB_REF_NAME#v}.apk"

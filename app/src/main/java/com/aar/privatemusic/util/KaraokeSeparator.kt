@@ -47,6 +47,8 @@ object KaraokeSeparator {
     private const val CHUNK = (FRAMES - 1) * HOP + N_FFT
     private const val EDGE = N_FFT
     private const val STEP = CHUNK - 2 * EDGE
+    // Beyond this the in-RAM PCM (~21 MB/min) risks OOM even with largeHeap.
+    const val MAX_DURATION_SEC = 15 * 60
 
     fun modelFile(context: Context): File = File(context.filesDir, "models/umx_vocals.onnx")
 
@@ -60,16 +62,17 @@ object KaraokeSeparator {
             val target = modelFile(context)
             target.parentFile?.mkdirs()
             val tmp = File(target.parentFile, "${target.name}.part")
-            runCatching {
+            try {
                 val conn = URL(MODEL_URL).openConnection() as HttpURLConnection
                 conn.connectTimeout = 15000
                 conn.readTimeout = 30000
                 val total = conn.contentLengthLong
+                var done = 0L
                 conn.inputStream.use { input ->
                     tmp.outputStream().use { out ->
                         val buf = ByteArray(64 * 1024)
-                        var done = 0L
                         while (true) {
+                            currentCoroutineContext().ensureActive()
                             val n = input.read(buf)
                             if (n < 0) break
                             out.write(buf, 0, n)
@@ -78,8 +81,19 @@ object KaraokeSeparator {
                         }
                     }
                 }
-                tmp.renameTo(target)
-            }.getOrDefault(false).also { if (!it) tmp.delete() }
+                // A quietly-truncated file would crash createSession on every use.
+                if (total > 0 && done != total) {
+                    tmp.delete()
+                    false
+                } else {
+                    tmp.renameTo(target)
+                }
+            } catch (e: Exception) {
+                tmp.delete()
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                android.util.Log.e("Karaoke", "model download failed", e)
+                false
+            }
         }
 
     /** Separates the vocals out of [song]; returns the instrumental WAV or null. */
@@ -91,16 +105,27 @@ object KaraokeSeparator {
     ): File? = withContext(Dispatchers.Default) {
         val out = instrumentalFile(musicDir, song.id)
         if (out.length() > 1000) return@withContext out
-        val (left, right) = decodeStereo(song.filePath) ?: return@withContext null
+        // Whole-song PCM lives in RAM: cap the duration to keep the heap sane.
+        if (song.durationSec > MAX_DURATION_SEC) return@withContext null
+        val (left, right) = decodeStereo(song.filePath, song.durationSec) ?: return@withContext null
         onProgress(10)
 
         val env = OrtEnvironment.getEnvironment()
         val opts = OrtSession.SessionOptions().apply { setIntraOpNumThreads(4) }
-        val session = env.createSession(modelFile(context).absolutePath, opts)
+        val session = try {
+            env.createSession(modelFile(context).absolutePath, opts)
+        } catch (e: Exception) {
+            // Corrupt/truncated model: delete it so the next attempt re-downloads
+            // instead of crashing forever.
+            android.util.Log.e("Karaoke", "bad model, deleting", e)
+            modelFile(context).delete()
+            return@withContext null
+        }
         val tmp = File(musicDir, "${song.id}.karaoke.part")
+        var wav: RandomAccessFile? = null
         try {
-            val wav = RandomAccessFile(tmp, "rw")
-            wav.write(ByteArray(44)) // header patched at the end
+            val w = RandomAccessFile(tmp, "rw").also { wav = it }
+            w.write(ByteArray(44)) // header patched at the end
 
             val total = left.size
             val window = FloatArray(N_FFT) { (0.5 - 0.5 * cos(2.0 * PI * it / N_FFT)).toFloat() }
@@ -166,16 +191,15 @@ object KaraokeSeparator {
                     bytes.putShort((outL[i].coerceIn(-1f, 1f) * 32767).toInt().toShort())
                     bytes.putShort((outR[i].coerceIn(-1f, 1f) * 32767).toInt().toShort())
                 }
-                wav.write(bytes.array())
+                w.write(bytes.array())
                 written += (to - from)
                 onProgress(10 + (pos.toLong() * 88 / total).toInt())
                 if (pos + CHUNK >= total) break // tail already written up to the end
                 pos += STEP
             }
 
-            patchWavHeader(wav, written)
-            wav.close()
-            tmp.renameTo(out)
+            patchWavHeader(w, written)
+            if (!tmp.renameTo(out)) throw java.io.IOException("renameTo failed")
             onProgress(100)
             out
         } catch (e: Exception) {
@@ -184,6 +208,7 @@ object KaraokeSeparator {
             android.util.Log.e("Karaoke", "separation failed", e)
             null
         } finally {
+            runCatching { wav?.close() }
             session.close()
         }
     }
@@ -263,8 +288,9 @@ object KaraokeSeparator {
     }
 
     /** Decodes the whole file to stereo float PCM resampled to 44.1 kHz. */
-    private fun decodeStereo(path: String): Pair<FloatArray, FloatArray>? {
+    private fun decodeStereo(path: String, durationSec: Int): Pair<FloatArray, FloatArray>? {
         val extractor = MediaExtractor()
+        var codec: MediaCodec? = null
         return try {
             extractor.setDataSource(path)
             var trackIndex = -1
@@ -280,14 +306,16 @@ object KaraokeSeparator {
             val mime = format.getString(MediaFormat.KEY_MIME)!!
             val codecName = MediaCodecList(MediaCodecList.REGULAR_CODECS).findDecoderForFormat(format)
                 ?: return null
-            val codec = MediaCodec.createByCodecName(codecName)
-            codec.configure(format, null, null, 0)
-            codec.start()
+            val decoder = MediaCodec.createByCodecName(codecName).also { codec = it }
+            decoder.configure(format, null, null, 0)
+            decoder.start()
 
             var srcRate = format.getInteger(MediaFormat.KEY_SAMPLE_RATE)
             var srcChannels = format.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
-            val left = FloatGrow()
-            val right = FloatGrow()
+            // Preallocate from the known duration: avoids doubling spikes near OOM.
+            val expected = (durationSec.coerceAtLeast(1) + 5) * SAMPLE_RATE
+            val left = FloatGrow(expected)
+            val right = FloatGrow(expected)
             // Stateful linear resampler position (in source samples).
             var t = 0.0
             var prevL = 0f
@@ -299,23 +327,23 @@ object KaraokeSeparator {
             var outputDone = false
             while (!outputDone) {
                 if (!inputDone) {
-                    val inIdx = codec.dequeueInputBuffer(10_000)
+                    val inIdx = decoder.dequeueInputBuffer(10_000)
                     if (inIdx >= 0) {
-                        val buf = codec.getInputBuffer(inIdx)!!
+                        val buf = decoder.getInputBuffer(inIdx)!!
                         val size = extractor.readSampleData(buf, 0)
                         if (size < 0) {
-                            codec.queueInputBuffer(inIdx, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                            decoder.queueInputBuffer(inIdx, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
                             inputDone = true
                         } else {
-                            codec.queueInputBuffer(inIdx, 0, size, extractor.sampleTime, 0)
+                            decoder.queueInputBuffer(inIdx, 0, size, extractor.sampleTime, 0)
                             extractor.advance()
                         }
                     }
                 }
-                val outIdx = codec.dequeueOutputBuffer(info, 10_000)
+                val outIdx = decoder.dequeueOutputBuffer(info, 10_000)
                 when {
                     outIdx >= 0 -> {
-                        val buf = codec.getOutputBuffer(outIdx)!!
+                        val buf = decoder.getOutputBuffer(outIdx)!!
                         val shorts = ShortArray(info.size / 2)
                         buf.position(info.offset)
                         buf.limit(info.offset + info.size)
@@ -338,30 +366,30 @@ object KaraokeSeparator {
                             prevL = l; prevR = r
                             i++
                         }
-                        codec.releaseOutputBuffer(outIdx, false)
+                        decoder.releaseOutputBuffer(outIdx, false)
                         if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) outputDone = true
                     }
                     outIdx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
-                        val f = codec.outputFormat
+                        val f = decoder.outputFormat
                         srcRate = f.getInteger(MediaFormat.KEY_SAMPLE_RATE)
                         srcChannels = f.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
                     }
                 }
             }
-            codec.stop()
-            codec.release()
             if (left.size < SAMPLE_RATE) null else left.toArray() to right.toArray()
         } catch (e: Exception) {
             android.util.Log.e("Karaoke", "decode failed", e)
             null
         } finally {
+            runCatching { codec?.stop() }
+            runCatching { codec?.release() }
             extractor.release()
         }
     }
 
     /** Minimal growable float array to avoid boxing while decoding. */
-    private class FloatGrow {
-        var data = FloatArray(1 shl 20)
+    private class FloatGrow(initialCapacity: Int) {
+        var data = FloatArray(initialCapacity.coerceAtLeast(1 shl 16))
         var size = 0
         fun add(v: Float) {
             if (size == data.size) data = data.copyOf(data.size * 2)
