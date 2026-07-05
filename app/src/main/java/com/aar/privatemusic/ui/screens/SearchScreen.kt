@@ -11,8 +11,17 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material3.Card
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.unit.Dp
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.PlayCircleOutline
@@ -55,10 +64,24 @@ import kotlinx.coroutines.launch
 /** Last search kept across navigation so switching tabs doesn't wipe results. */
 private object SearchCache {
     var query = ""
+    var source: String? = null
     var results: List<SearchResult> = emptyList()
     var playlistTitle: String? = null
     var playlistUrl: String? = null
     var spotifyTracks: List<SpotifyTrack>? = null
+    var deezerTracks: List<com.aar.privatemusic.downloader.DeezerTrack>? = null
+
+    /** Deezer track id -> matched YouTube id (so rows can show download state). */
+    val deezerMatches = mutableMapOf<String, String>()
+
+    fun clearResults() {
+        query = ""
+        results = emptyList()
+        playlistTitle = null
+        playlistUrl = null
+        spotifyTracks = null
+        deezerTracks = null
+    }
 }
 
 @Composable
@@ -73,12 +96,19 @@ fun SearchScreen(app: PrivateMusicApp) {
     var actionMessage by remember { mutableStateOf<String?>(null) }
     // Non-null when the URL was a Spotify playlist/album/track.
     var spotifyTracks by remember { mutableStateOf(SearchCache.spotifyTracks) }
+    // Selected source ("yt", "deezer"...); null shows the sources grid.
+    var source by remember { mutableStateOf(SearchCache.source) }
+    var deezerTracks by remember { mutableStateOf(SearchCache.deezerTracks) }
+    // Deezer tracks currently being matched on YouTube before download.
+    var deezerResolving by remember { mutableStateOf(setOf<String>()) }
     androidx.compose.runtime.SideEffect {
         SearchCache.query = query
+        SearchCache.source = source
         SearchCache.results = results
         SearchCache.playlistTitle = playlistTitle
         SearchCache.playlistUrl = playlistUrl
         SearchCache.spotifyTracks = spotifyTracks
+        SearchCache.deezerTracks = deezerTracks
     }
     val scope = rememberCoroutineScope()
     val keyboard = LocalSoftwareKeyboardController.current
@@ -124,7 +154,17 @@ fun SearchScreen(app: PrivateMusicApp) {
         playlistUrl = null
         actionMessage = null
         spotifyTracks = null
+        deezerTracks = null
         scope.launch {
+            if (source == "deezer" && !query.trim().startsWith("http") &&
+                !SpotifyResolver.isSpotifyUrl(query.trim())
+            ) {
+                runCatching { com.aar.privatemusic.downloader.DeezerSource.search(query.trim()) }
+                    .onSuccess { results = emptyList(); deezerTracks = it }
+                    .onFailure { error = "Error al buscar en Deezer: ${it.message}" }
+                searching = false
+                return@launch
+            }
             if (SpotifyResolver.isSpotifyUrl(query.trim())) {
                 runCatching { SpotifyResolver.resolve(query.trim()) }
                     .onSuccess { (title, tracks) ->
@@ -186,14 +226,82 @@ fun SearchScreen(app: PrivateMusicApp) {
         }
     }
 
+    // Sources catalog: adding one here adds its card to the grid.
+    val sources = listOf(
+        SearchSource("yt", "YouTube", androidx.compose.ui.graphics.Color(0xFFFF0000)) {
+            Icon(Icons.Filled.PlayArrow, null, tint = androidx.compose.ui.graphics.Color.White)
+        },
+        SearchSource("deezer", "Deezer", androidx.compose.ui.graphics.Color(0xFFA238FF)) {
+            Icon(Icons.Filled.GraphicEq, null, tint = androidx.compose.ui.graphics.Color.White)
+        },
+    )
+
+    androidx.activity.compose.BackHandler(enabled = source != null) { source = null }
+
+    if (source == null) {
+        androidx.compose.foundation.lazy.grid.LazyVerticalGrid(
+            columns = androidx.compose.foundation.lazy.grid.GridCells.Fixed(2),
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(2) }) {
+                Text(
+                    "¿Dónde quieres buscar?",
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.padding(bottom = 4.dp),
+                )
+            }
+            items(sources.size, key = { sources[it].id }) { i ->
+                val s = sources[i]
+                SourceCard(s) {
+                    if (SearchCache.source != s.id) {
+                        SearchCache.clearResults()
+                        query = ""
+                        results = emptyList()
+                        playlistTitle = null
+                        playlistUrl = null
+                        spotifyTracks = null
+                        deezerTracks = null
+                        error = null
+                        actionMessage = null
+                    }
+                    source = s.id
+                }
+            }
+        }
+        return
+    }
+
+    val current = sources.first { it.id == source }
     Column(modifier = Modifier.fillMaxSize()) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(start = 4.dp, top = 4.dp),
+        ) {
+            IconButton(onClick = { source = null }) {
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Fuentes")
+            }
+            SourceBadge(current)
+            Text(
+                current.name,
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(start = 8.dp),
+            )
+        }
         OutlinedTextField(
             value = query,
             onValueChange = { query = it },
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp),
-            placeholder = { Text("Buscar en YouTube o pegar URL…") },
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            placeholder = {
+                Text(
+                    if (source == "deezer") "Buscar en Deezer…"
+                    else "Buscar en YouTube o pegar URL…"
+                )
+            },
             singleLine = true,
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
             keyboardActions = KeyboardActions(onSearch = { runSearch() }),
@@ -274,6 +382,72 @@ fun SearchScreen(app: PrivateMusicApp) {
                         }
                     }
                 }
+                deezerTracks?.let { tracks ->
+                    items(tracks, key = { "dz-${it.id}" }) { track ->
+                        val dzId = "dz${track.id}"
+                        val display = SearchResult(
+                            id = dzId,
+                            title = track.title,
+                            artist = if (track.album.isBlank()) track.artist
+                            else "${track.artist} · ${track.album}",
+                            durationSec = track.durationSec,
+                            thumbnailUrl = track.coverUrl,
+                        )
+                        val matchedId = SearchCache.deezerMatches[dzId]
+                        SearchResultRow(
+                            result = display,
+                            inLibrary = matchedId != null && matchedId in libraryIds,
+                            state = when {
+                                dzId in deezerResolving -> DownloadState.Queued
+                                else -> matchedId?.let { downloads[it] }
+                            },
+                            previewResolving = false,
+                            previewPlaying = nowPlaying?.songId == "preview:$dzId" && isPlaying,
+                            previewLoaded = nowPlaying?.songId == "preview:$dzId",
+                            onPreview = {
+                                if (nowPlaying?.songId == "preview:$dzId") {
+                                    app.playerController.togglePlayPause()
+                                } else if (track.previewUrl.isNotBlank()) {
+                                    app.playerController.playStream(
+                                        dzId, track.title, track.artist,
+                                        track.previewUrl, track.coverUrl,
+                                    )
+                                } else {
+                                    actionMessage = "Esta pista no tiene preescucha"
+                                }
+                            },
+                            onDownload = {
+                                // Deezer audio is DRM'd: match the track on YouTube
+                                // and download that, keeping Deezer's clean metadata.
+                                if (dzId !in deezerResolving) {
+                                    deezerResolving = deezerResolving + dzId
+                                    scope.launch {
+                                        val match = app.downloader.searchBestMatch(
+                                            track.searchQuery, track.durationSec,
+                                        )
+                                        if (match == null) {
+                                            actionMessage =
+                                                "Sin resultado en YouTube para \"${track.title}\""
+                                        } else {
+                                            SearchCache.deezerMatches[dzId] = match.id
+                                            app.downloader.enqueue(
+                                                SearchResult(
+                                                    id = match.id,
+                                                    title = "${track.artist} - ${track.title}",
+                                                    artist = track.artist,
+                                                    durationSec = track.durationSec,
+                                                    thumbnailUrl = track.coverUrl
+                                                        .ifBlank { match.thumbnailUrl },
+                                                )
+                                            )
+                                        }
+                                        deezerResolving = deezerResolving - dzId
+                                    }
+                                }
+                            },
+                        )
+                    }
+                }
                 items(results, key = { it.id }) { result ->
                     val inLibrary = result.id in libraryIds
                     val state = downloads[result.id]
@@ -289,6 +463,42 @@ fun SearchScreen(app: PrivateMusicApp) {
                     )
                 }
             }
+        }
+    }
+}
+
+/** A searchable catalog: id, display name, brand color and badge icon. */
+private data class SearchSource(
+    val id: String,
+    val name: String,
+    val color: androidx.compose.ui.graphics.Color,
+    val icon: @Composable () -> Unit,
+)
+
+@Composable
+private fun SourceBadge(source: SearchSource, size: Dp = 28.dp) {
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = Modifier
+            .size(size)
+            .clip(CircleShape)
+            .background(source.color),
+    ) { source.icon() }
+}
+
+@Composable
+private fun SourceCard(source: SearchSource, onClick: () -> Unit) {
+    Card(
+        onClick = onClick,
+        shape = RoundedCornerShape(16.dp),
+    ) {
+        Column(Modifier.fillMaxWidth().padding(20.dp)) {
+            SourceBadge(source, size = 44.dp)
+            Text(
+                source.name,
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(top = 12.dp),
+            )
         }
     }
 }

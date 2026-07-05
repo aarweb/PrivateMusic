@@ -1,0 +1,63 @@
+package com.aar.privatemusic.downloader
+
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import org.json.JSONObject
+import java.net.HttpURLConnection
+import java.net.URL
+import java.net.URLEncoder
+
+data class DeezerTrack(
+    val id: Long,
+    val title: String,
+    val artist: String,
+    val album: String,
+    val durationSec: Int,
+    val coverUrl: String,
+    val previewUrl: String,
+) {
+    val searchQuery: String get() = "$artist $title".trim()
+}
+
+/**
+ * Deezer public search (no account/API key). Full Deezer audio is DRM'd, so
+ * the 30s preview streams straight from Deezer and downloads are matched on
+ * YouTube — keeping Deezer's clean title/artist/cover as the metadata.
+ */
+object DeezerSource {
+
+    suspend fun search(query: String, limit: Int = 25): List<DeezerTrack> =
+        withContext(Dispatchers.IO) {
+            val q = URLEncoder.encode(query, "UTF-8")
+            val json = fetch("https://api.deezer.com/search?q=$q&limit=$limit")
+            val data = JSONObject(json).optJSONArray("data") ?: return@withContext emptyList()
+            (0 until data.length()).mapNotNull { i ->
+                val t = data.optJSONObject(i) ?: return@mapNotNull null
+                val title = t.optString("title")
+                if (title.isBlank()) return@mapNotNull null
+                val album = t.optJSONObject("album")
+                DeezerTrack(
+                    id = t.optLong("id"),
+                    title = title,
+                    artist = t.optJSONObject("artist")?.optString("name").orEmpty()
+                        .ifBlank { "Desconocido" },
+                    album = album?.optString("title").orEmpty(),
+                    durationSec = t.optInt("duration", 0),
+                    coverUrl = album?.optString("cover_big").orEmpty()
+                        .ifBlank { album?.optString("cover_medium").orEmpty() },
+                    previewUrl = t.optString("preview"),
+                )
+            }
+        }
+
+    private fun fetch(url: String): String {
+        val conn = URL(url).openConnection() as HttpURLConnection
+        conn.connectTimeout = 15_000
+        conn.readTimeout = 15_000
+        conn.setRequestProperty(
+            "User-Agent",
+            "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36",
+        )
+        return conn.inputStream.bufferedReader().readText().also { conn.disconnect() }
+    }
+}
