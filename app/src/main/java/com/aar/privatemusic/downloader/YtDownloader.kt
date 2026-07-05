@@ -34,6 +34,8 @@ data class SearchResult(
     val magnetUri: String? = null,
     /** Ítem de Internet Archive (álbum/concierto): sin preescucha, descarga el ítem. */
     val isArchive: Boolean = false,
+    /** Etiqueta de calidad que se descargará (p.ej. "FLAC", "FLAC 24-bit", "MP3"). */
+    val qualityLabel: String? = null,
 )
 
 sealed interface DownloadState {

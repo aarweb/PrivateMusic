@@ -102,7 +102,7 @@ class InternetArchiveDownloader(
         }
     }
 
-    private data class ArchiveFile(val name: String, val ext: String, val track: Int)
+    private data class ArchiveFile(val name: String, val ext: String, val format: String, val track: Int)
 
     /** Descarga las pistas del ítem y devuelve cuántas se importaron. */
     private suspend fun downloadAndImport(result: SearchResult): Int = withContext(Dispatchers.IO) {
@@ -114,27 +114,25 @@ class InternetArchiveDownloader(
         val filesJson = meta.optJSONArray("files")
             ?: throw IllegalStateException("El ítem no tiene ficheros")
 
-        // Recolecta candidatos de audio agrupados por familia de formato.
-        val flac = ArrayList<ArchiveFile>()
-        val mp3 = ArrayList<ArchiveFile>()
-        val ogg = ArrayList<ArchiveFile>()
+        // Recolecta todos los ficheros de audio con su formato exacto.
+        val audio = ArrayList<ArchiveFile>()
         for (i in 0 until filesJson.length()) {
             val f = filesJson.optJSONObject(i) ?: continue
             val name = f.optString("name").takeIf { it.isNotBlank() } ?: continue
             val ext = name.substringAfterLast('.', "").lowercase()
             if (ext !in audioExtensions) continue
-            val fmt = f.optString("format").lowercase()
+            val fmt = f.optString("format").ifBlank { ext }
             val track = f.optString("track").substringBefore('/').trim().toIntOrNull() ?: 9999
-            val entry = ArchiveFile(name, ext, track)
-            when {
-                "flac" in fmt || ext == "flac" -> flac
-                "mp3" in fmt || ext == "mp3" -> mp3
-                "ogg" in fmt || ext == "ogg" -> ogg
-                else -> mp3
-            }.add(entry)
+            audio.add(ArchiveFile(name, ext, fmt, track))
         }
-        // Prefiere FLAC (sin pérdidas); si no, MP3; si no, Ogg.
-        val chosen = (if (flac.isNotEmpty()) flac else if (mp3.isNotEmpty()) mp3 else ogg)
+        if (audio.isEmpty()) return@withContext 0
+        // Un ÚNICO formato exacto (el de mejor calidad; a igualdad, el más completo)
+        // para no duplicar pistas cuando el ítem trae FLAC + MP3 + Ogg de lo mismo.
+        val bestFormat = audio.groupBy { it.format }
+            .minWithOrNull(
+                compareBy({ InternetArchiveSource.audioFormatRank(it.key) }, { -it.value.size }),
+            )?.key ?: return@withContext 0
+        val chosen = audio.filter { it.format == bestFormat }
             .sortedWith(compareBy({ it.track }, { it.name }))
         if (chosen.isEmpty()) return@withContext 0
 

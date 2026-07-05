@@ -628,6 +628,21 @@ private fun SearchResultRow(
                             )
                             .padding(horizontal = 4.dp, vertical = 1.dp),
                     )
+                    // Calidad que se descargará (FLAC / MP3…), cuando se conoce.
+                    result.qualityLabel?.let { q ->
+                        Text(
+                            q,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onTertiaryContainer,
+                            modifier = Modifier
+                                .padding(start = 4.dp)
+                                .background(
+                                    MaterialTheme.colorScheme.tertiaryContainer,
+                                    RoundedCornerShape(4.dp),
+                                )
+                                .padding(horizontal = 4.dp, vertical = 1.dp),
+                        )
+                    }
                     Text(
                         result.artist,
                         maxLines = 1,
