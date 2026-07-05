@@ -96,6 +96,21 @@ class YtDownloader(
         if (current is DownloadState.Queued || current is DownloadState.Downloading) return
         setState(result.id, DownloadState.Queued)
         scope.launch(Dispatchers.IO) {
+            // Persist BEFORE downloading: if Android kills the process with a
+            // full import queue, everything resumes on next app start.
+            runCatching {
+                dao.upsertPending(
+                    com.aar.privatemusic.data.db.PendingDownload(
+                        id = result.id,
+                        title = result.title,
+                        artist = result.artist,
+                        durationSec = result.durationSec,
+                        thumbnailUrl = result.thumbnailUrl,
+                        targetPlaylistId = targetPlaylistId,
+                        addedAt = System.currentTimeMillis(),
+                    )
+                )
+            }
             slots.withPermit {
                 try {
                     if (!dao.songExists(result.id)) download(result)
@@ -105,11 +120,27 @@ class YtDownloader(
                             com.aar.privatemusic.data.db.PlaylistSongCrossRef(playlistId, result.id, position)
                         )
                     }
+                    dao.deletePending(result.id)
                     setState(result.id, DownloadState.Done)
                 } catch (e: Exception) {
                     Log.e("YtDownloader", "download failed for ${result.id}", e)
+                    runCatching { dao.bumpPendingAttempts(result.id) }
                     setState(result.id, DownloadState.Failed(e.message ?: "error"))
                 }
+            }
+        }
+    }
+
+    /** Re-enqueues downloads that were pending when the process last died. */
+    suspend fun resumePending() {
+        dao.pendingDownloads().forEach { p ->
+            if (dao.songExists(p.id)) {
+                dao.deletePending(p.id)
+            } else {
+                enqueue(
+                    SearchResult(p.id, p.title, p.artist, p.durationSec, p.thumbnailUrl),
+                    p.targetPlaylistId,
+                )
             }
         }
     }

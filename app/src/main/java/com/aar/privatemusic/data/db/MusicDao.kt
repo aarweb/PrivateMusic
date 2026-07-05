@@ -307,6 +307,20 @@ interface MusicDao {
     @Query("DELETE FROM playlist_songs WHERE playlistId = :playlistId AND songId = :songId")
     suspend fun removeFromPlaylist(playlistId: Long, songId: String)
 
+    // ---- Pending downloads (survive process death) ----
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertPending(p: PendingDownload)
+
+    @Query("DELETE FROM pending_downloads WHERE id = :id")
+    suspend fun deletePending(id: String)
+
+    @Query("UPDATE pending_downloads SET attempts = attempts + 1 WHERE id = :id")
+    suspend fun bumpPendingAttempts(id: String)
+
+    @Query("SELECT * FROM pending_downloads WHERE attempts < 3 ORDER BY addedAt ASC")
+    suspend fun pendingDownloads(): List<PendingDownload>
+
     // ---- Playlist folders ----
 
     @Query("SELECT * FROM playlist_folders ORDER BY createdAt ASC")

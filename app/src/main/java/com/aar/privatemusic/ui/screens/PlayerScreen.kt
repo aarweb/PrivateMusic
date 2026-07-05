@@ -3,6 +3,7 @@ package com.aar.privatemusic.ui.screens
 import android.graphics.BitmapFactory
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -112,6 +113,7 @@ fun PlayerScreen(app: PrivateMusicApp, onBack: () -> Unit, onOpenQueue: () -> Un
     var addToPlaylistOpen by remember { mutableStateOf(false) }
     var karaokeOpen by remember { mutableStateOf(false) }
     var speedDialogOpen by remember { mutableStateOf(false) }
+    var lyricShareFrom by remember { mutableStateOf<Int?>(null) }
     val playbackSpeed by controller.playbackSpeed.collectAsState()
 
     val lyrics by produceState<com.aar.privatemusic.lyrics.Lyrics?>(initialValue = null, song?.id) {
@@ -261,6 +263,58 @@ fun PlayerScreen(app: PrivateMusicApp, onBack: () -> Unit, onOpenQueue: () -> Un
         if (karaokeOpen) {
             song?.let { s -> KaraokeDialog(app, s, onDismiss = { karaokeOpen = false }) }
         }
+        lyricShareFrom?.let { fromIdx ->
+            val allLines = lyrics?.lines ?: emptyList()
+            val candidates = allLines.drop(fromIdx).take(4).map { it.text }
+            val checked = remember(fromIdx) {
+                androidx.compose.runtime.mutableStateListOf(*Array(candidates.size) { it < 2 })
+            }
+            val ctx = androidx.compose.ui.platform.LocalContext.current
+            AlertDialog(
+                onDismissRequest = { lyricShareFrom = null },
+                title = { Text("Compartir letra") },
+                text = {
+                    Column {
+                        Text(
+                            "Elige hasta 4 líneas para la tarjeta:",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        candidates.forEachIndexed { i, lineText ->
+                            Row(
+                                Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                androidx.compose.material3.Checkbox(
+                                    checked = checked[i],
+                                    onCheckedChange = { checked[i] = it },
+                                )
+                                Text(lineText, style = MaterialTheme.typography.bodyMedium)
+                            }
+                        }
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        val chosen = candidates.filterIndexed { i, _ -> checked[i] }.filter { it.isNotBlank() }
+                        val s0 = song
+                        if (chosen.isNotEmpty() && s0 != null) {
+                            scope.launch(Dispatchers.IO) {
+                                runCatching {
+                                    val f = com.aar.privatemusic.util.LyricCard.render(ctx, s0, chosen)
+                                    withContext(Dispatchers.Main) {
+                                        com.aar.privatemusic.util.LyricCard.share(ctx, f)
+                                    }
+                                }
+                            }
+                        }
+                        lyricShareFrom = null
+                    }) { Text("Crear tarjeta") }
+                },
+                dismissButton = { TextButton(onClick = { lyricShareFrom = null }) { Text("Cancelar") } },
+            )
+        }
+
         if (speedDialogOpen) {
             AlertDialog(
                 onDismissRequest = { speedDialogOpen = false },
@@ -300,6 +354,7 @@ fun PlayerScreen(app: PrivateMusicApp, onBack: () -> Unit, onOpenQueue: () -> Un
                 lyrics = lyrics!!,
                 positionMs = sliderPosition.toLong(),
                 onSeek = { controller.seekTo(it) },
+                onShareFrom = { lyricShareFrom = it },
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(280.dp),
@@ -456,11 +511,13 @@ fun PlayerScreen(app: PrivateMusicApp, onBack: () -> Unit, onOpenQueue: () -> Un
     }
 }
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun LyricsPanel(
     lyrics: com.aar.privatemusic.lyrics.Lyrics,
     positionMs: Long,
     onSeek: (Long) -> Unit,
+    onShareFrom: (Int) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val listState = rememberLazyListState()
@@ -480,7 +537,10 @@ private fun LyricsPanel(
                 else MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable(enabled = lyrics.synced) { onSeek(line.timeMs) }
+                    .combinedClickable(
+                        onClick = { if (lyrics.synced) onSeek(line.timeMs) },
+                        onLongClick = { onShareFrom(i) },
+                    )
                     .padding(vertical = 6.dp),
             )
         }

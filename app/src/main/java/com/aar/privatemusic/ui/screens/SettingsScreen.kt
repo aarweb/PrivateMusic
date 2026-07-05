@@ -47,6 +47,18 @@ fun SettingsScreen(app: PrivateMusicApp, onOpenStats: () -> Unit, onOpenEq: () -
     val crossfade by app.settings.crossfadeSec.collectAsState()
     val normalize by app.settings.normalizeVolume.collectAsState()
     val autoMix by app.settings.autoMix.collectAsState()
+    val prefs = androidx.compose.ui.platform.LocalContext.current
+        .getSharedPreferences("settings", android.content.Context.MODE_PRIVATE)
+    var btAutoplay by remember { mutableStateOf(prefs.getBoolean("bt_autoplay", false)) }
+    var btDevicesOpen by remember { mutableStateOf(false) }
+    val btPermission = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            btAutoplay = true
+            prefs.edit().putBoolean("bt_autoplay", true).apply()
+        }
+    }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
@@ -159,6 +171,47 @@ fun SettingsScreen(app: PrivateMusicApp, onOpenStats: () -> Unit, onOpenEq: () -
                 )
             }
             Switch(checked = normalize, onCheckedChange = { app.settings.setNormalizeVolume(it) })
+        }
+
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text("Reanudar al conectar Bluetooth", style = MaterialTheme.typography.bodyLarge)
+                Text(
+                    "Al conectar tus auriculares o el coche, sigue la cola (o arranca el Mix de hoy)",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Switch(
+                checked = btAutoplay,
+                onCheckedChange = { on ->
+                    if (on) {
+                        if (android.os.Build.VERSION.SDK_INT >= 31) {
+                            btPermission.launch(android.Manifest.permission.BLUETOOTH_CONNECT)
+                        } else {
+                            btAutoplay = true
+                            prefs.edit().putBoolean("bt_autoplay", true).apply()
+                        }
+                    } else {
+                        btAutoplay = false
+                        prefs.edit().putBoolean("bt_autoplay", false).apply()
+                    }
+                },
+            )
+        }
+        if (btAutoplay) {
+            SettingsAction(
+                title = "Dispositivos Bluetooth permitidos",
+                subtitle = "Vacío = cualquiera. Elige tus auriculares/coche",
+            ) { btDevicesOpen = true }
+        }
+        if (btDevicesOpen) {
+            BtDevicesDialog(prefs = prefs, onDismiss = { btDevicesOpen = false })
         }
 
         SettingsAction(
@@ -445,4 +498,60 @@ private fun SettingsAction(title: String, subtitle: String, onClick: () -> Unit)
             )
         }
     }
+}
+
+
+@androidx.compose.runtime.Composable
+private fun BtDevicesDialog(
+    prefs: android.content.SharedPreferences,
+    onDismiss: () -> Unit,
+) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val bonded = remember {
+        runCatching {
+            val mgr = context.getSystemService(android.bluetooth.BluetoothManager::class.java)
+            mgr?.adapter?.bondedDevices?.map { it.name to it.address } ?: emptyList()
+        }.getOrDefault(emptyList())
+    }
+    val selected = remember {
+        androidx.compose.runtime.mutableStateListOf<String>().apply {
+            addAll(prefs.getStringSet("bt_autoplay_devices", emptySet()) ?: emptySet())
+        }
+    }
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Dispositivos permitidos") },
+        text = {
+            Column {
+                if (bonded.isEmpty()) {
+                    Text("No hay dispositivos emparejados (o falta el permiso de Bluetooth).")
+                }
+                bonded.forEach { (name, address) ->
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        androidx.compose.material3.Checkbox(
+                            checked = address in selected,
+                            onCheckedChange = { on ->
+                                if (on) selected.add(address) else selected.remove(address)
+                            },
+                        )
+                        Text(name ?: address, Modifier.padding(start = 8.dp))
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            androidx.compose.material3.TextButton(onClick = {
+                prefs.edit().putStringSet("bt_autoplay_devices", selected.toSet()).apply()
+                onDismiss()
+            }) { Text("Guardar") }
+        },
+        dismissButton = {
+            androidx.compose.material3.TextButton(onClick = onDismiss) { Text("Cancelar") }
+        },
+    )
 }

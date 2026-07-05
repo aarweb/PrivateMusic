@@ -75,6 +75,19 @@ data class PlaylistFolder(
 
 data class DayPlays(val day: String, val plays: Int)
 
+/** A queued download that survives process death (resumed on app start). */
+@Entity(tableName = "pending_downloads")
+data class PendingDownload(
+    @PrimaryKey val id: String, // YouTube video id
+    val title: String,
+    val artist: String,
+    val durationSec: Int,
+    val thumbnailUrl: String,
+    val targetPlaylistId: Long?,
+    val attempts: Int = 0,
+    val addedAt: Long,
+)
+
 /** A YouTube playlist/channel watched for new songs (auto-download). */
 @Entity(tableName = "watched_sources")
 data class WatchedSource(
