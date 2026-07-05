@@ -18,6 +18,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Card
 import androidx.compose.ui.draw.clip
@@ -182,6 +183,10 @@ fun SearchScreen(app: PrivateMusicApp) {
                         playlistUrl = query.trim()
                     }
                     .onFailure { error = "Error al resolver la playlist: ${it.message}" }
+            } else if (source == "ytmusic") {
+                runCatching { com.aar.privatemusic.downloader.YouTubeMusicSource.search(query.trim()) }
+                    .onSuccess { results = it }
+                    .onFailure { error = "Error al buscar en YouTube Music: ${it.message}" }
             } else {
                 runCatching { app.downloader.search(query) }
                     .onSuccess { results = it }
@@ -228,7 +233,10 @@ fun SearchScreen(app: PrivateMusicApp) {
 
     // Sources catalog: adding one here adds its card to the grid.
     val sources = listOf(
-        SearchSource("yt", "YouTube", androidx.compose.ui.graphics.Color(0xFFFF0000)) {
+        SearchSource("ytmusic", "YouTube Music", androidx.compose.ui.graphics.Color(0xFFFF0000)) {
+            Icon(Icons.Filled.MusicNote, null, tint = androidx.compose.ui.graphics.Color.White)
+        },
+        SearchSource("yt", "YouTube", androidx.compose.ui.graphics.Color(0xFF606060)) {
             Icon(Icons.Filled.PlayArrow, null, tint = androidx.compose.ui.graphics.Color.White)
         },
         SearchSource("deezer", "Deezer", androidx.compose.ui.graphics.Color(0xFFA238FF)) {
@@ -298,8 +306,11 @@ fun SearchScreen(app: PrivateMusicApp) {
                 .padding(horizontal = 16.dp, vertical = 8.dp),
             placeholder = {
                 Text(
-                    if (source == "deezer") "Buscar en Deezer…"
-                    else "Buscar en YouTube o pegar URL…"
+                    when (source) {
+                        "deezer" -> "Buscar en Deezer…"
+                        "ytmusic" -> "Buscar en YouTube Music…"
+                        else -> "Buscar en YouTube o pegar URL…"
+                    }
                 )
             },
             singleLine = true,
