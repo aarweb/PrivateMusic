@@ -102,6 +102,7 @@ class PlaybackService : MediaLibraryService() {
         runCatching {
             val castContext = com.google.android.gms.cast.framework.CastContext
                 .getSharedInstance(this)
+            this.castContext = castContext
             castPlayer = androidx.media3.cast.CastPlayer(castContext).apply {
                 setSessionAvailabilityListener(
                     object : androidx.media3.cast.SessionAvailabilityListener {
@@ -117,6 +118,7 @@ class PlaybackService : MediaLibraryService() {
     private var tailAudioAdvancing = false
     private var localPlayer: ExoPlayer? = null
     private var castPlayer: androidx.media3.cast.CastPlayer? = null
+    private var castContext: com.google.android.gms.cast.framework.CastContext? = null
     private var httpServer: com.aar.privatemusic.cast.MediaHttpServer? = null
     private var castDao: MusicDao? = null
 
@@ -174,6 +176,9 @@ class PlaybackService : MediaLibraryService() {
                 cast.prepare()
                 if (wasPlaying) cast.play()
                 session.player = cast
+                com.aar.privatemusic.cast.CastState.castDeviceName.value = runCatching {
+                    castContext?.sessionManager?.currentCastSession?.castDevice?.friendlyName
+                }.getOrNull() ?: "TV"
                 android.util.Log.d("Cast", "session moved to cast: ${items.size} items @$position")
             }
         }
@@ -190,8 +195,29 @@ class PlaybackService : MediaLibraryService() {
         if (local.mediaItemCount > index) {
             local.seekTo(index, position)
         }
+        // While casting, Android suspends the Bluetooth A2DP link; a fresh
+        // AudioTrack can then land on the loudspeaker even though the user's
+        // headphones are still connected. Route explicitly to the external
+        // output when one exists (null = default routing).
+        runCatching {
+            val am = getSystemService(AUDIO_SERVICE) as android.media.AudioManager
+            val external = am.getDevices(android.media.AudioManager.GET_DEVICES_OUTPUTS)
+                .firstOrNull {
+                    it.type in intArrayOf(
+                        android.media.AudioDeviceInfo.TYPE_BLUETOOTH_A2DP,
+                        android.media.AudioDeviceInfo.TYPE_BLE_HEADSET,
+                        android.media.AudioDeviceInfo.TYPE_WIRED_HEADPHONES,
+                        android.media.AudioDeviceInfo.TYPE_WIRED_HEADSET,
+                        android.media.AudioDeviceInfo.TYPE_USB_HEADSET,
+                        android.media.AudioDeviceInfo.TYPE_HEARING_AID,
+                    )
+                }
+            local.setPreferredAudioDevice(external)
+            android.util.Log.d("Cast", "local output -> ${external?.productName ?: "default"}")
+        }
         runCatching { httpServer?.stop() }
         httpServer = null
+        com.aar.privatemusic.cast.CastState.castDeviceName.value = null
         android.util.Log.d("Cast", "session back to local @$position")
     }
 
@@ -502,6 +528,7 @@ class PlaybackService : MediaLibraryService() {
         tailPlayer = null
         castPlayer?.release()
         castPlayer = null
+        com.aar.privatemusic.cast.CastState.castDeviceName.value = null
         runCatching { httpServer?.stop() }
         httpServer = null
         EqHolder.release()

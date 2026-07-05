@@ -13,6 +13,14 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.filled.CastConnected
+import androidx.compose.material.icons.filled.Headset
+import androidx.compose.material.icons.filled.PhoneAndroid
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -407,7 +415,10 @@ fun PlayerScreen(app: PrivateMusicApp, onBack: () -> Unit, onOpenQueue: () -> Un
             )
         }
 
-        Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.height(6.dp))
+        OutputIndicator(onClick = { castDialogOpen = true })
+
+        Spacer(Modifier.height(10.dp))
 
         val durationMs = np.durationMs.coerceAtLeast(1)
         Slider(
@@ -556,5 +567,64 @@ private fun LyricsPanel(
                     .padding(vertical = 6.dp),
             )
         }
+    }
+}
+
+/**
+ * Where the audio is coming out right now: cast device, headphones or the
+ * phone speaker. Tapping opens the cast picker.
+ */
+@Composable
+private fun OutputIndicator(onClick: () -> Unit) {
+    val castName by com.aar.privatemusic.cast.CastState.castDeviceName.collectAsState()
+    val context = LocalContext.current
+    var localOutput by remember { mutableStateOf<Pair<Boolean, String>?>(null) }
+
+    DisposableEffect(Unit) {
+        val am = context.getSystemService(android.content.Context.AUDIO_SERVICE) as android.media.AudioManager
+        fun refresh() {
+            val devices = am.getDevices(android.media.AudioManager.GET_DEVICES_OUTPUTS)
+            val headset = devices.firstOrNull {
+                it.type in intArrayOf(
+                    android.media.AudioDeviceInfo.TYPE_BLUETOOTH_A2DP,
+                    android.media.AudioDeviceInfo.TYPE_BLE_HEADSET,
+                    android.media.AudioDeviceInfo.TYPE_WIRED_HEADPHONES,
+                    android.media.AudioDeviceInfo.TYPE_WIRED_HEADSET,
+                    android.media.AudioDeviceInfo.TYPE_USB_HEADSET,
+                    android.media.AudioDeviceInfo.TYPE_HEARING_AID,
+                )
+            }
+            localOutput = if (headset != null) {
+                true to (headset.productName?.toString()?.takeIf { it.isNotBlank() } ?: "Auriculares")
+            } else {
+                false to "Altavoz del móvil"
+            }
+        }
+        val callback = object : android.media.AudioDeviceCallback() {
+            override fun onAudioDevicesAdded(added: Array<out android.media.AudioDeviceInfo>) = refresh()
+            override fun onAudioDevicesRemoved(removed: Array<out android.media.AudioDeviceInfo>) = refresh()
+        }
+        am.registerAudioDeviceCallback(callback, null)
+        refresh()
+        onDispose { am.unregisterAudioDeviceCallback(callback) }
+    }
+
+    val (icon, label, highlight) = when {
+        castName != null -> Triple(Icons.Filled.CastConnected, castName!!, true)
+        localOutput?.first == true -> Triple(Icons.Filled.Headset, localOutput!!.second, false)
+        else -> Triple(Icons.Filled.PhoneAndroid, localOutput?.second ?: "Altavoz del móvil", false)
+    }
+    val tint = if (highlight) MaterialTheme.colorScheme.primary
+    else MaterialTheme.colorScheme.onSurfaceVariant
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .clip(RoundedCornerShape(16.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 4.dp),
+    ) {
+        Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(16.dp))
+        Spacer(Modifier.width(6.dp))
+        Text(label, style = MaterialTheme.typography.labelMedium, color = tint)
     }
 }
