@@ -107,6 +107,7 @@ object AppUpdater {
             val conn = URL(apkUrl).openConnection() as HttpURLConnection
             conn.instanceFollowRedirects = true
             conn.connectTimeout = 15_000
+            conn.readTimeout = 30_000
             val total = conn.contentLengthLong
             var copied = 0L
             conn.inputStream.use { input ->

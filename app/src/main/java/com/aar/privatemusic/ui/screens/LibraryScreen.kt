@@ -84,8 +84,14 @@ fun LibraryScreen(app: PrivateMusicApp) {
             scope.launch { app.repository.setSongArt(context, song, uri) }
         }
     }
-    var sortMode by remember { mutableStateOf(SortMode.RECENT) }
-    var onlyFavorites by remember { mutableStateOf(false) }
+    // Saveable: sort/filter survive tab switches (nav restoreState only keeps rememberSaveable).
+    var sortMode by androidx.compose.runtime.saveable.rememberSaveable(
+        stateSaver = androidx.compose.runtime.saveable.Saver(
+            save = { it.name },
+            restore = { SortMode.valueOf(it) },
+        )
+    ) { mutableStateOf(SortMode.RECENT) }
+    var onlyFavorites by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
 
     val visibleSongs = remember(songs, query, sortMode, onlyFavorites) {
         songs

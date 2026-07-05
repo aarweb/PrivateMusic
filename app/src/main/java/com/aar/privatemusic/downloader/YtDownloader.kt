@@ -59,6 +59,11 @@ class YtDownloader(
     private val slots = Semaphore(2)
 
     suspend fun search(query: String, limit: Int = 20): List<SearchResult> =
+        kotlinx.coroutines.withTimeoutOrNull(45_000) {
+            searchInner(query, limit)
+        } ?: emptyList()
+
+    private suspend fun searchInner(query: String, limit: Int): List<SearchResult> =
         withContext(Dispatchers.IO) {
             val request = YoutubeDLRequest("ytsearch$limit:$query").apply {
                 addOption("--dump-json")
@@ -120,6 +125,11 @@ class YtDownloader(
 
     /** Resolves a playlist/channel URL into its entries without downloading. */
     suspend fun resolvePlaylist(url: String): Pair<String, List<SearchResult>> =
+        kotlinx.coroutines.withTimeoutOrNull(60_000) {
+            resolvePlaylistInner(url)
+        } ?: ("" to emptyList())
+
+    private suspend fun resolvePlaylistInner(url: String): Pair<String, List<SearchResult>> =
         withContext(Dispatchers.IO) {
             val request = YoutubeDLRequest(url).apply {
                 addOption("--dump-json")
@@ -217,7 +227,11 @@ class YtDownloader(
      * Direct URL of the best audio stream, for previewing a result
      * without downloading it. Expires after a while (YouTube signs it).
      */
-    suspend fun streamUrl(id: String): String? = withContext(Dispatchers.IO) {
+    suspend fun streamUrl(id: String): String? = kotlinx.coroutines.withTimeoutOrNull(30_000) {
+        streamUrlInner(id)
+    }
+
+    private suspend fun streamUrlInner(id: String): String? = withContext(Dispatchers.IO) {
         runCatching {
             val request = YoutubeDLRequest("https://www.youtube.com/watch?v=$id").apply {
                 addOption("-f", "bestaudio/best")

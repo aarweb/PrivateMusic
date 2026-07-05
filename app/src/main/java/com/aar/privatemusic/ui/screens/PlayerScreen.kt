@@ -57,6 +57,11 @@ import androidx.compose.ui.unit.dp
 import androidx.media3.common.Player
 import androidx.palette.graphics.Palette
 import com.aar.privatemusic.PrivateMusicApp
+import androidx.compose.foundation.layout.Box
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import com.aar.privatemusic.ui.components.AddToPlaylistDialog
 import com.aar.privatemusic.ui.components.ArtImage
 import com.aar.privatemusic.ui.components.formatDuration
 import kotlinx.coroutines.Dispatchers
@@ -103,6 +108,9 @@ fun PlayerScreen(app: PrivateMusicApp, onBack: () -> Unit, onOpenQueue: () -> Un
     var dragging by remember { mutableStateOf(false) }
     var sleepDialogOpen by remember { mutableStateOf(false) }
     var showLyrics by remember { mutableStateOf(false) }
+    var playerMenuOpen by remember { mutableStateOf(false) }
+    var addToPlaylistOpen by remember { mutableStateOf(false) }
+    var karaokeOpen by remember { mutableStateOf(false) }
 
     val lyrics by produceState<com.aar.privatemusic.lyrics.Lyrics?>(initialValue = null, song?.id) {
         value = song?.let { s ->
@@ -178,6 +186,64 @@ fun PlayerScreen(app: PrivateMusicApp, onBack: () -> Unit, onOpenQueue: () -> Un
                     else MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
+            // Actions on the playing song without leaving the player.
+            Box {
+                IconButton(onClick = { playerMenuOpen = true }, enabled = song != null) {
+                    Icon(Icons.Filled.MoreVert, contentDescription = "Más opciones")
+                }
+                DropdownMenu(expanded = playerMenuOpen, onDismissRequest = { playerMenuOpen = false }) {
+                    DropdownMenuItem(
+                        text = { Text("Añadir a playlist") },
+                        onClick = {
+                            playerMenuOpen = false
+                            addToPlaylistOpen = true
+                        },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Radio de esta canción") },
+                        onClick = {
+                            playerMenuOpen = false
+                            song?.let { s ->
+                                scope.launch {
+                                    val radio = app.repository.radioFor(s)
+                                    if (radio.size > 1) controller.playQueue(radio, 0)
+                                }
+                            }
+                        },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Karaoke (quitar la voz)") },
+                        onClick = {
+                            playerMenuOpen = false
+                            karaokeOpen = true
+                        },
+                    )
+                }
+            }
+        }
+
+        if (addToPlaylistOpen) {
+            val playlists by app.repository.observePlaylists().collectAsState(initial = emptyList())
+            song?.let { s ->
+                AddToPlaylistDialog(
+                    playlists = playlists,
+                    onSelect = { pl ->
+                        scope.launch { app.repository.addToPlaylist(pl.id, s.id) }
+                        addToPlaylistOpen = false
+                    },
+                    onCreateAndSelect = { name ->
+                        scope.launch {
+                            val plId = app.repository.createPlaylist(name)
+                            app.repository.addToPlaylist(plId, s.id)
+                        }
+                        addToPlaylistOpen = false
+                    },
+                    onDismiss = { addToPlaylistOpen = false },
+                )
+            }
+        }
+        if (karaokeOpen) {
+            song?.let { s -> KaraokeDialog(app, s, onDismiss = { karaokeOpen = false }) }
         }
 
         Spacer(Modifier.height(16.dp))

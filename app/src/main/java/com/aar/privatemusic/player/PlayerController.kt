@@ -44,6 +44,14 @@ class PlayerController(
     private var controller: MediaController? = null
     private val mainScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var lastPlayedId: String? = null
+    // Resume-position store for long tracks (mixes, DJ sets, audiobooks).
+    private val resumePrefs = context.getSharedPreferences("resume_positions", Context.MODE_PRIVATE)
+    private var lastResumeSaveAt = 0L
+
+    companion object {
+        /** Tracks longer than this remember their playback position. */
+        const val RESUME_MIN_DURATION_SEC = 15 * 60
+    }
 
     private val _nowPlaying = MutableStateFlow<NowPlaying?>(null)
     val nowPlaying: StateFlow<NowPlaying?> = _nowPlaying
@@ -100,17 +108,34 @@ class PlayerController(
                         lastPlayedId = id
                         onSongPlayed(id)
                     }
-                    // Mirror the player's timeline for the queue screen.
-                    _queue.value = (0 until player.mediaItemCount).map { i ->
-                        val mi = player.getMediaItemAt(i)
-                        QueueItem(
-                            mediaId = mi.mediaId,
-                            title = mi.mediaMetadata.title?.toString() ?: "",
-                            artist = mi.mediaMetadata.artist?.toString() ?: "",
-                            artPath = mi.mediaMetadata.artworkUri?.path,
+                    // Mirror the timeline for the queue screen — but only when it
+                    // actually changed: volume ticks fire onEvents ~5x/second and
+                    // rebuilding a 300-item list each time churns the main thread.
+                    if (events.containsAny(
+                            Player.EVENT_TIMELINE_CHANGED,
+                            Player.EVENT_MEDIA_ITEM_TRANSITION,
                         )
+                    ) {
+                        _queue.value = (0 until player.mediaItemCount).map { i ->
+                            val mi = player.getMediaItemAt(i)
+                            QueueItem(
+                                mediaId = mi.mediaId,
+                                title = mi.mediaMetadata.title?.toString() ?: "",
+                                artist = mi.mediaMetadata.artist?.toString() ?: "",
+                                artPath = mi.mediaMetadata.artworkUri?.path,
+                            )
+                        }
                     }
                     _currentIndex.value = player.currentMediaItemIndex
+                    // Long tracks remember where you left off (throttled writes).
+                    val now = android.os.SystemClock.elapsedRealtime()
+                    if (player.isPlaying && id != null &&
+                        player.duration > RESUME_MIN_DURATION_SEC * 1000L &&
+                        now - lastResumeSaveAt > 5000
+                    ) {
+                        lastResumeSaveAt = now
+                        resumePrefs.edit().putLong(id, player.currentPosition).apply()
+                    }
                 }
 
                 override fun onMediaItemTransition(item: MediaItem?, reason: Int) {
@@ -140,7 +165,23 @@ class PlayerController(
 
     fun playQueue(songs: List<Song>, startIndex: Int) {
         val c = controller ?: return
-        c.setMediaItems(songs.map { it.toMediaItem() }, startIndex, 0L)
+        // Long tracks (mixes, sets) resume where the user left off.
+        val start = songs.getOrNull(startIndex)
+        val resumeMs = if (start != null && start.durationSec > RESUME_MIN_DURATION_SEC) {
+            val saved = resumePrefs.getLong(start.id, 0L)
+            if (saved > 30_000L && saved < (start.durationSec - 10) * 1000L) saved else 0L
+        } else 0L
+        c.setMediaItems(songs.map { it.toMediaItem() }, startIndex, resumeMs)
+        c.prepare()
+        c.play()
+    }
+
+    /** Plays the whole list in shuffle mode starting from a random song. */
+    fun playQueueShuffled(songs: List<Song>) {
+        val c = controller ?: return
+        if (songs.isEmpty()) return
+        c.shuffleModeEnabled = true
+        c.setMediaItems(songs.map { it.toMediaItem() }, songs.indices.random(), 0L)
         c.prepare()
         c.play()
     }

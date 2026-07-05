@@ -15,6 +15,7 @@ import androidx.compose.material.icons.filled.Casino
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.PlaylistAdd
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -23,6 +24,8 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
@@ -47,6 +50,8 @@ fun QueueScreen(app: PrivateMusicApp, onBack: () -> Unit) {
     androidx.compose.runtime.LaunchedEffect(Unit) {
         if (currentIndex > 0) lazyListState.scrollToItem(currentIndex)
     }
+    var savingQueue by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
 
     Column(Modifier.fillMaxSize()) {
         Row(
@@ -66,6 +71,41 @@ fun QueueScreen(app: PrivateMusicApp, onBack: () -> Unit) {
             IconButton(onClick = { controller.reshuffleUpcoming() }) {
                 Icon(Icons.Filled.Casino, contentDescription = "Rebarajar lo siguiente")
             }
+            IconButton(onClick = { savingQueue = true }) {
+                Icon(Icons.Filled.PlaylistAdd, contentDescription = "Guardar cola como playlist")
+            }
+        }
+
+        if (savingQueue) {
+            var name by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf("") }
+            androidx.compose.material3.AlertDialog(
+                onDismissRequest = { savingQueue = false },
+                title = { Text("Guardar cola como playlist") },
+                text = {
+                    androidx.compose.material3.OutlinedTextField(
+                        value = name,
+                        onValueChange = { name = it },
+                        placeholder = { Text("Nombre") },
+                        singleLine = true,
+                    )
+                },
+                confirmButton = {
+                    androidx.compose.material3.TextButton(onClick = {
+                        val trimmed = name.trim()
+                        if (trimmed.isNotEmpty()) {
+                            val ids = queue.map { it.mediaId }
+                            scope.launch {
+                                val plId = app.repository.createPlaylist(trimmed)
+                                ids.forEach { app.repository.addToPlaylist(plId, it) }
+                            }
+                        }
+                        savingQueue = false
+                    }) { Text("Guardar") }
+                },
+                dismissButton = {
+                    androidx.compose.material3.TextButton(onClick = { savingQueue = false }) { Text("Cancelar") }
+                },
+            )
         }
 
         if (queue.isEmpty()) {

@@ -14,6 +14,8 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -43,6 +45,8 @@ import java.io.File
 @Composable
 fun PlaylistDetailScreen(app: PrivateMusicApp, playlistId: Long) {
     val songs by app.repository.observePlaylistSongs(playlistId).collectAsState(initial = emptyList())
+    val playlists by app.repository.observePlaylists().collectAsState(initial = emptyList())
+    val playlist = playlists.firstOrNull { it.id == playlistId }
     val nowPlaying by app.playerController.nowPlaying.collectAsState()
     val scope = rememberCoroutineScope()
 
@@ -65,6 +69,54 @@ fun PlaylistDetailScreen(app: PrivateMusicApp, playlistId: Long) {
     }
 
     LazyColumn(state = lazyListState, modifier = Modifier.fillMaxSize()) {
+        item(key = "header") {
+            val totalMin = songs.sumOf { it.durationSec } / 60
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                ArtImage(
+                    playlist?.coverPath?.let { File(it) }
+                        ?: songs.firstOrNull()?.artPath?.let { File(it) },
+                    72.dp,
+                )
+                Column(Modifier.weight(1f).padding(start = 16.dp)) {
+                    Text(
+                        playlist?.name ?: "Playlist",
+                        style = MaterialTheme.typography.headlineSmall,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        "${songs.size} canciones · $totalMin min",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 4.dp),
+            ) {
+                androidx.compose.material3.Button(
+                    onClick = { app.playerController.playQueue(songs, 0) },
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Icon(Icons.Filled.PlayArrow, contentDescription = null)
+                    Text("Reproducir", Modifier.padding(start = 6.dp))
+                }
+                androidx.compose.material3.OutlinedButton(
+                    onClick = { app.playerController.playQueueShuffled(songs) },
+                    modifier = Modifier.weight(1f).padding(start = 12.dp),
+                ) {
+                    Icon(Icons.Filled.Shuffle, contentDescription = null)
+                    Text("Aleatorio", Modifier.padding(start = 6.dp))
+                }
+            }
+        }
         itemsIndexed(songs, key = { _, s -> s.id }) { index, song ->
             ReorderableItem(reorderableState, key = song.id) { isDragging ->
                 var menuOpen by remember { mutableStateOf(false) }
