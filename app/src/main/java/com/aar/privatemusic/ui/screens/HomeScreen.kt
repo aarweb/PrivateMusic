@@ -7,6 +7,8 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -23,6 +25,7 @@ import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.QueueMusic
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.Timeline
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -31,7 +34,10 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.layout.ContentScale
+import coil.compose.AsyncImage
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -125,6 +131,12 @@ fun HomeScreen(
         }
 
         // --- Mix de hoy (hero) ---
+        // Cuatro carátulas reales de la biblioteca dan al hero un aire propio,
+        // en vez de un gradiente plano. Si aún no hay 4, cae al círculo de play.
+        val mixArts = remember(recent, added, songs) {
+            (recent + added + songs).distinctBy { it.id }
+                .mapNotNull { it.artPath }.distinct().take(4)
+        }
         Box(
             Modifier
                 .fillMaxWidth()
@@ -169,18 +181,68 @@ fun HomeScreen(
                         color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.85f),
                     )
                 }
-                Surface(
-                    shape = RoundedCornerShape(50),
-                    color = MaterialTheme.colorScheme.onPrimary,
-                    modifier = Modifier.size(56.dp),
-                ) {
-                    Icon(
-                        Icons.Filled.PlayArrow,
-                        contentDescription = "Reproducir Mix de hoy",
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.padding(12.dp),
-                    )
+                Spacer(Modifier.width(16.dp))
+                Box(contentAlignment = Alignment.Center) {
+                    if (mixArts.size == 4) {
+                        Column(Modifier.size(96.dp).clip(RoundedCornerShape(16.dp))) {
+                            Row(Modifier.weight(1f)) {
+                                MosaicCell(mixArts[0]); MosaicCell(mixArts[1])
+                            }
+                            Row(Modifier.weight(1f)) {
+                                MosaicCell(mixArts[2]); MosaicCell(mixArts[3])
+                            }
+                        }
+                        // Velo oscuro para que el botón de play resalte sobre las portadas.
+                        Box(
+                            Modifier.size(96.dp).clip(RoundedCornerShape(16.dp))
+                                .background(androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.25f))
+                        )
+                    }
+                    Surface(
+                        shape = RoundedCornerShape(50),
+                        color = MaterialTheme.colorScheme.onPrimary,
+                        modifier = Modifier.size(56.dp),
+                    ) {
+                        Icon(
+                            Icons.Filled.PlayArrow,
+                            contentDescription = "Reproducir Mix de hoy",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(12.dp),
+                        )
+                    }
                 }
+            }
+        }
+
+        // --- Reproducir aleatorio (toda la biblioteca) ---
+        Surface(
+            onClick = { app.playerController.playQueueShuffled(songs) },
+            shape = RoundedCornerShape(16.dp),
+            color = MaterialTheme.colorScheme.secondaryContainer,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp),
+        ) {
+            Row(
+                Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    Icons.Filled.Shuffle,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                )
+                Text(
+                    "Reproducir aleatorio",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                    modifier = Modifier.weight(1f).padding(start = 12.dp),
+                )
+                Text(
+                    "${songs.size} canciones",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.7f),
+                )
             }
         }
 
@@ -293,6 +355,17 @@ fun HomeScreen(
         }
         Spacer(Modifier.height(8.dp))
     }
+}
+
+/** Una celda cuadrada del mosaico del hero (la mitad de un lado 2×2). */
+@Composable
+private fun RowScope.MosaicCell(artPath: String) {
+    AsyncImage(
+        model = File(artPath),
+        contentDescription = null,
+        contentScale = ContentScale.Crop,
+        modifier = Modifier.weight(1f).fillMaxHeight(),
+    )
 }
 
 @Composable
