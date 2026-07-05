@@ -362,6 +362,8 @@ class YtDownloader(
         File(musicDir, "${song.id}.lrc").delete()
         File(musicDir, "${song.id}.karaoke.wav").delete()
         File(musicDir, "${song.id}.karaoke.part").delete()
+        File(musicDir, "${song.id}.karaoke_hq.wav").delete()
+        File(musicDir, "${song.id}.karaoke_hq.part").delete()
         _downloads.update { it - song.id }
     }
 

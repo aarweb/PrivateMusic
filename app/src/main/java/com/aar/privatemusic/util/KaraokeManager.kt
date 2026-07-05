@@ -45,7 +45,8 @@ object KaraokeManager {
             jobs[song.id] = scope.launch {
                 try {
                     if (!KaraokeSeparator.isModelReady(appContext)) {
-                        state.value = State(status = "Descargando modelo de IA (36 MB)…", running = true)
+                        val size = if (KaraokeSeparator.engine(appContext) == "mdx") "67 MB" else "36 MB"
+                        state.value = State(status = "Descargando modelo de IA ($size)…", running = true)
                         val ok = KaraokeSeparator.downloadModel(appContext) {
                             state.value = state.value.copy(progress = it)
                         }
@@ -58,7 +59,9 @@ object KaraokeManager {
                         }
                     }
                     state.value = State(
-                        status = "Separando la voz… (puede tardar un par de minutos)",
+                        status = if (KaraokeSeparator.engine(appContext) == "mdx")
+                            "Separando la voz con el motor de calidad… (tarda varios minutos; sigue en segundo plano)"
+                        else "Separando la voz… (puede tardar un par de minutos)",
                         running = true,
                     )
                     val file = KaraokeSeparator.separate(appContext, song, musicDir) {

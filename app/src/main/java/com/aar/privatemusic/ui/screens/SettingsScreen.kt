@@ -238,6 +238,34 @@ fun SettingsScreen(app: PrivateMusicApp, onOpenStats: () -> Unit, onOpenEq: () -
                 subtitle = "Vacío = cualquiera. Elige tus auriculares/coche",
             ) { btDevicesOpen = true }
         }
+
+        var karaokeEngine by remember {
+            mutableStateOf(prefs.getString("karaoke_engine", "umx") ?: "umx")
+        }
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text("Motor de karaoke de alta calidad", style = MaterialTheme.typography.bodyLarge)
+                Text(
+                    if (karaokeEngine == "mdx")
+                        "MDX-Net (67 MB): voces mucho más limpias, tarda más"
+                    else "Rápido (36 MB). Activa para usar MDX-Net: mejor separación, más lento",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Switch(
+                checked = karaokeEngine == "mdx",
+                onCheckedChange = { on ->
+                    karaokeEngine = if (on) "mdx" else "umx"
+                    prefs.edit().putString("karaoke_engine", karaokeEngine).apply()
+                },
+            )
+        }
         if (btDevicesOpen) {
             BtDevicesDialog(prefs = prefs, onDismiss = { btDevicesOpen = false })
         }

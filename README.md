@@ -42,7 +42,7 @@ Requiere Android 8.0+ (arm64).
 
 **Inteligencia on-device (sin nube)**
 - Análisis de cada canción al descargarla: **BPM**, **tonalidad Camelot** y huella sónica.
-- **Karaoke**: separa la voz de cualquier canción con IA local (Open-Unmix en ONNX; el modelo de 36 MB se descarga una sola vez) y reproduce la instrumental con la letra sincronizada para cantar encima.
+- **Karaoke**: separa la voz de cualquier canción con IA local y reproduce la instrumental con la letra sincronizada para cantar encima. Dos motores: rápido (Open-Unmix, 36 MB) o de alta calidad (MDX-Net, 67 MB), ambos descargados una sola vez.
 - **Radio de esta canción**: cola infinita por similitud sónica de tu propia biblioteca.
 - **Aventura sónica**: una cola que transforma gradualmente una canción en otra, interpolando en el espacio de huellas sónicas.
 - **Ordenar para mezclar**: reordena playlists por BPM y rueda de Camelot (transiciones DJ).

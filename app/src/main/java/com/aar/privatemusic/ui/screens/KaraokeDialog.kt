@@ -32,9 +32,10 @@ fun KaraokeDialog(app: PrivateMusicApp, song: Song, onDismiss: () -> Unit) {
     val state by KaraokeManager.stateFor(song.id).collectAsState()
 
     val cached = remember(song.id) {
-        KaraokeSeparator.instrumentalFile(app.repository.musicDir, song.id).length() > 1000
+        KaraokeSeparator.instrumentalFileFor(context, app.repository.musicDir, song.id).length() > 1000
     }
     val modelReady = remember { KaraokeSeparator.isModelReady(context) }
+    val hqEngine = remember { KaraokeSeparator.engine(context) == "mdx" }
     val tooLong = song.durationSec > KaraokeSeparator.MAX_DURATION_SEC
 
     // When the manager finishes while the dialog is open, play and close.
@@ -78,7 +79,10 @@ fun KaraokeDialog(app: PrivateMusicApp, song: Song, onDismiss: () -> Unit) {
                     else -> Text(
                         buildString {
                             append("Se creará una versión instrumental de “${song.title}” con IA local, sin conexión.")
-                            if (!modelReady) append("\n\nLa primera vez se descarga un modelo de 36 MB.")
+                            if (!modelReady) append(
+                                if (hqEngine) "\n\nLa primera vez se descarga un modelo de 67 MB (motor de calidad)."
+                                else "\n\nLa primera vez se descarga un modelo de 36 MB."
+                            )
                             append("\n\nLa letra sincronizada seguirá disponible en el reproductor para cantar encima.")
                         },
                         style = MaterialTheme.typography.bodyMedium,
@@ -90,7 +94,7 @@ fun KaraokeDialog(app: PrivateMusicApp, song: Song, onDismiss: () -> Unit) {
             when {
                 state.running -> {}
                 cached -> TextButton(onClick = {
-                    val file = KaraokeSeparator.instrumentalFile(app.repository.musicDir, song.id)
+                    val file = KaraokeSeparator.instrumentalFileFor(context, app.repository.musicDir, song.id)
                     app.playerController.playKaraoke(song, file)
                     onDismiss()
                 }) { Text("Reproducir") }
