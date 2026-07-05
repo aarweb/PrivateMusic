@@ -123,7 +123,16 @@ private fun MainScaffold(app: PrivateMusicApp) {
 
     val nowPlaying by app.playerController.nowPlaying.collectAsState()
 
+    // Global action feedback ("Añadida a la cola", …) as snackbars.
+    val snackbarHostState = androidx.compose.runtime.remember { androidx.compose.material3.SnackbarHostState() }
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        com.aar.privatemusic.util.Feedback.messages.collect { msg ->
+            snackbarHostState.showSnackbar(msg, withDismissAction = false)
+        }
+    }
+
     Scaffold(
+        snackbarHost = { androidx.compose.material3.SnackbarHost(snackbarHostState) },
         bottomBar = {
             if (currentRoute != "player") {
                 Column {

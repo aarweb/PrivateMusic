@@ -165,6 +165,7 @@ fun PlaylistDetailScreen(app: PrivateMusicApp, playlistId: Long) {
                                     onClick = {
                                         menuOpen = false
                                         app.playerController.playNext(song)
+                                        com.aar.privatemusic.util.Feedback.show("Sonará a continuación")
                                     },
                                 )
                                 DropdownMenuItem(
@@ -172,6 +173,7 @@ fun PlaylistDetailScreen(app: PrivateMusicApp, playlistId: Long) {
                                     onClick = {
                                         menuOpen = false
                                         app.playerController.addToQueue(song)
+                                        com.aar.privatemusic.util.Feedback.show("Añadida a la cola")
                                     },
                                 )
                                 DropdownMenuItem(
@@ -179,6 +181,7 @@ fun PlaylistDetailScreen(app: PrivateMusicApp, playlistId: Long) {
                                     onClick = {
                                         menuOpen = false
                                         scope.launch { app.repository.removeFromPlaylist(playlistId, song.id) }
+                                        com.aar.privatemusic.util.Feedback.show("Quitada de la playlist")
                                     },
                                 )
                             }

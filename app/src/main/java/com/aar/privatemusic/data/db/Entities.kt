@@ -24,6 +24,8 @@ data class Song(
     val loudnessDb: Float? = null,
     // Excluded from mixes/auto-playlists until this epoch millis (snooze).
     val snoozedUntil: Long = 0,
+    // Milliseconds of silent/fade tail at the end (crossfade anchors before it).
+    val tailSilenceMs: Long? = null,
     // On-device analysis: tempo, Camelot key ("8B") and sonic feature vector (JSON).
     val bpm: Float? = null,
     val camelot: String? = null,

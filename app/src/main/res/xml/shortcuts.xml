@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="daily_mix"
+        android:enabled="true"
+        android:icon="@drawable/ic_launcher_foreground"
+        android:shortcutShortLabel="@string/shortcut_daily_mix">
+        <intent
+            android:action="com.aar.privatemusic.PLAY_DAILY_MIX"
+            android:targetPackage="com.aar.privatemusic"
+            android:targetClass="com.aar.privatemusic.MainActivity" />
+    </shortcut>
+</shortcuts>

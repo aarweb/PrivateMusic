@@ -269,6 +269,7 @@ fun LibraryScreen(app: PrivateMusicApp) {
                                     onClick = {
                                         menuOpen = false
                                         app.playerController.playNext(song)
+                                        com.aar.privatemusic.util.Feedback.show("Sonará a continuación")
                                     },
                                 )
                                 DropdownMenuItem(
@@ -276,6 +277,7 @@ fun LibraryScreen(app: PrivateMusicApp) {
                                     onClick = {
                                         menuOpen = false
                                         app.playerController.addToQueue(song)
+                                        com.aar.privatemusic.util.Feedback.show("Añadida a la cola")
                                     },
                                 )
                                 DropdownMenuItem(
@@ -310,9 +312,13 @@ fun LibraryScreen(app: PrivateMusicApp) {
                                     onClick = {
                                         menuOpen = false
                                         scope.launch {
-                                            if (song.snoozedUntil > System.currentTimeMillis())
+                                            if (song.snoozedUntil > System.currentTimeMillis()) {
                                                 app.repository.unsnoozeSong(song.id)
-                                            else app.repository.snoozeSong(song.id)
+                                                com.aar.privatemusic.util.Feedback.show("Volverá a aparecer en tus mixes")
+                                            } else {
+                                                app.repository.snoozeSong(song.id)
+                                                com.aar.privatemusic.util.Feedback.show("No se sugerirá durante 30 días")
+                                            }
                                         }
                                     },
                                 )
@@ -346,6 +352,7 @@ fun LibraryScreen(app: PrivateMusicApp) {
             playlists = playlists,
             onSelect = { pl ->
                 scope.launch { app.repository.addToPlaylist(pl.id, song.id) }
+                com.aar.privatemusic.util.Feedback.show("Añadida a \"${pl.name}\"")
                 songForPlaylist = null
             },
             onCreateAndSelect = { name ->
@@ -353,6 +360,7 @@ fun LibraryScreen(app: PrivateMusicApp) {
                     val id = app.repository.createPlaylist(name)
                     app.repository.addToPlaylist(id, song.id)
                 }
+                com.aar.privatemusic.util.Feedback.show("Creada \"$name\" con la canción")
                 songForPlaylist = null
             },
             onDismiss = { songForPlaylist = null },

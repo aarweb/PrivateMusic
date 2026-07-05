@@ -264,6 +264,17 @@ class MusicRepository(
         return dao.observeTopPlayedBetween(cal.timeInMillis, System.currentTimeMillis())
     }
 
+    suspend fun resetTailSilence() = dao.resetTailSilence()
+
+    /** Measures the silent tail of songs missing it (crossfade anchor). */
+    suspend fun backfillTailSilence() {
+        dao.songsMissingTailSilence().forEach { song ->
+            val ms = com.aar.privatemusic.util.TailSilence
+                .measureTailSilenceMs(song.filePath, song.durationSec) ?: 0L
+            dao.updateTailSilence(song.id, ms)
+        }
+    }
+
     // ---- On-device sonic analysis ----
 
     /** Analyzes any song without BPM/key/fingerprint (runs on app start). */

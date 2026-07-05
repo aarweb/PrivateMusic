@@ -78,6 +78,9 @@ fun PlaylistsScreen(
     var playlistForFolder by remember { mutableStateOf<Playlist?>(null) }
     var fabMenuOpen by remember { mutableStateOf(false) }
     var playlistForCover by remember { mutableStateOf<Playlist?>(null) }
+    var playlistForDelete by remember { mutableStateOf<Playlist?>(null) }
+    var folderForDelete by remember { mutableStateOf<PlaylistFolder?>(null) }
+    var smartForDelete by remember { mutableStateOf<com.aar.privatemusic.data.db.SmartPlaylist?>(null) }
     // Saveable: survives navigating into a playlist and coming back, and rotation.
     val collapsedFolders = rememberSaveable(
         saver = listSaver(
@@ -213,7 +216,7 @@ fun PlaylistsScreen(
                                 .weight(1f)
                                 .padding(horizontal = 16.dp),
                         )
-                        IconButton(onClick = { scope.launch { app.repository.deleteSmartPlaylist(sp) } }) {
+                        IconButton(onClick = { smartForDelete = sp }) {
                             Icon(Icons.Filled.Delete, contentDescription = "Eliminar")
                         }
                     }
@@ -243,7 +246,7 @@ fun PlaylistsScreen(
                     hasFolders = folders.isNotEmpty(),
                     indent = indent,
                     onClick = { onOpenPlaylist(pl.id) },
-                    onDelete = { scope.launch { app.repository.deletePlaylist(pl) } },
+                    onDelete = { playlistForDelete = pl },
                     onChangeCover = {
                         playlistForCover = pl
                         coverPicker.launch(
@@ -268,7 +271,7 @@ fun PlaylistsScreen(
                             else collapsedFolders.add(folder.id)
                         },
                         onRename = { folderForRename = folder },
-                        onDelete = { scope.launch { app.repository.deleteFolder(folder) } },
+                        onDelete = { folderForDelete = folder },
                     )
                 }
                 if (!collapsed) {
@@ -357,6 +360,54 @@ fun PlaylistsScreen(
                 }) { Text("Guardar") }
             },
             dismissButton = { TextButton(onClick = { folderForRename = null }) { Text("Cancelar") } },
+        )
+    }
+
+    playlistForDelete?.let { pl ->
+        AlertDialog(
+            onDismissRequest = { playlistForDelete = null },
+            title = { Text("¿Eliminar playlist?") },
+            text = { Text("Se eliminará \u201c${pl.name}\u201d. Las canciones seguirán en tu biblioteca.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    scope.launch { app.repository.deletePlaylist(pl) }
+                    com.aar.privatemusic.util.Feedback.show("Playlist eliminada")
+                    playlistForDelete = null
+                }) { Text("Eliminar", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = { TextButton(onClick = { playlistForDelete = null }) { Text("Cancelar") } },
+        )
+    }
+
+    folderForDelete?.let { folder ->
+        AlertDialog(
+            onDismissRequest = { folderForDelete = null },
+            title = { Text("¿Eliminar carpeta?") },
+            text = { Text("Se eliminará \u201c${folder.name}\u201d. Las playlists que contiene NO se borran: vuelven al nivel principal.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    scope.launch { app.repository.deleteFolder(folder) }
+                    com.aar.privatemusic.util.Feedback.show("Carpeta eliminada")
+                    folderForDelete = null
+                }) { Text("Eliminar", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = { TextButton(onClick = { folderForDelete = null }) { Text("Cancelar") } },
+        )
+    }
+
+    smartForDelete?.let { sp ->
+        AlertDialog(
+            onDismissRequest = { smartForDelete = null },
+            title = { Text("¿Eliminar playlist inteligente?") },
+            text = { Text("Se eliminará \u201c${sp.name}\u201d y sus reglas.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    scope.launch { app.repository.deleteSmartPlaylist(sp) }
+                    com.aar.privatemusic.util.Feedback.show("Playlist inteligente eliminada")
+                    smartForDelete = null
+                }) { Text("Eliminar", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = { TextButton(onClick = { smartForDelete = null }) { Text("Cancelar") } },
         )
     }
 

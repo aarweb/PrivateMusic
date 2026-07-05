@@ -2,11 +2,19 @@ package com.aar.privatemusic.ui.screens
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Shuffle
+import androidx.compose.material3.Button
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -44,6 +52,28 @@ fun AutoPlaylistScreen(app: PrivateMusicApp, type: AutoPlaylistType) {
             style = MaterialTheme.typography.titleLarge,
             modifier = Modifier.padding(16.dp),
         )
+        if (songs.isNotEmpty()) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 4.dp),
+            ) {
+                Button(
+                    onClick = { app.playerController.playQueue(songs, 0) },
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Icon(Icons.Filled.PlayArrow, contentDescription = null)
+                    Text("Reproducir", Modifier.padding(start = 6.dp))
+                }
+                OutlinedButton(
+                    onClick = { app.playerController.playQueueShuffled(songs) },
+                    modifier = Modifier.weight(1f).padding(start = 12.dp),
+                ) {
+                    Icon(Icons.Filled.Shuffle, contentDescription = null)
+                    Text("Aleatorio", Modifier.padding(start = 6.dp))
+                }
+            }
+        }
         if (songs.isEmpty()) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text(

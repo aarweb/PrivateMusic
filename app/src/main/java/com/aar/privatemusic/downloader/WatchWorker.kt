@@ -23,12 +23,15 @@ class WatchWorker(context: Context, params: WorkerParameters) : CoroutineWorker(
         if (sources.isEmpty()) return Result.success()
 
         var newSongs = 0
+        var failures = 0
         sources.forEach { source ->
             runCatching {
                 if (SpotifyResolver.isSpotifyUrl(source.url)) {
                     newSongs += SpotifySync.sync(applicationContext, app.downloader, source)
                 } else {
-                    val (_, entries) = app.downloader.resolvePlaylist(source.url)
+                    val (title, entries) = app.downloader.resolvePlaylist(source.url)
+                    // resolvePlaylist returns empty on timeout: treat as failure.
+                    if (title.isEmpty() && entries.isEmpty()) error("resolución vacía (¿sin red?)")
                     entries.forEach { entry ->
                         if (!dao.songExists(entry.id)) {
                             app.downloader.enqueue(entry, source.targetPlaylistId)
@@ -37,11 +40,15 @@ class WatchWorker(context: Context, params: WorkerParameters) : CoroutineWorker(
                     }
                 }
                 dao.touchWatchedSource(source.id, System.currentTimeMillis())
+            }.onFailure {
+                failures++
+                android.util.Log.w("WatchWorker", "fuente ${source.title} falló", it)
             }
         }
 
         if (newSongs > 0) notify(newSongs)
-        return Result.success()
+        // Retry with backoff instead of silently waiting 6h for the next period.
+        return if (failures > 0 && runAttemptCount < 3) Result.retry() else Result.success()
     }
 
     private fun notify(count: Int) {

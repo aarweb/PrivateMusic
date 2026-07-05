@@ -128,6 +128,18 @@ interface MusicDao {
     @Query("SELECT bpm FROM songs WHERE id = :id")
     suspend fun getBpm(id: String): Float?
 
+    @Query("SELECT tailSilenceMs FROM songs WHERE id = :id")
+    suspend fun getTailSilence(id: String): Long?
+
+    @Query("UPDATE songs SET tailSilenceMs = :ms WHERE id = :id")
+    suspend fun updateTailSilence(id: String, ms: Long)
+
+    @Query("SELECT * FROM songs WHERE tailSilenceMs IS NULL")
+    suspend fun songsMissingTailSilence(): List<Song>
+
+    @Query("UPDATE songs SET tailSilenceMs = NULL")
+    suspend fun resetTailSilence()
+
     @Query("UPDATE songs SET title = :title, artist = :artist WHERE id = :id")
     suspend fun updateSongMeta(id: String, title: String, artist: String)
 

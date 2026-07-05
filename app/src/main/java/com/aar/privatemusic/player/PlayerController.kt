@@ -249,6 +249,15 @@ class PlayerController(
         controller?.let { it.shuffleModeEnabled = !it.shuffleModeEnabled }
     }
 
+    // User-facing playback speed (pitch preserved by the Sonic processor).
+    private val _playbackSpeed = MutableStateFlow(1f)
+    val playbackSpeed: StateFlow<Float> = _playbackSpeed
+
+    fun setPlaybackSpeed(speed: Float) {
+        controller?.setPlaybackSpeed(speed)
+        _playbackSpeed.value = speed
+    }
+
     fun cycleRepeatMode() {
         controller?.let {
             it.repeatMode = when (it.repeatMode) {

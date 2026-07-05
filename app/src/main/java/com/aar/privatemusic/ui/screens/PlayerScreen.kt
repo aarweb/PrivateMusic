@@ -111,6 +111,8 @@ fun PlayerScreen(app: PrivateMusicApp, onBack: () -> Unit, onOpenQueue: () -> Un
     var playerMenuOpen by remember { mutableStateOf(false) }
     var addToPlaylistOpen by remember { mutableStateOf(false) }
     var karaokeOpen by remember { mutableStateOf(false) }
+    var speedDialogOpen by remember { mutableStateOf(false) }
+    val playbackSpeed by controller.playbackSpeed.collectAsState()
 
     val lyrics by produceState<com.aar.privatemusic.lyrics.Lyrics?>(initialValue = null, song?.id) {
         value = song?.let { s ->
@@ -206,9 +208,21 @@ fun PlayerScreen(app: PrivateMusicApp, onBack: () -> Unit, onOpenQueue: () -> Un
                             song?.let { s ->
                                 scope.launch {
                                     val radio = app.repository.radioFor(s)
-                                    if (radio.size > 1) controller.playQueue(radio, 0)
+                                    if (radio.size > 1) {
+                                        controller.playQueue(radio, 0)
+                                        com.aar.privatemusic.util.Feedback.show("Radio de \"${s.title}\" en marcha")
+                                    } else {
+                                        com.aar.privatemusic.util.Feedback.show("Aún no hay suficientes canciones analizadas")
+                                    }
                                 }
                             }
+                        },
+                    )
+                    DropdownMenuItem(
+                        text = { Text(if (playbackSpeed == 1f) "Velocidad" else "Velocidad (${playbackSpeed}x)") },
+                        onClick = {
+                            playerMenuOpen = false
+                            speedDialogOpen = true
                         },
                     )
                     DropdownMenuItem(
@@ -229,6 +243,7 @@ fun PlayerScreen(app: PrivateMusicApp, onBack: () -> Unit, onOpenQueue: () -> Un
                     playlists = playlists,
                     onSelect = { pl ->
                         scope.launch { app.repository.addToPlaylist(pl.id, s.id) }
+                        com.aar.privatemusic.util.Feedback.show("Añadida a \"${pl.name}\"")
                         addToPlaylistOpen = false
                     },
                     onCreateAndSelect = { name ->
@@ -236,6 +251,7 @@ fun PlayerScreen(app: PrivateMusicApp, onBack: () -> Unit, onOpenQueue: () -> Un
                             val plId = app.repository.createPlaylist(name)
                             app.repository.addToPlaylist(plId, s.id)
                         }
+                        com.aar.privatemusic.util.Feedback.show("Creada \"$name\" con la canción")
                         addToPlaylistOpen = false
                     },
                     onDismiss = { addToPlaylistOpen = false },
@@ -244,6 +260,38 @@ fun PlayerScreen(app: PrivateMusicApp, onBack: () -> Unit, onOpenQueue: () -> Un
         }
         if (karaokeOpen) {
             song?.let { s -> KaraokeDialog(app, s, onDismiss = { karaokeOpen = false }) }
+        }
+        if (speedDialogOpen) {
+            AlertDialog(
+                onDismissRequest = { speedDialogOpen = false },
+                title = { Text("Velocidad de reproducción") },
+                text = {
+                    Column {
+                        listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f).forEach { speed ->
+                            Text(
+                                if (speed == 1f) "1x (normal)" else "${speed}x",
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = if (playbackSpeed == speed) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        controller.setPlaybackSpeed(speed)
+                                        speedDialogOpen = false
+                                    }
+                                    .padding(vertical = 12.dp),
+                            )
+                        }
+                        Text(
+                            "El tono no cambia (time-stretch).",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                },
+                confirmButton = {},
+                dismissButton = { TextButton(onClick = { speedDialogOpen = false }) { Text("Cerrar") } },
+            )
         }
 
         Spacer(Modifier.height(16.dp))

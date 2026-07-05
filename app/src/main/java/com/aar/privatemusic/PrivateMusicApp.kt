@@ -60,6 +60,13 @@ class PrivateMusicApp : Application() {
             repository.backfillQuality()
             repository.backfillLoudness()
             repository.backfillAnalysis()
+            // v2: threshold went from -24dB to -18dB; recompute existing rows.
+            val prefs = getSharedPreferences("settings", MODE_PRIVATE)
+            if (prefs.getInt("tail_silence_v", 1) < 2) {
+                repository.resetTailSilence()
+                prefs.edit().putInt("tail_silence_v", 2).apply()
+            }
+            repository.backfillTailSilence()
         }
 
         // Check watched playlists/channels for new songs every 6 hours.
@@ -69,6 +76,11 @@ class PrivateMusicApp : Application() {
             PeriodicWorkRequestBuilder<WatchWorker>(6, TimeUnit.HOURS)
                 .setConstraints(
                     Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()
+                )
+                // Result.retry() re-runs at 10, 20, 40 min instead of waiting 6h.
+                .setBackoffCriteria(
+                    androidx.work.BackoffPolicy.EXPONENTIAL,
+                    10, TimeUnit.MINUTES,
                 )
                 .build(),
         )
