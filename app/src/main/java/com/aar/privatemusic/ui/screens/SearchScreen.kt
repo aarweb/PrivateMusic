@@ -85,6 +85,15 @@ private object SearchCache {
     }
 }
 
+/** Calidad de audio de YouTube (yt-dlp bestaudio): Opus/AAC lossy, ~160 kbps máx. */
+private const val YT_QUALITY = "≤160k"
+
+private fun deezerQualityLabel(quality: String): String = when (quality) {
+    "FLAC" -> "FLAC"
+    "MP3_320" -> "MP3 320"
+    else -> "MP3 128"
+}
+
 @Composable
 fun SearchScreen(app: PrivateMusicApp) {
     var query by remember { mutableStateOf(SearchCache.query) }
@@ -119,6 +128,7 @@ fun SearchScreen(app: PrivateMusicApp) {
     val torrentDownloads by app.torrents.downloads.collectAsState()
     val archiveDownloads by app.archive.downloads.collectAsState()
     val deezerDownloads by app.deezerDownloader.downloads.collectAsState()
+    val deezerQuality by app.settings.deezerQuality.collectAsState()
     val libraryIds by app.repository.observeSongIds().collectAsState(initial = emptyList())
     val nowPlaying by app.playerController.nowPlaying.collectAsState()
     val isPlaying by app.playerController.isPlaying.collectAsState()
@@ -461,6 +471,8 @@ fun SearchScreen(app: PrivateMusicApp) {
                                 dzId in deezerResolving -> DownloadState.Queued
                                 else -> matchedId?.let { downloads[it] }
                             },
+                            // HQ: la calidad de tu plan; si no, audio de YouTube.
+                            qualityLabel = if (isHq) deezerQualityLabel(deezerQuality) else YT_QUALITY,
                             previewResolving = false,
                             previewPlaying = nowPlaying?.songId == "preview:$dzId" && isPlaying,
                             previewLoaded = nowPlaying?.songId == "preview:$dzId",
@@ -523,6 +535,9 @@ fun SearchScreen(app: PrivateMusicApp) {
                         result = result,
                         inLibrary = inLibrary,
                         state = state,
+                        // Álbumes traen su calidad parseada; el resto es audio de YouTube.
+                        qualityLabel = if (result.isTorrent || result.isArchive) result.qualityLabel
+                        else YT_QUALITY,
                         previewResolving = previewLoadingId == result.id,
                         previewPlaying = nowPlaying?.songId == "preview:${result.id}" && isPlaying,
                         previewLoaded = nowPlaying?.songId == "preview:${result.id}",
@@ -589,6 +604,24 @@ private fun SourceCard(source: SearchSource, onClick: () -> Unit) {
     }
 }
 
+/** Etiqueta compacta (fuente o calidad) mostrada junto al subtítulo del resultado. */
+@Composable
+private fun Pill(
+    text: String,
+    background: androidx.compose.ui.graphics.Color,
+    foreground: androidx.compose.ui.graphics.Color,
+    modifier: Modifier = Modifier,
+) {
+    Text(
+        text,
+        style = MaterialTheme.typography.labelSmall,
+        color = foreground,
+        modifier = modifier
+            .background(background, RoundedCornerShape(4.dp))
+            .padding(horizontal = 4.dp, vertical = 1.dp),
+    )
+}
+
 @Composable
 private fun SearchResultRow(
     result: SearchResult,
@@ -599,6 +632,7 @@ private fun SearchResultRow(
     previewLoaded: Boolean,
     onPreview: () -> Unit,
     onDownload: () -> Unit,
+    qualityLabel: String? = null,
 ) {
     Row(
         modifier = Modifier
@@ -615,50 +649,34 @@ private fun SearchResultRow(
                 .padding(horizontal = 12.dp),
         ) {
             Text(result.title, maxLines = 2, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyLarge)
-            if (result.isTorrent || result.isArchive) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
+            val isAlbum = result.isTorrent || result.isArchive
+            // Álbum (torrent/archive): sin duración fiable, muestra sólo el artista.
+            val subtitle = if (isAlbum) result.artist
+            else "${result.artist} · ${formatDuration(result.durationSec)}"
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (isAlbum) {
+                    Pill(
                         if (result.isTorrent) "TORRENT" else "ARCHIVE",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer,
-                        modifier = Modifier
-                            .background(
-                                MaterialTheme.colorScheme.primaryContainer,
-                                RoundedCornerShape(4.dp),
-                            )
-                            .padding(horizontal = 4.dp, vertical = 1.dp),
-                    )
-                    // Calidad que se descargará (FLAC / MP3…), cuando se conoce.
-                    result.qualityLabel?.let { q ->
-                        Text(
-                            q,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onTertiaryContainer,
-                            modifier = Modifier
-                                .padding(start = 4.dp)
-                                .background(
-                                    MaterialTheme.colorScheme.tertiaryContainer,
-                                    RoundedCornerShape(4.dp),
-                                )
-                                .padding(horizontal = 4.dp, vertical = 1.dp),
-                        )
-                    }
-                    Text(
-                        result.artist,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(start = 6.dp),
+                        MaterialTheme.colorScheme.primaryContainer,
+                        MaterialTheme.colorScheme.onPrimaryContainer,
                     )
                 }
-            } else {
+                // Calidad que se descargará (FLAC / MP3 320 / ≤160k…).
+                qualityLabel?.let {
+                    Pill(
+                        it,
+                        MaterialTheme.colorScheme.tertiaryContainer,
+                        MaterialTheme.colorScheme.onTertiaryContainer,
+                        modifier = Modifier.padding(start = if (isAlbum) 4.dp else 0.dp),
+                    )
+                }
                 Text(
-                    "${result.artist} · ${formatDuration(result.durationSec)}",
+                    subtitle,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(start = if (isAlbum || qualityLabel != null) 6.dp else 0.dp),
                 )
             }
         }
