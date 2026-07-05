@@ -14,6 +14,7 @@ import kotlinx.coroutines.launch
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.QueueMusic
 import androidx.compose.material.icons.filled.Search
@@ -36,6 +37,7 @@ import com.aar.privatemusic.ui.components.MiniPlayer
 import com.aar.privatemusic.ui.screens.AutoPlaylistScreen
 import com.aar.privatemusic.ui.screens.AutoPlaylistType
 import com.aar.privatemusic.ui.screens.EqScreen
+import com.aar.privatemusic.ui.screens.HomeScreen
 import com.aar.privatemusic.ui.screens.LibraryScreen
 import com.aar.privatemusic.ui.screens.PlayerScreen
 import com.aar.privatemusic.ui.screens.PlaylistDetailScreen
@@ -112,6 +114,7 @@ private fun MainScaffold(app: PrivateMusicApp) {
     val currentRoute = backStackEntry?.destination?.route
 
     val tabs = listOf(
+        Tab("home", "Inicio") { Icon(Icons.Filled.Home, null) },
         Tab("search", "Buscar") { Icon(Icons.Filled.Search, null) },
         Tab("library", "Biblioteca") { Icon(Icons.Filled.LibraryMusic, null) },
         Tab("playlists", "Playlists") { Icon(Icons.Filled.QueueMusic, null) },
@@ -136,7 +139,7 @@ private fun MainScaffold(app: PrivateMusicApp) {
                                 selected = currentRoute == tab.route,
                                 onClick = {
                                     navController.navigate(tab.route) {
-                                        popUpTo("search") { saveState = true }
+                                        popUpTo("home") { saveState = true }
                                         launchSingleTop = true
                                         restoreState = true
                                     }
@@ -152,9 +155,18 @@ private fun MainScaffold(app: PrivateMusicApp) {
     ) { padding ->
         NavHost(
             navController = navController,
-            startDestination = "search",
+            startDestination = "home",
             modifier = Modifier.padding(padding),
         ) {
+            composable("home") {
+                HomeScreen(
+                    app,
+                    onOpenSearch = { navController.navigate("search") },
+                    onOpenPlaylist = { navController.navigate("playlist/$it") },
+                    onOpenStats = { navController.navigate("stats") },
+                    onOpenLibrary = { navController.navigate("library") },
+                )
+            }
             composable("search") { SearchScreen(app) }
             composable("library") { LibraryScreen(app) }
             composable("playlists") {

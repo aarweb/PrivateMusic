@@ -43,6 +43,10 @@ fun QueueScreen(app: PrivateMusicApp, onBack: () -> Unit) {
     val reorderableState = rememberReorderableLazyListState(lazyListState) { from, to ->
         controller.moveQueueItem(from.index, to.index)
     }
+    // Open anchored on the playing track, not the top of a 50-song queue.
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        if (currentIndex > 0) lazyListState.scrollToItem(currentIndex)
+    }
 
     Column(Modifier.fillMaxSize()) {
         Row(

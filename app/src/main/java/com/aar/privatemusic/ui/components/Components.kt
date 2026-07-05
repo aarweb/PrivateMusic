@@ -4,12 +4,14 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.background
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Pause
@@ -25,6 +27,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -126,65 +129,119 @@ fun MiniPlayer(controller: PlayerController, onOpenPlayer: () -> Unit) {
     val isPlaying by controller.isPlaying.collectAsState()
     val np = nowPlaying ?: return
 
+    // Thin progress line: the most-checked info while browsing other tabs.
+    var progress by androidx.compose.runtime.remember { androidx.compose.runtime.mutableFloatStateOf(0f) }
+    androidx.compose.runtime.LaunchedEffect(isPlaying, np.songId) {
+        while (true) {
+            progress = if (np.durationMs > 0)
+                (controller.positionMs.toFloat() / np.durationMs).coerceIn(0f, 1f) else 0f
+            kotlinx.coroutines.delay(1000)
+        }
+    }
+
     Surface(tonalElevation = 3.dp) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable(onClick = onOpenPlayer)
-                .padding(horizontal = 12.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            ArtImage(np.artPath?.let { File(it) }, 40.dp)
-            Column(
+        Column {
+            androidx.compose.material3.LinearProgressIndicator(
+                progress = { progress },
+                modifier = Modifier.fillMaxWidth().height(2.dp),
+                trackColor = MaterialTheme.colorScheme.surfaceVariant,
+            )
+            Row(
                 modifier = Modifier
-                    .weight(1f)
-                    .padding(horizontal = 12.dp),
+                    .fillMaxWidth()
+                    .clickable(onClick = onOpenPlayer)
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(np.title, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyMedium)
-                Text(
-                    np.artist,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            IconButton(onClick = { controller.togglePlayPause() }) {
-                Icon(if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow, contentDescription = "Play/Pausa")
-            }
-            IconButton(onClick = { controller.next() }) {
-                Icon(Icons.Filled.SkipNext, contentDescription = "Siguiente")
+                ArtImage(np.artPath?.let { File(it) }, 40.dp)
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(horizontal = 12.dp),
+                ) {
+                    Text(np.title, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        np.artist,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                IconButton(onClick = { controller.togglePlayPause() }) {
+                    Icon(if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow, contentDescription = "Play/Pausa")
+                }
+                IconButton(onClick = { controller.next() }) {
+                    Icon(Icons.Filled.SkipNext, contentDescription = "Siguiente")
+                }
             }
         }
     }
 }
 
-/** Dialog listing existing playlists to add a song into. */
+/** Dialog listing existing playlists to add a song into, with inline creation. */
 @Composable
 fun AddToPlaylistDialog(
     playlists: List<Playlist>,
     onSelect: (Playlist) -> Unit,
+    onCreateAndSelect: (String) -> Unit = {},
     onDismiss: () -> Unit,
 ) {
+    var creating by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+    var newName by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf("") }
     AlertDialog(
         onDismissRequest = onDismiss,
-        confirmButton = {},
+        confirmButton = {
+            if (creating) {
+                TextButton(onClick = {
+                    val trimmed = newName.trim()
+                    if (trimmed.isNotEmpty()) onCreateAndSelect(trimmed)
+                }) { Text("Crear y añadir") }
+            }
+        },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancelar") } },
         title = { Text("Añadir a playlist") },
         text = {
             Column {
-                if (playlists.isEmpty()) {
-                    Text("No hay playlists. Crea una en la pestaña Playlists.")
-                }
-                playlists.forEach { pl ->
-                    Text(
-                        pl.name,
-                        style = MaterialTheme.typography.bodyLarge,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { onSelect(pl) }
-                            .padding(vertical = 12.dp),
+                if (creating) {
+                    androidx.compose.material3.OutlinedTextField(
+                        value = newName,
+                        onValueChange = { newName = it },
+                        placeholder = { Text("Nombre de la playlist") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
                     )
+                } else {
+                    // Spotify-style: creating a new list is the first option.
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .clickable { creating = true }
+                            .padding(vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(
+                            Icons.Filled.Add,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                        )
+                        Text(
+                            "Nueva playlist…",
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(start = 12.dp),
+                        )
+                    }
+                    playlists.forEach { pl ->
+                        Text(
+                            pl.name,
+                            style = MaterialTheme.typography.bodyLarge,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onSelect(pl) }
+                                .padding(vertical = 12.dp),
+                        )
+                    }
                 }
             }
         },

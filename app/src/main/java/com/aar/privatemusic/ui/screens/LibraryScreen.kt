@@ -71,6 +71,7 @@ fun LibraryScreen(app: PrivateMusicApp) {
     var songForArt by remember { mutableStateOf<Song?>(null) }
     var songForAdventure by remember { mutableStateOf<Song?>(null) }
     var songForKaraoke by remember { mutableStateOf<Song?>(null) }
+    var songForDelete by remember { mutableStateOf<Song?>(null) }
     var query by remember { mutableStateOf("") }
 
     val context = LocalContext.current
@@ -323,7 +324,7 @@ fun LibraryScreen(app: PrivateMusicApp) {
                                     text = { Text("Eliminar de la biblioteca") },
                                     onClick = {
                                         menuOpen = false
-                                        scope.launch { app.repository.deleteSong(song) }
+                                        songForDelete = song
                                     },
                                 )
                             }
@@ -339,6 +340,13 @@ fun LibraryScreen(app: PrivateMusicApp) {
             playlists = playlists,
             onSelect = { pl ->
                 scope.launch { app.repository.addToPlaylist(pl.id, song.id) }
+                songForPlaylist = null
+            },
+            onCreateAndSelect = { name ->
+                scope.launch {
+                    val id = app.repository.createPlaylist(name)
+                    app.repository.addToPlaylist(id, song.id)
+                }
                 songForPlaylist = null
             },
             onDismiss = { songForPlaylist = null },
@@ -381,6 +389,21 @@ fun LibraryScreen(app: PrivateMusicApp) {
 
     songForKaraoke?.let { song ->
         KaraokeDialog(app, song, onDismiss = { songForKaraoke = null })
+    }
+
+    songForDelete?.let { song ->
+        AlertDialog(
+            onDismissRequest = { songForDelete = null },
+            title = { Text("¿Eliminar canción?") },
+            text = { Text("“${song.title}” y su archivo de audio se borrarán del dispositivo. Esta acción no se puede deshacer.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    scope.launch { app.repository.deleteSong(song) }
+                    songForDelete = null
+                }) { Text("Eliminar", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = { TextButton(onClick = { songForDelete = null }) { Text("Cancelar") } },
+        )
     }
 
     songForAdventure?.let { from ->

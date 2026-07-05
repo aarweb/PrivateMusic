@@ -63,16 +63,19 @@ class PlaybackService : MediaLibraryService() {
             .setSessionActivity(sessionActivity)
             .build()
         EqHolder.init(this, player.audioSessionId)
-        // Crossfade must distinguish automatic track changes from manual skips:
-        // fading in after a manual skip feels like broken volume.
+        // Second player for TRUE crossfade: it plays the tail of the outgoing
+        // track while the main player already runs the incoming one, so both
+        // songs genuinely overlap. No audio focus: it rides on the main one.
+        tailPlayer = ExoPlayer.Builder(this)
+            .setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(C.USAGE_MEDIA)
+                    .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
+                    .build(),
+                /* handleAudioFocus = */ false,
+            )
+            .build()
         player.addListener(object : Player.Listener {
-            override fun onMediaItemTransition(item: MediaItem?, reason: Int) {
-                fadingIn = reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO
-                // The outgoing track may have been tempo-bent by AutoMix to land
-                // on the incoming track's BPM; the incoming one plays natural.
-                if (player.playbackParameters.speed != 1f) player.setPlaybackSpeed(1f)
-            }
-
             override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
                 // Stream previews use signed URLs that expire; a dead preview item
                 // would otherwise fail silently forever from the notification.
@@ -85,29 +88,39 @@ class PlaybackService : MediaLibraryService() {
         startVolumeLoop(player, dao)
     }
 
-    /** True while the current track should ramp up (started via auto-transition). */
-    private var fadingIn = false
-    private var lastFadePhase = "full"
+    private var tailPlayer: ExoPlayer? = null
 
     /**
-     * Drives the player volume for crossfade (fade-out/in at track edges)
-     * and loudness normalization (attenuate loud tracks towards the target).
-     * Leaves the volume alone when both features are off.
+     * Drives volume normalization and the REAL crossfade: when the current
+     * track enters its last N seconds, its tail keeps playing on [tailPlayer]
+     * while the main player jumps to the next track — both songs overlap with
+     * crossed equal-power curves (and AutoMix tempo-bends the outgoing tail).
      */
     private fun startVolumeLoop(player: ExoPlayer, dao: MusicDao) {
         mainScope.launch {
             var gainFactor = 1f
             var gainForId: String? = null
             var touchedVolume = false
-            // AutoMix: target speed ratio for the current transition, cached per track pair.
-            var mixRatio = 1f
-            var mixForIds: Pair<String, String>? = null
+            // Active-overlap state.
+            var xfEndsAt = 0L
+            var xfDurationMs = 1L
+            var xfGainA = 1f
+            var xfMainId: String? = null
+
+            fun gainOf(loudness: Float?, normalize: Boolean): Float =
+                if (normalize && loudness != null) {
+                    val gainDb = (AppSettings.TARGET_LOUDNESS_DB - loudness).coerceIn(-12f, 0f)
+                    10.0.pow(gainDb / 20.0).toFloat()
+                } else 1f
+
             while (isActive) {
+                val tail = tailPlayer
                 val crossfadeMs = AppSettings.readCrossfadeSec(this@PlaybackService) * 1000L
                 val normalize = AppSettings.readNormalizeVolume(this@PlaybackService)
                 val autoMix = AppSettings.readAutoMix(this@PlaybackService)
+                val xfActive = xfEndsAt != 0L
 
-                if (crossfadeMs == 0L && !normalize) {
+                if (crossfadeMs == 0L && !normalize && !xfActive) {
                     if (touchedVolume) {
                         player.volume = 1f
                         touchedVolume = false
@@ -121,79 +134,92 @@ class PlaybackService : MediaLibraryService() {
                 if (normalize && id != null && id != gainForId) {
                     gainForId = id
                     val loudness = withContext(Dispatchers.IO) { runCatching { dao.getLoudness(id) }.getOrNull() }
-                    gainFactor = if (loudness != null) {
-                        val gainDb = (AppSettings.TARGET_LOUDNESS_DB - loudness).coerceIn(-12f, 0f)
-                        10.0.pow(gainDb / 20.0).toFloat()
-                    } else 1f
+                    gainFactor = gainOf(loudness, true)
                 } else if (!normalize) {
                     gainFactor = 1f
                     gainForId = null
                 }
 
-                var fade = 1f
-                var phase = "full"
+                // ---- Overlap in progress: drive both volume curves. ----
+                if (xfActive && tail != null) {
+                    val remainingXf = xfEndsAt - android.os.SystemClock.elapsedRealtime()
+                    val aborted = player.currentMediaItem?.mediaId != xfMainId || !player.isPlaying
+                    if (remainingXf <= 0 || aborted) {
+                        tail.stop()
+                        tail.clearMediaItems()
+                        tail.setPlaybackSpeed(1f)
+                        xfEndsAt = 0L
+                        player.volume = gainFactor
+                        android.util.Log.d("Crossfade", "overlap end aborted=$aborted")
+                    } else {
+                        val t = (1f - remainingXf.toFloat() / xfDurationMs).coerceIn(0f, 1f)
+                        player.volume = gainFactor * kotlin.math.sqrt(t)
+                        tail.volume = xfGainA * kotlin.math.sqrt(1f - t)
+                        android.util.Log.d("Crossfade", "overlap t=$t mainVol=${player.volume} tailVol=${tail.volume}")
+                    }
+                    touchedVolume = true
+                    delay(100)
+                    continue
+                }
+
+                // ---- Arm the overlap when the outgoing track enters the window. ----
                 val duration = player.duration
-                if (crossfadeMs > 0 && player.isPlaying &&
+                if (crossfadeMs > 0 && tail != null && player.isPlaying &&
                     duration != androidx.media3.common.C.TIME_UNSET &&
-                    duration > crossfadeMs * 2
+                    duration > crossfadeMs * 2 &&
+                    player.hasNextMediaItem() &&
+                    // Repeat-one loops the same track: no crossfade there.
+                    player.repeatMode != Player.REPEAT_MODE_ONE
                 ) {
-                    val position = player.currentPosition
-                    val remaining = duration - position
-                    val fadeInMs = crossfadeMs / 2
-                    // Repeat-one loops the same track: fading to silence (and
-                    // beatmatching against a song that won't play) is wrong there.
-                    if (remaining in 1 until crossfadeMs && player.hasNextMediaItem() &&
-                        player.repeatMode != Player.REPEAT_MODE_ONE
+                    val remaining = duration - player.currentPosition
+                    val curItem = player.currentMediaItem
+                    val curUri = curItem?.localConfiguration?.uri
+                    val curId = curItem?.mediaId
+                    if (remaining in 1 until crossfadeMs && curUri != null && curId != null &&
+                        !curId.startsWith("preview:")
                     ) {
-                        // Equal-power fade-out, only when another track follows.
-                        fade = kotlin.math.sqrt(remaining / crossfadeMs.toFloat()).coerceIn(0f, 1f)
-                        phase = "out"
-                        if (autoMix) {
-                            // DJ-style beatmatch: bend the outgoing tempo to the incoming
-                            // BPM so the handoff keeps a continuous pulse. Applied ONCE per
-                            // transition: repeated speed changes flush the audio pipeline
-                            // every tick and stall playback near the end of the stream.
-                            val curId = player.currentMediaItem?.mediaId
-                            val nextId = player.getMediaItemAt(player.nextMediaItemIndex).mediaId
-                            if (curId != null && mixForIds != curId to nextId) {
-                                mixForIds = curId to nextId
-                                val (curBpm, nextBpm) = withContext(Dispatchers.IO) {
-                                    runCatching { dao.getBpm(curId) to dao.getBpm(nextId) }
-                                        .getOrDefault(null to null)
-                                }
-                                mixRatio = if (curBpm != null && nextBpm != null && curBpm > 0f)
-                                    (nextBpm / curBpm).coerceIn(0.9f, 1.1f) else 1f
-                                // Revalidate after the suspension: a manual skip may have
-                                // changed tracks while we were querying BPMs. Always apply
-                                // the new ratio (even 1f) so a stale bend never survives.
-                                if (player.currentMediaItem?.mediaId == curId &&
-                                    player.playbackParameters.speed != mixRatio
-                                ) {
-                                    player.setPlaybackSpeed(mixRatio)
-                                }
-                                android.util.Log.d("AutoMix", "pair=$curId->$nextId ratio=$mixRatio")
-                            }
+                        val nextId = player.getMediaItemAt(player.nextMediaItemIndex).mediaId
+                        // Gather gains + AutoMix ratio off the main thread.
+                        val (loudA, loudB, ratio) = withContext(Dispatchers.IO) {
+                            runCatching {
+                                val la = dao.getLoudness(curId)
+                                val lb = dao.getLoudness(nextId)
+                                val ba = dao.getBpm(curId)
+                                val bb = dao.getBpm(nextId)
+                                val r = if (ba != null && bb != null && ba > 0f)
+                                    (bb / ba).coerceIn(0.9f, 1.1f) else 1f
+                                Triple(la, lb, r)
+                            }.getOrDefault(Triple(null, null, 1f))
                         }
-                    } else if (fadingIn && position < fadeInMs) {
-                        // Ramp-in only after an automatic transition, never after a skip.
-                        fade = kotlin.math.sqrt((position + 150) / fadeInMs.toFloat()).coerceIn(0.1f, 1f)
-                        phase = "in"
-                    } else if (fadingIn) {
-                        fadingIn = false
+                        // Revalidate: a manual skip may have happened during the query.
+                        if (player.currentMediaItem?.mediaId == curId && player.isPlaying) {
+                            val pos = player.currentPosition
+                            val fadeLen = (duration - pos).coerceIn(500L, crossfadeMs)
+                            xfGainA = gainOf(loudA, normalize)
+                            xfMainId = nextId
+                            tail.setMediaItem(MediaItem.Builder().setUri(curUri).build(), pos)
+                            tail.prepare()
+                            if (autoMix && ratio != 1f) tail.setPlaybackSpeed(ratio)
+                            tail.volume = xfGainA
+                            tail.play()
+                            player.volume = 0f
+                            player.seekToNextMediaItem()
+                            gainFactor = gainOf(loudB, normalize)
+                            gainForId = nextId
+                            xfDurationMs = fadeLen
+                            xfEndsAt = android.os.SystemClock.elapsedRealtime() + fadeLen
+                            android.util.Log.d(
+                                "Crossfade",
+                                "overlap start durMs=$fadeLen gainA=$xfGainA gainB=$gainFactor automixRatio=$ratio",
+                            )
+                            touchedVolume = true
+                            delay(100)
+                            continue
+                        }
                     }
                 }
 
-                if (phase != "out") {
-                    mixForIds = null
-                    // Undo any leftover tempo bend (seek back out of the fade window, etc.).
-                    if (player.playbackParameters.speed != 1f) player.setPlaybackSpeed(1f)
-                }
-
-                if (phase != lastFadePhase) {
-                    lastFadePhase = phase
-                    android.util.Log.d("Crossfade", "phase=$phase fade=$fade")
-                }
-                player.volume = gainFactor * fade
+                player.volume = gainFactor
                 touchedVolume = true
                 delay(200)
             }
@@ -220,6 +246,8 @@ class PlaybackService : MediaLibraryService() {
             release()
         }
         mediaSession = null
+        tailPlayer?.release()
+        tailPlayer = null
         EqHolder.release()
         serviceScope.cancel()
         mainScope.cancel()

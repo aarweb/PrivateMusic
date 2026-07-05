@@ -307,7 +307,8 @@ private fun SearchResultRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(enabled = !inLibrary && state == null) { onDownload() }
+            // Tapping a result streams it (listen first); download is the explicit icon.
+            .clickable { onPreview() }
             .padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

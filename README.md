@@ -37,7 +37,7 @@ Requiere Android 8.0+ (arm64).
 - Media3/ExoPlayer en segundo plano, Android Auto, widget de pantalla de inicio.
 - Cola editable (reproducir a continuación, reordenar, rebarajar).
 - **Letras sincronizadas offline** (LRCLIB, cacheadas al descargar) con salto por línea.
-- Crossfade equal-power, **AutoMix** (iguala el BPM de la canción saliente con la entrante mediante time-stretch, sin cambiar el tono), normalización de volumen (RMS medido por canción), ecualizador con presets, sleep timer con fade-out.
+- **Crossfade real con solape**: las dos canciones suenan a la vez con curvas equal-power cruzadas (doble reproductor), y **AutoMix** iguala el BPM de la saliente con la entrante mediante time-stretch sin cambiar el tono. Normalización de volumen (RMS medido por canción), ecualizador con presets, sleep timer con fade-out.
 - Pantalla del reproductor con color dinámico de la carátula.
 
 **Inteligencia on-device (sin nube)**
