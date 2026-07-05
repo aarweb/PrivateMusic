@@ -53,6 +53,36 @@ class InternetArchiveDownloader(
         "flac", "mp3", "m4a", "aac", "opus", "ogg", "wav", "aiff", "aif", "wma", "alac",
     )
 
+    /**
+     * URL directa de una pista del ítem para preescuchar sin descargarlo. Prefiere
+     * MP3/Ogg (ligeros para streaming) sobre FLAC. Los ficheros de archive.org son
+     * HTTP abiertos, así que el reproductor los streamea directamente.
+     */
+    suspend fun previewUrl(identifier: String): String? = withContext(Dispatchers.IO) {
+        val body = httpGet("https://archive.org/metadata/${enc(identifier)}") ?: return@withContext null
+        val files = runCatching { JSONObject(body).optJSONArray("files") }.getOrNull()
+            ?: return@withContext null
+        // (nombre, rango de formato, nº de pista): elige el mejor para streaming.
+        val cands = ArrayList<Triple<String, Int, Int>>()
+        for (i in 0 until files.length()) {
+            val f = files.optJSONObject(i) ?: continue
+            val name = f.optString("name").takeIf { it.isNotBlank() } ?: continue
+            val ext = name.substringAfterLast('.', "").lowercase()
+            if (ext !in audioExtensions) continue
+            val fmt = f.optString("format").lowercase()
+            val rank = when {
+                "mp3" in fmt || ext == "mp3" -> 0
+                "ogg" in fmt || ext == "ogg" -> 1
+                else -> 2 // FLAC u otros: pesados para preescuchar
+            }
+            val track = f.optString("track").substringBefore('/').trim().toIntOrNull() ?: 9999
+            cands.add(Triple(name, rank, track))
+        }
+        val best = cands.minWithOrNull(compareBy({ it.second }, { it.third }, { it.first }))
+            ?: return@withContext null
+        "https://archive.org/download/${enc(identifier)}/${encPath(best.first)}"
+    }
+
     fun enqueue(result: SearchResult) {
         val id = result.id
         val current = _downloads.value[id]

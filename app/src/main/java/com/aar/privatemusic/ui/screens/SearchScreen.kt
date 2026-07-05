@@ -134,12 +134,15 @@ fun SearchScreen(app: PrivateMusicApp) {
         if (previewLoadingId != null) return
         previewLoadingId = result.id
         scope.launch {
-            val url = app.downloader.streamUrl(result.id)
+            // Internet Archive streamea sus ficheros HTTP directamente (1ª pista
+            // del ítem); el resto de fuentes resuelven el stream de YouTube.
+            val url = if (result.isArchive) app.archive.previewUrl(result.id)
+            else app.downloader.streamUrl(result.id)
             if (url != null) {
                 app.playerController.playStream(result.id, result.title, result.artist, url, result.thumbnailUrl)
             } else {
                 error = null
-                actionMessage = "No se pudo obtener el stream de \"${result.title}\""
+                actionMessage = "No se pudo reproducir \"${result.title}\""
             }
             previewLoadingId = null
         }
@@ -526,7 +529,7 @@ fun SearchScreen(app: PrivateMusicApp) {
                         onPreview = {
                             when {
                                 result.isTorrent -> app.torrents.enqueue(result)
-                                result.isArchive -> app.archive.enqueue(result)
+                                // Archive: preescucha la 1ª pista antes de bajar el ítem.
                                 else -> togglePreview(result)
                             }
                         },
@@ -644,8 +647,9 @@ private fun SearchResultRow(
                 )
             }
         }
-        // Preview: listen before deciding to download (torrents/archive are albums).
-        if (!result.isTorrent && !result.isArchive) when {
+        // Preview: listen before downloading. Torrents have no stream; Archive
+        // streams its first track (its files are open HTTP).
+        if (!result.isTorrent) when {
             previewResolving ->
                 CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
             previewPlaying ->
