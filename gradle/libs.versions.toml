@@ -42,6 +42,8 @@ onnxruntime = { group = "com.microsoft.onnxruntime", name = "onnxruntime-android
 media3-cast = { group = "androidx.media3", name = "media3-cast", version.ref = "media3" }
 nanohttpd = { group = "org.nanohttpd", name = "nanohttpd", version = "2.3.1" }
 mediarouter = { group = "androidx.mediarouter", name = "mediarouter", version = "1.7.0" }
+# Motor BitTorrent (JNI); el artefacto -android-arm64 arrastra el core Java.
+libtorrent4j = { group = "org.libtorrent4j", name = "libtorrent4j-android-arm64", version = "2.1.0-39" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

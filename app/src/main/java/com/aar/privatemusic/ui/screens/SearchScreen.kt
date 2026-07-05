@@ -116,6 +116,7 @@ fun SearchScreen(app: PrivateMusicApp) {
     val context = LocalContext.current
 
     val downloads by app.downloader.downloads.collectAsState()
+    val torrentDownloads by app.torrents.downloads.collectAsState()
     val libraryIds by app.repository.observeSongIds().collectAsState(initial = emptyList())
     val nowPlaying by app.playerController.nowPlaying.collectAsState()
     val isPlaying by app.playerController.isPlaying.collectAsState()
@@ -157,6 +158,15 @@ fun SearchScreen(app: PrivateMusicApp) {
         spotifyTracks = null
         deezerTracks = null
         scope.launch {
+            if (source == "1337x") {
+                // El scraper ya devuelve lista vacía si falla la red o el parseo.
+                val torrents =
+                    com.aar.privatemusic.downloader.Torrent1337xSource.search(query.trim(), limit = 30)
+                results = torrents
+                if (torrents.isEmpty()) error = "Sin resultados de torrents de música"
+                searching = false
+                return@launch
+            }
             if (source == "deezer" && !query.trim().startsWith("http") &&
                 !SpotifyResolver.isSpotifyUrl(query.trim())
             ) {
@@ -242,6 +252,9 @@ fun SearchScreen(app: PrivateMusicApp) {
         SearchSource("deezer", "Deezer", androidx.compose.ui.graphics.Color(0xFFA238FF)) {
             Icon(Icons.Filled.GraphicEq, null, tint = androidx.compose.ui.graphics.Color.White)
         },
+        SearchSource("1337x", "1337x · Torrents música", androidx.compose.ui.graphics.Color(0xFFE0592A)) {
+            Icon(Icons.Filled.Search, null, tint = androidx.compose.ui.graphics.Color.White)
+        },
     )
 
     androidx.activity.compose.BackHandler(enabled = source != null) { source = null }
@@ -309,6 +322,7 @@ fun SearchScreen(app: PrivateMusicApp) {
                     when (source) {
                         "deezer" -> "Buscar en Deezer…"
                         "ytmusic" -> "Buscar en YouTube Music…"
+                        "1337x" -> "Buscar torrents de música…"
                         else -> "Buscar en YouTube o pegar URL…"
                     }
                 )
@@ -461,7 +475,9 @@ fun SearchScreen(app: PrivateMusicApp) {
                 }
                 items(results, key = { it.id }) { result ->
                     val inLibrary = result.id in libraryIds
-                    val state = downloads[result.id]
+                    // Los torrents descargan por su propio motor (app.torrents).
+                    val state = if (result.isTorrent) torrentDownloads[result.id]
+                    else downloads[result.id]
                     SearchResultRow(
                         result = result,
                         inLibrary = inLibrary,
@@ -469,8 +485,20 @@ fun SearchScreen(app: PrivateMusicApp) {
                         previewResolving = previewLoadingId == result.id,
                         previewPlaying = nowPlaying?.songId == "preview:${result.id}" && isPlaying,
                         previewLoaded = nowPlaying?.songId == "preview:${result.id}",
-                        onPreview = { togglePreview(result) },
-                        onDownload = { app.downloader.enqueue(result) },
+                        onPreview = {
+                            when {
+                                result.isTorrent -> app.torrents.enqueue(result)
+                                else -> togglePreview(result)
+                            }
+                        },
+                        onDownload = {
+                            if (result.isTorrent) {
+                                app.torrents.enqueue(result)
+                                actionMessage = "Descargando torrent \"${result.title}\"…"
+                            } else {
+                                app.downloader.enqueue(result)
+                            }
+                        },
                     )
                 }
             }
@@ -533,23 +561,47 @@ private fun SearchResultRow(
             .padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        ArtImage(result.thumbnailUrl, 48.dp)
+        ArtImage(result.thumbnailUrl.ifBlank { null }, 48.dp)
         Column(
             modifier = Modifier
                 .weight(1f)
                 .padding(horizontal = 12.dp),
         ) {
             Text(result.title, maxLines = 2, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyLarge)
-            Text(
-                "${result.artist} · ${formatDuration(result.durationSec)}",
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            if (result.isTorrent) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "TORRENT",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        modifier = Modifier
+                            .background(
+                                MaterialTheme.colorScheme.primaryContainer,
+                                RoundedCornerShape(4.dp),
+                            )
+                            .padding(horizontal = 4.dp, vertical = 1.dp),
+                    )
+                    Text(
+                        result.artist,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(start = 6.dp),
+                    )
+                }
+            } else {
+                Text(
+                    "${result.artist} · ${formatDuration(result.durationSec)}",
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
-        // Preview: listen before deciding to download.
-        when {
+        // Preview: listen before deciding to download (torrents have no stream).
+        if (!result.isTorrent) when {
             previewResolving ->
                 CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
             previewPlaying ->

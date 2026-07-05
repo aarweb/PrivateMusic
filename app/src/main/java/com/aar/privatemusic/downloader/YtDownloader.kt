@@ -29,6 +29,9 @@ data class SearchResult(
     val artist: String,
     val durationSec: Int,
     val thumbnailUrl: String,
+    /** Resultado de torrent (1337x): sin preescucha, la acción copia el magnet. */
+    val isTorrent: Boolean = false,
+    val magnetUri: String? = null,
 )
 
 sealed interface DownloadState {

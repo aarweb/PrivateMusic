@@ -84,4 +84,5 @@ dependencies {
     implementation(libs.media3.cast)
     implementation(libs.nanohttpd)
     implementation(libs.mediarouter)
+    implementation(libs.libtorrent4j)
 }
