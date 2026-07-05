@@ -225,6 +225,9 @@ class PlaybackService : MediaLibraryService() {
             // trailing silence trimmed): crossfading INTO a dying tail sounds
             // like a cut no matter how seamless the engine is.
             var armedEffDur = 0L
+            // A failed handover (audio never surfaced / still misaligned) skips
+            // the crossfade for THAT track: gapless is better than replaying A.
+            var skipXfForId: String? = null
 
             fun gainOf(loudness: Float?, normalize: Boolean): Float =
                 if (normalize && loudness != null) {
@@ -294,7 +297,9 @@ class PlaybackService : MediaLibraryService() {
                     val curItem = player.currentMediaItem
                     val curUri = curItem?.localConfiguration?.uri
                     val curId = curItem?.mediaId
-                    val eligible = curUri != null && curId != null && !curId.startsWith("preview:")
+                    if (skipXfForId != null && skipXfForId != curId) skipXfForId = null
+                    val eligible = curUri != null && curId != null &&
+                        !curId.startsWith("preview:") && curId != skipXfForId
                     // Until armed we don't know the tail silence yet; pre-arm uses
                     // a wide window so the IO lookup happens in time either way.
                     val effDur = if (armedForId == curId) armedEffDur else duration
@@ -351,7 +356,9 @@ class PlaybackService : MediaLibraryService() {
                             tail.playbackState == Player.STATE_READY
                         if (!armedReady) {
                             // Fallback (seek straight into the window, odd file):
-                            // prepare now and wait for it like the old path did.
+                            // prepare now and WAIT for READY. Proceeding while
+                            // BUFFERING made the handover blind — the tail came up
+                            // seconds late and replayed part of A.
                             tail.playWhenReady = false
                             tail.volume = 0f
                             tail.setPlaybackSpeed(1f)
@@ -365,6 +372,11 @@ class PlaybackService : MediaLibraryService() {
                             armedGainA = gainFactor
                             armedGainB = 1f
                             armedNextId = player.getMediaItemAt(player.nextMediaItemIndex).mediaId
+                            var prep = 0
+                            while (tail.playbackState != Player.STATE_READY && prep < 1200) {
+                                delay(20)
+                                prep += 20
+                            }
                         }
                         val pos = player.currentPosition
                         val fadeLen = (effDur - pos).coerceIn(500L, crossfadeMs)
@@ -377,36 +389,62 @@ class PlaybackService : MediaLibraryService() {
                         if (kotlin.math.abs(mainPos - tail.currentPosition) > 60) {
                             tail.seekTo(mainPos + 40)
                             var resync = 0
-                            while (tail.playbackState != Player.STATE_READY && resync < 300) {
+                            while (tail.playbackState != Player.STATE_READY && resync < 500) {
                                 delay(20)
                                 resync += 20
                             }
                         }
-                        // Spin the tail up MUTED: its AudioTrack takes 100-800ms to
-                        // actually push samples, and during that warm-up the main
-                        // player keeps advancing — an audible tail would replay
-                        // that stretch of A (heard as ~1s repeating on handover).
+                        // Spin the tail up MUTED: its AudioTrack takes 100-800ms
+                        // (longer with the AutoMix tempo bend: Sonic lengthens the
+                        // pipeline) to actually push samples, and during that
+                        // warm-up the main player keeps advancing — an audible
+                        // tail would replay that stretch of A. Muted, waiting
+                        // longer costs nothing: A keeps sounding on the main.
                         tail.volume = 0f
                         tailAudioAdvancing = false
                         tail.play()
                         var waited = 0
-                        while (!tailAudioAdvancing && waited < 800) {
+                        while (!tailAudioAdvancing && waited < 1500) {
                             delay(20)
                             waited += 20
                         }
-                        // Audio is really out now; measure how far the tail's
-                        // CONTENT lags the main's and re-seek predicting the same
-                        // restart latency, so both A streams line up when audible.
+                        // Right after start the position tracker overshoots by up
+                        // to the AudioTrack buffer (~350ms): let it settle on the
+                        // real audio clock before trusting any measurement.
+                        delay(120)
+                        // Measure how far the tail's CONTENT is from the main's
+                        // and re-seek predicting the restart latency, so both A
+                        // streams line up when the tail becomes audible.
                         var drift = player.currentPosition - tail.currentPosition
-                        if (tailAudioAdvancing && drift > 60) {
+                        if (tailAudioAdvancing && kotlin.math.abs(drift) > 60) {
+                            val restartLatency = if (drift > 0) drift + 40 else 120L
                             tailAudioAdvancing = false
-                            tail.seekTo(player.currentPosition + drift + 40)
+                            tail.seekTo(player.currentPosition + restartLatency)
                             var rewait = 0
-                            while (!tailAudioAdvancing && rewait < 400) {
+                            while (!tailAudioAdvancing && rewait < 600) {
                                 delay(20)
                                 rewait += 20
                             }
+                            delay(120)
                             drift = player.currentPosition - tail.currentPosition
+                        }
+                        if (!tailAudioAdvancing || kotlin.math.abs(drift) > 250) {
+                            // No real audio (cold pipeline) or still misaligned:
+                            // a blind handover replays part of A. Skip this
+                            // crossfade — plain gapless beats an audible glitch.
+                            tail.stop()
+                            tail.clearMediaItems()
+                            tail.setPlaybackSpeed(1f)
+                            armedForId = null
+                            skipXfForId = curId
+                            player.volume = gainFactor
+                            android.util.Log.w(
+                                "Crossfade",
+                                "overlap skipped advancing=$tailAudioAdvancing driftMs=$drift waitedMs=$waited",
+                            )
+                            touchedVolume = true
+                            delay(100)
+                            continue
                         }
                         tail.volume = xfGainA
                         // Small safety margin for output latency, then hand over
