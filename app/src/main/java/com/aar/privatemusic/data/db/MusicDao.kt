@@ -255,6 +255,13 @@ interface MusicDao {
     @Query("SELECT EXISTS(SELECT 1 FROM songs WHERE id = :id)")
     suspend fun songExists(id: String): Boolean
 
+    /** First library song with this title+artist (case/space-insensitive), for dedup. */
+    @Query(
+        "SELECT * FROM songs WHERE lower(trim(title)) = lower(trim(:title)) " +
+            "AND lower(trim(artist)) = lower(trim(:artist)) LIMIT 1"
+    )
+    suspend fun findByTitleArtist(title: String, artist: String): Song?
+
     @Query("SELECT id FROM songs")
     fun observeSongIds(): Flow<List<String>>
 

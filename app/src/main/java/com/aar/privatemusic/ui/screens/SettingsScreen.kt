@@ -70,6 +70,8 @@ fun SettingsScreen(app: PrivateMusicApp, onOpenStats: () -> Unit, onOpenEq: () -
 
     var storage by remember { mutableStateOf<MusicRepository.StorageInfo?>(null) }
     var operationResult by remember { mutableStateOf<String?>(null) }
+    // Duplicate finder: null = closed, non-null (possibly empty) = dialog open.
+    var dupGroups by remember { mutableStateOf<List<List<com.aar.privatemusic.data.db.Song>>?>(null) }
     LaunchedEffect(Unit) { storage = app.repository.storageInfo() }
     LaunchedEffect(scanRequested) {
         if (scanRequested) {
@@ -440,6 +442,13 @@ fun SettingsScreen(app: PrivateMusicApp, onOpenStats: () -> Unit, onOpenEq: () -
         }
 
         SettingsAction(
+            title = "Buscar duplicados",
+            subtitle = "Encuentra canciones repetidas (mismo título y artista) y déjalas en una sola",
+        ) {
+            scope.launch { dupGroups = app.repository.duplicateGroups() }
+        }
+
+        SettingsAction(
             title = "Copia de seguridad ahora",
             subtitle = "Guarda la base de datos (se conservan las últimas 5)",
         ) {
@@ -455,6 +464,62 @@ fun SettingsScreen(app: PrivateMusicApp, onOpenStats: () -> Unit, onOpenEq: () -
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.primary,
                 modifier = Modifier.padding(vertical = 8.dp),
+            )
+        }
+
+        dupGroups?.let { groups ->
+            val totalExtra = groups.sumOf { it.size - 1 }
+            AlertDialog(
+                onDismissRequest = { dupGroups = null },
+                title = { Text(if (totalExtra == 0) "Sin duplicados" else "$totalExtra duplicados") },
+                text = {
+                    if (totalExtra == 0) {
+                        Text("No hay canciones repetidas en tu biblioteca.")
+                    } else {
+                        Column {
+                            Text(
+                                "Se conservará la mejor calidad de cada una y se eliminarán las copias:",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            groups.take(12).forEach { g ->
+                                Text(
+                                    "• ${g.first().title} · ${g.first().artist}  ×${g.size}",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    maxLines = 1,
+                                    modifier = Modifier.padding(top = 6.dp),
+                                )
+                            }
+                            if (groups.size > 12) {
+                                Text(
+                                    "…y ${groups.size - 12} más",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(top = 6.dp),
+                                )
+                            }
+                        }
+                    }
+                },
+                confirmButton = {
+                    if (totalExtra == 0) {
+                        TextButton(onClick = { dupGroups = null }) { Text("Cerrar") }
+                    } else {
+                        TextButton(onClick = {
+                            dupGroups = null
+                            scope.launch {
+                                val n = app.repository.removeDuplicates()
+                                storage = app.repository.storageInfo()
+                                operationResult = "$n duplicados eliminados"
+                            }
+                        }) { Text("Eliminar $totalExtra", color = MaterialTheme.colorScheme.error) }
+                    }
+                },
+                dismissButton = {
+                    if (totalExtra > 0) {
+                        TextButton(onClick = { dupGroups = null }) { Text("Cancelar") }
+                    }
+                },
             )
         }
 

@@ -165,12 +165,22 @@ class InternetArchiveDownloader(
                 return@forEachIndexed
             }
             val tags = readTags(out)
+            val title = tags.title ?: af.name.substringAfterLast('/').substringBeforeLast('.')
+            val artist = tags.artist ?: fallbackArtist
+            // Dedup: si ya tienes esta pista (mismo título+artista), usa la existente.
+            val dup = dao.findByTitleArtist(title, artist)
+            if (dup != null && dup.id != songId) {
+                out.delete()
+                playlistId?.let { addToPlaylistEnd(it, dup.id) }
+                imported++
+                return@forEachIndexed
+            }
             val quality = runCatching { readAudioQuality(out.absolutePath, tags.durationSec) }.getOrNull()
             dao.insertSong(
                 Song(
                     id = songId,
-                    title = tags.title ?: af.name.substringAfterLast('/').substringBeforeLast('.'),
-                    artist = tags.artist ?: fallbackArtist,
+                    title = title,
+                    artist = artist,
                     durationSec = tags.durationSec,
                     filePath = out.absolutePath,
                     artPath = cover.takeIf { it.exists() && it.length() > 0 }?.absolutePath,

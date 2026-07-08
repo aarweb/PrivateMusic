@@ -1,6 +1,7 @@
 package com.aar.privatemusic.ui.components
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -69,24 +70,38 @@ fun ArtImage(model: Any?, size: androidx.compose.ui.unit.Dp) {
     }
 }
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun SongRow(
     song: Song,
     onClick: () -> Unit,
     isCurrent: Boolean = false,
+    selectionMode: Boolean = false,
+    selected: Boolean = false,
+    onLongClick: (() -> Unit)? = null,
     trailing: @Composable () -> Unit = {},
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
             .background(
-                if (isCurrent) MaterialTheme.colorScheme.primary.copy(alpha = 0.10f)
-                else androidx.compose.ui.graphics.Color.Transparent
+                when {
+                    selected -> MaterialTheme.colorScheme.primary.copy(alpha = 0.18f)
+                    isCurrent -> MaterialTheme.colorScheme.primary.copy(alpha = 0.10f)
+                    else -> androidx.compose.ui.graphics.Color.Transparent
+                }
             )
             .padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        if (selectionMode) {
+            androidx.compose.material3.Checkbox(
+                checked = selected,
+                onCheckedChange = null,
+                modifier = Modifier.padding(end = 8.dp),
+            )
+        }
         ArtImage(song.artPath?.let { File(it) } ?: song.thumbnailUrl, 48.dp)
         Column(
             modifier = Modifier
@@ -119,7 +134,7 @@ fun SongRow(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        trailing()
+        if (!selectionMode) trailing()
     }
 }
 

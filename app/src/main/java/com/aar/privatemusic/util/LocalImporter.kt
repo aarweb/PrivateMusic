@@ -48,6 +48,14 @@ object LocalImporter {
                     val durationSec = (c.getLong(3) / 1000).toInt()
                     if (durationSec < 30) continue // ringtones, clips
 
+                    val title = c.getString(1)?.takeIf { it.isNotBlank() }
+                        ?: file.nameWithoutExtension
+                    val artist = c.getString(2)
+                        ?.takeIf { it.isNotBlank() && it != "<unknown>" }
+                        ?: "Desconocido"
+                    // Dedup: no reimportar si ya tienes la misma canción (otra fuente).
+                    if (dao.findByTitleArtist(title, artist) != null) continue
+
                     // Embedded cover art → cached copy next to our music.
                     var artPath: String? = null
                     runCatching {
@@ -64,11 +72,8 @@ object LocalImporter {
                     dao.insertSong(
                         Song(
                             id = id,
-                            title = c.getString(1)?.takeIf { it.isNotBlank() }
-                                ?: file.nameWithoutExtension,
-                            artist = c.getString(2)
-                                ?.takeIf { it.isNotBlank() && it != "<unknown>" }
-                                ?: "Desconocido",
+                            title = title,
+                            artist = artist,
                             durationSec = durationSec,
                             filePath = path,
                             artPath = artPath,

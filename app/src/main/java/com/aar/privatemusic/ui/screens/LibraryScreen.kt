@@ -1,5 +1,6 @@
 package com.aar.privatemusic.ui.screens
 
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -17,9 +18,13 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.PlaylistAdd
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Sort
 import androidx.compose.material3.AlertDialog
@@ -31,10 +36,12 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -74,6 +81,25 @@ fun LibraryScreen(app: PrivateMusicApp, onOpenArtist: (String) -> Unit = {}) {
     var songForKaraoke by remember { mutableStateOf<Song?>(null) }
     var songForDelete by remember { mutableStateOf<Song?>(null) }
     var query by remember { mutableStateOf("") }
+
+    // Multi-select: long-press a row to enter, tap to toggle.
+    var selectionMode by remember { mutableStateOf(false) }
+    val selectedIds = remember { mutableStateListOf<String>() }
+    var showBulkDelete by remember { mutableStateOf(false) }
+    var showBulkPlaylist by remember { mutableStateOf(false) }
+    fun exitSelection() {
+        selectionMode = false
+        selectedIds.clear()
+    }
+    fun toggleSelect(id: String) {
+        if (!selectedIds.remove(id)) selectedIds.add(id)
+        if (selectedIds.isEmpty()) selectionMode = false
+    }
+    fun startSelection(id: String) {
+        selectionMode = true
+        if (id !in selectedIds) selectedIds.add(id)
+    }
+    BackHandler(enabled = selectionMode) { exitSelection() }
 
     val context = LocalContext.current
     val artPicker = rememberLauncherForActivityResult(
@@ -124,6 +150,18 @@ fun LibraryScreen(app: PrivateMusicApp, onOpenArtist: (String) -> Unit = {}) {
     }
 
     Column(Modifier.fillMaxSize()) {
+        if (selectionMode) {
+            SelectionBar(
+                count = selectedIds.size,
+                onClose = { exitSelection() },
+                onSelectAll = {
+                    visibleSongs.forEach { if (it.id !in selectedIds) selectedIds.add(it.id) }
+                },
+                onAddToPlaylist = { showBulkPlaylist = true },
+                onDelete = { showBulkDelete = true },
+            )
+        }
+        if (!selectionMode) {
         OutlinedTextField(
             value = query,
             onValueChange = { query = it },
@@ -177,8 +215,9 @@ fun LibraryScreen(app: PrivateMusicApp, onOpenArtist: (String) -> Unit = {}) {
                 }
             }
         }
+        } // end if (!selectionMode)
 
-        if (artistView) {
+        if (artistView && !selectionMode) {
             val artists = remember(songs, query) {
                 songs
                     .filter { query.isBlank() || it.artist.contains(query, ignoreCase = true) }
@@ -211,7 +250,7 @@ fun LibraryScreen(app: PrivateMusicApp, onOpenArtist: (String) -> Unit = {}) {
             return@Column
         }
         LazyColumn(Modifier.fillMaxSize()) {
-            if (recent.isNotEmpty() && query.isBlank() && !onlyFavorites) {
+            if (recent.isNotEmpty() && query.isBlank() && !onlyFavorites && !selectionMode) {
                 item(key = "recent-header") {
                     Text(
                         "Reproducidas recientemente",
@@ -254,14 +293,21 @@ fun LibraryScreen(app: PrivateMusicApp, onOpenArtist: (String) -> Unit = {}) {
                 }
             }
 
-            items(visibleSongs, key = { it.id }) { song ->
+            items(visibleSongs, key = { it.id }, contentType = { "song" }) { song ->
                 var menuOpen by remember { mutableStateOf(false) }
                 SongRow(
                     song = song,
                     isCurrent = song.id == nowPlaying?.songId,
+                    selectionMode = selectionMode,
+                    selected = song.id in selectedIds,
+                    onLongClick = { startSelection(song.id) },
                     onClick = {
-                        val index = visibleSongs.indexOfFirst { it.id == song.id }
-                        app.playerController.playQueue(visibleSongs, index)
+                        if (selectionMode) {
+                            toggleSelect(song.id)
+                        } else {
+                            val index = visibleSongs.indexOfFirst { it.id == song.id }
+                            app.playerController.playQueue(visibleSongs, index)
+                        }
                     },
                     trailing = {
                         if (song.isFavorite) {
@@ -468,6 +514,66 @@ fun LibraryScreen(app: PrivateMusicApp, onOpenArtist: (String) -> Unit = {}) {
         )
     }
 
+    if (showBulkDelete) {
+        val toDelete = songs.filter { it.id in selectedIds }
+        val anyRemote = toDelete.any { !it.id.startsWith("local_") }
+        AlertDialog(
+            onDismissRequest = { showBulkDelete = false },
+            title = {
+                Text(
+                    if (toDelete.size == 1) "¿Eliminar 1 canción?"
+                    else "¿Eliminar ${toDelete.size} canciones?"
+                )
+            },
+            text = {
+                Text(
+                    if (anyRemote)
+                        "Se borrarán de la biblioteca y sus archivos de audio del dispositivo. Esta acción no se puede deshacer."
+                    else "Se quitarán de la biblioteca. Los archivos originales del dispositivo NO se borran."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showBulkDelete = false
+                    val n = toDelete.size
+                    scope.launch { app.repository.deleteSongs(toDelete) }
+                    com.aar.privatemusic.util.Feedback.show(if (n == 1) "1 eliminada" else "$n eliminadas")
+                    exitSelection()
+                }) { Text("Eliminar", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = { TextButton(onClick = { showBulkDelete = false }) { Text("Cancelar") } },
+        )
+    }
+
+    if (showBulkPlaylist) {
+        val ids = selectedIds.toList()
+        AddToPlaylistDialog(
+            playlists = playlists,
+            onSelect = { pl ->
+                showBulkPlaylist = false
+                scope.launch {
+                    val added = app.repository.addSongsToPlaylist(pl.id, ids)
+                    val skipped = ids.size - added
+                    com.aar.privatemusic.util.Feedback.show(
+                        if (skipped > 0) "Añadidas $added a \"${pl.name}\" ($skipped ya estaban)"
+                        else "Añadidas $added a \"${pl.name}\""
+                    )
+                }
+                exitSelection()
+            },
+            onCreateAndSelect = { name ->
+                showBulkPlaylist = false
+                scope.launch {
+                    val id = app.repository.createPlaylist(name)
+                    app.repository.addSongsToPlaylist(id, ids)
+                    com.aar.privatemusic.util.Feedback.show("Creada \"$name\" con ${ids.size} canciones")
+                }
+                exitSelection()
+            },
+            onDismiss = { showBulkPlaylist = false },
+        )
+    }
+
     songForAdventure?.let { from ->
         SonicAdventureDialog(
             from = from,
@@ -545,4 +651,43 @@ private fun SonicAdventureDialog(
         confirmButton = {},
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancelar") } },
     )
+}
+
+/** Contextual action bar shown while selecting songs in the library. */
+@Composable
+private fun SelectionBar(
+    count: Int,
+    onClose: () -> Unit,
+    onSelectAll: () -> Unit,
+    onAddToPlaylist: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    Surface(tonalElevation = 3.dp) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            IconButton(onClick = onClose) {
+                Icon(Icons.Filled.Close, contentDescription = "Cerrar selección")
+            }
+            Text(
+                if (count == 1) "1 seleccionada" else "$count seleccionadas",
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.weight(1f).padding(start = 4.dp),
+            )
+            IconButton(onClick = onSelectAll) {
+                Icon(Icons.Filled.DoneAll, contentDescription = "Seleccionar todo")
+            }
+            IconButton(onClick = onAddToPlaylist, enabled = count > 0) {
+                Icon(Icons.Filled.PlaylistAdd, contentDescription = "Añadir a playlist")
+            }
+            IconButton(onClick = onDelete, enabled = count > 0) {
+                Icon(
+                    Icons.Filled.Delete,
+                    contentDescription = "Eliminar",
+                    tint = MaterialTheme.colorScheme.error,
+                )
+            }
+        }
+    }
 }

@@ -160,13 +160,22 @@ class TorrentDownloader(
                 return@forEach
             }
             val tags = readTags(file)
+            val title = tags.title ?: file.nameWithoutExtension
+            val artist = tags.artist ?: result.title.substringBefore(" - ").trim()
+                .ifBlank { "Desconocido" }
+            // Dedup: si ya tienes esta pista (mismo título+artista), usa la existente.
+            val dup = dao.findByTitleArtist(title, artist)
+            if (dup != null && dup.id != songId) {
+                playlistId?.let { addToPlaylistEnd(it, dup.id) }
+                imported++
+                return@forEach
+            }
             val quality = runCatching { readAudioQuality(file.absolutePath, tags.durationSec) }.getOrNull()
             dao.insertSong(
                 Song(
                     id = songId,
-                    title = tags.title ?: file.nameWithoutExtension,
-                    artist = tags.artist ?: result.title.substringBefore(" - ").trim()
-                        .ifBlank { "Desconocido" },
+                    title = title,
+                    artist = artist,
                     durationSec = tags.durationSec,
                     filePath = file.absolutePath,
                     artPath = cover?.absolutePath,

@@ -422,4 +422,52 @@ class MusicRepository(
         dao.removeSongFromAllPlaylists(song.id)
         dao.deleteSong(song.id)
     }
+
+    // ---- Bulk actions ----
+
+    /** Deletes several songs (files + playlist refs + rows) in one go. */
+    suspend fun deleteSongs(songs: List<Song>) = songs.forEach { deleteSong(it) }
+
+    /**
+     * Adds [songIds] to a playlist, skipping any already present, appended in order.
+     * Returns how many were actually added (the rest were duplicates).
+     */
+    suspend fun addSongsToPlaylist(playlistId: Long, songIds: List<String>): Int {
+        val existing = dao.playlistSongsOnce(playlistId).map { it.id }.toSet()
+        val toAdd = songIds.filter { it !in existing }
+        var position = dao.playlistSize(playlistId)
+        toAdd.forEach { dao.addToPlaylist(PlaylistSongCrossRef(playlistId, it, position++)) }
+        return toAdd.size
+    }
+
+    /** True if a *different* library song already has this title+artist. */
+    suspend fun libraryHasDuplicate(title: String, artist: String, exceptId: String): Boolean =
+        dao.findByTitleArtist(title, artist)?.let { it.id != exceptId } ?: false
+
+    /**
+     * Groups of library songs sharing the same title+artist (each group has >1),
+     * best-quality song first so callers can keep it and drop the rest.
+     */
+    suspend fun duplicateGroups(): List<List<Song>> =
+        dao.songsOnce()
+            .groupBy { it.title.trim().lowercase() to it.artist.trim().lowercase() }
+            .values
+            .filter { it.size > 1 }
+            .map { group -> group.sortedByDescending { qualityScore(it) } }
+
+    /** Higher = better: lossless codecs win, then bitrate. */
+    private fun qualityScore(s: Song): Int {
+        val codecBonus = when (s.codec?.lowercase()) {
+            "flac", "alac" -> 1_000_000
+            else -> 0
+        }
+        return codecBonus + (s.bitrateKbps ?: 0)
+    }
+
+    /** Removes every duplicate keeping the best-quality copy of each. Returns removed count. */
+    suspend fun removeDuplicates(): Int {
+        val toRemove = duplicateGroups().flatMap { it.drop(1) }
+        deleteSongs(toRemove)
+        return toRemove.size
+    }
 }

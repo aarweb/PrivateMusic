@@ -78,6 +78,13 @@ class DeezerDownloader(
     }
 
     private suspend fun download(track: DeezerTrack, quality: String) {
+        // Dedup: si ya tienes esta canción (mismo título+artista) no la bajes otra vez.
+        dao.findByTitleArtist(track.title, track.artist)?.let { dup ->
+            if (dup.id != stateKey(track.id)) {
+                com.aar.privatemusic.util.Feedback.show("Ya tienes \"${track.title}\" en la biblioteca")
+                return
+            }
+        }
         val sess = ensureSession()
 
         // 1) Datos del track: TRACK_TOKEN para pedir la URL de descarga.

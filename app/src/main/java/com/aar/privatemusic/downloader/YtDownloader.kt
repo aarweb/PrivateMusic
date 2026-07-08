@@ -103,6 +103,19 @@ class YtDownloader(
         if (current is DownloadState.Queued || current is DownloadState.Downloading) return
         setState(result.id, DownloadState.Queued)
         scope.launch(Dispatchers.IO) {
+            // Dedup: si ya tienes esta canción (mismo título+artista, de cualquier
+            // fuente) no se descarga otra vez; la copia existente va al destino.
+            val dup = dao.findByTitleArtist(result.title, result.artist)
+            if (dup != null && dup.id != result.id) {
+                targetPlaylistId?.let { pid ->
+                    dao.addToPlaylist(
+                        com.aar.privatemusic.data.db.PlaylistSongCrossRef(pid, dup.id, dao.playlistSize(pid))
+                    )
+                }
+                setState(result.id, DownloadState.Done)
+                com.aar.privatemusic.util.Feedback.show("Ya tienes \"${result.title}\", no se descarga otra vez")
+                return@launch
+            }
             // Persist BEFORE downloading: if Android kills the process with a
             // full import queue, everything resumes on next app start.
             runCatching {
