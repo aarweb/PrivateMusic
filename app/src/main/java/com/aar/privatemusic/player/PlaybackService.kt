@@ -229,6 +229,10 @@ class PlaybackService : MediaLibraryService() {
      */
     private fun startVolumeLoop(player: ExoPlayer, dao: MusicDao) {
         mainScope.launch {
+            // Two streams summed in the OS mixer can peak past 0 dBFS at the
+            // crossfade midpoint and clip; a small constant margin (~ -1 dB) keeps
+            // the sum in range without an audible loudness dip.
+            val xfHeadroom = 0.9f
             var gainFactor = 1f
             var gainForId: String? = null
             var touchedVolume = false
@@ -302,8 +306,11 @@ class PlaybackService : MediaLibraryService() {
                         android.util.Log.d("Crossfade", "overlap end aborted=$aborted")
                     } else {
                         val t = (1f - remainingXf.toFloat() / xfDurationMs).coerceIn(0f, 1f)
-                        player.volume = gainFactor * kotlin.math.sqrt(t)
-                        tail.volume = xfGainA * kotlin.math.sqrt(1f - t)
+                        // Different tracks here (A on tail, B on main) → uncorrelated
+                        // → equal-power (sqrt) keeps perceived loudness flat; headroom
+                        // guards the mixer against midpoint peak clipping.
+                        player.volume = xfHeadroom * gainFactor * kotlin.math.sqrt(t)
+                        tail.volume = xfHeadroom * xfGainA * kotlin.math.sqrt(1f - t)
                         android.util.Log.d("Crossfade", "overlap t=$t mainVol=${player.volume} tailVol=${tail.volume}")
                     }
                     touchedVolume = true
@@ -429,8 +436,15 @@ class PlaybackService : MediaLibraryService() {
                         tail.volume = 0f
                         tailAudioAdvancing = false
                         tail.play()
+                        // AutoMix routes the tail through Sonic (tempo bend), which
+                        // lengthens the pipeline and delays real audio — the 1500ms
+                        // cap made those transitions time out and fall back to a hard
+                        // cut. Wait longer when AutoMix is on; capped to half the
+                        // window so A never runs into its own silence while muted.
+                        val warmupCap = (if (autoMix) 2600 else 1500)
+                            .coerceAtMost((crossfadeMs / 2).toInt())
                         var waited = 0
-                        while (!tailAudioAdvancing && waited < 1500) {
+                        while (!tailAudioAdvancing && waited < warmupCap) {
                             delay(20)
                             waited += 20
                         }
@@ -472,14 +486,20 @@ class PlaybackService : MediaLibraryService() {
                             delay(100)
                             continue
                         }
-                        tail.volume = xfGainA
-                        // Small safety margin for output latency, then hand over
-                        // with a ~100ms down-ramp instead of a hard mute.
+                        // Hand the OUTGOING track over from the main player to the
+                        // tail player. BOTH are playing the SAME audio A here, so
+                        // this sub-fade must be LINEAR-complementary (main down,
+                        // tail up, sum held constant at gainA). The old hard jump to
+                        // full tail while main ramped down doubled correlated A
+                        // (~+5 dB) and clipped the mixer — that was the "pop".
                         delay(80)
-                        for (step in 4 downTo 1) {
-                            player.volume = gainFactor * step / 5f
-                            delay(25)
+                        for (step in 0..5) {
+                            val s = step / 5f
+                            tail.volume = xfGainA * s
+                            player.volume = gainFactor * (1f - s)
+                            delay(20)
                         }
+                        tail.volume = xfGainA
                         player.volume = 0f
                         player.seekToNextMediaItem()
                         gainFactor = armedGainB
