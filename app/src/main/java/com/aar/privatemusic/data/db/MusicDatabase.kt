@@ -9,7 +9,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
     entities = [Song::class, Playlist::class, PlaylistSongCrossRef::class, PlayEvent::class, SmartPlaylist::class, WatchedSource::class, PlaylistFolder::class, PendingDownload::class],
-    version = 10,
+    version = 11,
     exportSchema = false,
 )
 abstract class MusicDatabase : RoomDatabase() {
@@ -85,6 +85,18 @@ abstract class MusicDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_10_11 = object : Migration(10, 11) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE songs ADD COLUMN album TEXT")
+                db.execSQL("ALTER TABLE songs ADD COLUMN albumArtist TEXT")
+                db.execSQL("ALTER TABLE songs ADD COLUMN year INTEGER")
+                db.execSQL("ALTER TABLE songs ADD COLUMN trackNumber INTEGER")
+                db.execSQL("ALTER TABLE songs ADD COLUMN mbid TEXT")
+                db.execSQL("ALTER TABLE songs ADD COLUMN isrc TEXT")
+                db.execSQL("ALTER TABLE songs ADD COLUMN metadataResolved INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
         private val MIGRATION_9_10 = object : Migration(9, 10) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL(
@@ -128,6 +140,7 @@ abstract class MusicDatabase : RoomDatabase() {
                 ).addMigrations(
                     MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4,
                     MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10,
+                    MIGRATION_10_11,
                 )
                     .build().also { instance = it }
             }

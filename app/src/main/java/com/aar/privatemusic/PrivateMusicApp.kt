@@ -43,6 +43,8 @@ class PrivateMusicApp : Application() {
         private set
     lateinit var playerController: PlayerController
         private set
+    lateinit var metadataService: com.aar.privatemusic.metadata.MetadataService
+        private set
 
     override fun onCreate() {
         super.onCreate()
@@ -59,6 +61,12 @@ class PrivateMusicApp : Application() {
         deezerDownloader = DeezerDownloader(this, dao, appScope)
         archive = InternetArchiveDownloader(this, dao, appScope)
         repository = MusicRepository(dao, downloader)
+        metadataService = com.aar.privatemusic.metadata.MetadataService(this, dao, downloader.musicDir)
+        // Auto-resolve canonical metadata (name/artist/album/cover/lyrics) after
+        // each YouTube download, applying only when the match is confident.
+        downloader.onDownloadComplete = { id ->
+            appScope.launch { dao.getSong(id)?.let { metadataService.autoIdentify(it) } }
+        }
         playerController = PlayerController(this) { songId ->
             appScope.launch {
                 repository.recordPlay(songId)

@@ -13,13 +13,20 @@ android {
         applicationId = "com.aar.privatemusic"
         minSdk = 26
         targetSdk = 35
-        versionCode = 46
-        versionName = "1.45"
+        versionCode = 47
+        versionName = "1.46"
 
         ndk {
             // arm64 only: every phone since ~2016. Halves the APK (yt-dlp/ffmpeg per ABI).
             abiFilters += listOf("arm64-v8a")
         }
+
+        // AcoustID application key (audio-fingerprint identify). Kept out of the
+        // repo: set `acoustidKey` in ~/.gradle/gradle.properties locally and the
+        // ACOUSTID_KEY secret in CI. Empty = fingerprint fallback disabled.
+        val acoustidKey = (project.findProperty("acoustidKey") as String?)
+            ?: System.getenv("ACOUSTID_KEY") ?: ""
+        buildConfigField("String", "ACOUSTID_KEY", "\"$acoustidKey\"")
     }
 
     signingConfigs {
@@ -56,6 +63,8 @@ android {
 }
 
 dependencies {
+    // Audio fingerprinting (Chromaprint via MediaCodec) for the AcoustID fallback.
+    implementation("com.github.cy745:fpcalc:1.3")
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.viewmodel.compose)

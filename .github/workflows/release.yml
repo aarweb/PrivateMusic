@@ -33,6 +33,8 @@ jobs:
           echo "PM_KEYSTORE=$RUNNER_TEMP/debug.keystore" >> "$GITHUB_ENV"
 
       - name: Compilar APK
+        env:
+          ACOUSTID_KEY: ${{ secrets.ACOUSTID_KEY }}
         run: ./gradlew assembleDebug --no-daemon
 
       - name: Comprobar firma

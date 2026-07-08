@@ -31,6 +31,19 @@ interface MusicDao {
     @Query("SELECT * FROM songs WHERE codec IS NULL")
     suspend fun songsMissingQuality(): List<Song>
 
+    // ---- Online metadata (identify pipeline) ----
+
+    @Query("""UPDATE songs SET title = :title, artist = :artist, album = :album,
+        albumArtist = :albumArtist, year = :year, trackNumber = :trackNumber,
+        mbid = :mbid, isrc = :isrc, metadataResolved = 1 WHERE id = :id""")
+    suspend fun updateCanonicalMeta(
+        id: String, title: String, artist: String, album: String?, albumArtist: String?,
+        year: Int?, trackNumber: Int?, mbid: String?, isrc: String?,
+    )
+
+    @Query("UPDATE songs SET metadataResolved = :resolved WHERE id = :id")
+    suspend fun setMetadataResolved(id: String, resolved: Boolean)
+
     // ---- Play history ----
 
     @Insert

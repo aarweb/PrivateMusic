@@ -5,6 +5,12 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.size
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -92,6 +98,7 @@ fun LibraryScreen(app: PrivateMusicApp, onOpenArtist: (String) -> Unit = {}) {
     var songForAdventure by remember { mutableStateOf<Song?>(null) }
     var songForKaraoke by remember { mutableStateOf<Song?>(null) }
     var songForDelete by remember { mutableStateOf<Song?>(null) }
+    var songForMetadata by remember { mutableStateOf<Song?>(null) }
     var query by remember { mutableStateOf("") }
 
     // Multi-select: long-press a row to enter, tap to toggle.
@@ -422,6 +429,13 @@ fun LibraryScreen(app: PrivateMusicApp, onOpenArtist: (String) -> Unit = {}) {
                                     },
                                 )
                                 DropdownMenuItem(
+                                    text = { Text("Buscar metadatos (identificar)") },
+                                    onClick = {
+                                        menuOpen = false
+                                        songForMetadata = song
+                                    },
+                                )
+                                DropdownMenuItem(
                                     text = {
                                         Text(
                                             if (song.snoozedUntil > System.currentTimeMillis())
@@ -544,6 +558,10 @@ fun LibraryScreen(app: PrivateMusicApp, onOpenArtist: (String) -> Unit = {}) {
             },
             dismissButton = { TextButton(onClick = { songForDelete = null }) { Text("Cancelar") } },
         )
+    }
+
+    songForMetadata?.let { song ->
+        MetadataIdentifyDialog(app = app, song = song, onDismiss = { songForMetadata = null })
     }
 
     if (showBulkDelete) {
@@ -765,4 +783,76 @@ private fun DownloadErrorRow(
             Icon(Icons.Filled.Close, contentDescription = "Descartar")
         }
     }
+}
+
+@Composable
+private fun MetadataIdentifyDialog(
+    app: PrivateMusicApp,
+    song: Song,
+    onDismiss: () -> Unit,
+) {
+    var loading by remember { mutableStateOf(true) }
+    var result by remember { mutableStateOf<com.aar.privatemusic.metadata.MatchResult?>(null) }
+    var applying by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    LaunchedEffect(song.id) {
+        result = runCatching { app.metadataService.identify(song) }.getOrNull()
+        loading = false
+    }
+    AlertDialog(
+        onDismissRequest = { if (!applying) onDismiss() },
+        title = { Text("Identificar canción", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+        text = {
+            when {
+                loading || applying -> Row(verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                    Spacer(Modifier.width(12.dp))
+                    Text(if (applying) "Aplicando…" else "Buscando en iTunes, Deezer y MusicBrainz…")
+                }
+                result == null || result!!.candidates.isEmpty() ->
+                    Text("No se encontraron coincidencias. Edita el título manualmente y vuelve a intentarlo.")
+                else -> Column(Modifier.heightIn(max = 380.dp).verticalScroll(rememberScrollState())) {
+                    result!!.candidates.take(6).forEachIndexed { i, m ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable(enabled = !applying) {
+                                    applying = true
+                                    scope.launch {
+                                        app.metadataService.apply(song, m)
+                                        com.aar.privatemusic.util.Feedback.show("Actualizada: ${m.artist} - ${m.title}")
+                                        onDismiss()
+                                    }
+                                }
+                                .padding(vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            ArtImage(m.artworkUrl, 48.dp)
+                            Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
+                                Text(
+                                    m.title + if (i == 0 && result!!.confident) "  ·  recomendado" else "",
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                )
+                                Text(
+                                    listOfNotNull(
+                                        m.artist.ifBlank { null },
+                                        m.album,
+                                        m.year?.toString(),
+                                    ).joinToString(" · "),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = { TextButton(onClick = { if (!applying) onDismiss() }) { Text("Cerrar") } },
+    )
 }

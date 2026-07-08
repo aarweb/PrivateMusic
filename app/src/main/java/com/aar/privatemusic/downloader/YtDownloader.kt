@@ -83,6 +83,10 @@ class YtDownloader(
     /** Wired from the app: true while audio is actually playing. */
     var isPlayingProvider: () -> Boolean = { false }
 
+    /** Wired from the app: called with a song id right after a successful
+     *  download so it can auto-resolve online metadata (title/artist/cover/lyrics). */
+    var onDownloadComplete: ((String) -> Unit)? = null
+
     // Per-id coroutine handles and titles, so downloads can be cancelled and the
     // notification can name what's downloading.
     private val jobs = ConcurrentHashMap<String, Job>()
@@ -185,6 +189,8 @@ class YtDownloader(
                     if (playing) soloWhilePlaying.withLock { runHeavy() } else runHeavy()
                     dao.deletePending(result.id)
                     setState(result.id, DownloadState.Done)
+                    // Fire-and-forget: resolve canonical tags/cover/lyrics online.
+                    onDownloadComplete?.invoke(result.id)
                 }
             } catch (e: CancellationException) {
                 purgeCancelled(result.id)

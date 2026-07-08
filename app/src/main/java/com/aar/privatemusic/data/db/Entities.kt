@@ -30,6 +30,15 @@ data class Song(
     val bpm: Float? = null,
     val camelot: String? = null,
     val sonicFeatures: String? = null,
+    // Canonical tags resolved from online services (iTunes/Deezer/MusicBrainz).
+    val album: String? = null,
+    val albumArtist: String? = null, // band/group or album artist when it differs
+    val year: Int? = null,
+    val trackNumber: Int? = null,
+    val mbid: String? = null,        // MusicBrainz recording id
+    val isrc: String? = null,        // international standard recording code
+    // True once the online identify pipeline ran (avoids re-running forever).
+    val metadataResolved: Boolean = false,
 )
 
 /** Rule-based playlist evaluated live against the library. */
