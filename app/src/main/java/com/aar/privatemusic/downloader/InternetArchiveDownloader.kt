@@ -10,6 +10,7 @@ import com.aar.privatemusic.data.db.Song
 import com.aar.privatemusic.util.readAudioQuality
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
@@ -23,6 +24,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
 import java.security.MessageDigest
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Descarga un ítem de Internet Archive (álbum/concierto) e importa sus pistas a
@@ -48,6 +50,8 @@ class InternetArchiveDownloader(
 
     // Un ítem a la vez: pueden ser conciertos enteros (muchas pistas grandes).
     private val slots = Semaphore(1)
+
+    private val jobs = ConcurrentHashMap<String, Job>()
 
     private val audioExtensions = setOf(
         "flac", "mp3", "m4a", "aac", "opus", "ogg", "wav", "aiff", "aif", "wma", "alac",
@@ -88,18 +92,30 @@ class InternetArchiveDownloader(
         val current = _downloads.value[id]
         if (current is DownloadState.Queued || current is DownloadState.Downloading) return
         setState(id, DownloadState.Queued)
-        scope.launch(Dispatchers.IO) {
+        val job = scope.launch(Dispatchers.IO) {
             slots.withPermit {
                 try {
                     val imported = downloadAndImport(result)
                     if (imported == 0) throw IllegalStateException("El ítem no tiene audio descargable")
                     setState(id, DownloadState.Done)
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    _downloads.update { it - id }
+                    throw e
                 } catch (e: Exception) {
                     Log.e("ArchiveDownloader", "archive failed for $id", e)
                     setState(id, DownloadState.Failed(e.message ?: "error"))
+                } finally {
+                    jobs.remove(id)
                 }
             }
         }
+        jobs[id] = job
+    }
+
+    /** Cancels an Internet Archive item download. */
+    fun cancel(id: String) {
+        jobs.remove(id)?.cancel()
+        _downloads.update { it - id }
     }
 
     private data class ArchiveFile(val name: String, val ext: String, val format: String, val track: Int)

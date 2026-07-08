@@ -11,17 +11,24 @@ import com.aar.privatemusic.util.LoudnessScanner
 import com.aar.privatemusic.util.readAudioQuality
 import com.yausername.youtubedl_android.YoutubeDL
 import com.yausername.youtubedl_android.YoutubeDLRequest
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.File
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.Executors
 
 data class SearchResult(
     val id: String,
@@ -65,6 +72,27 @@ class YtDownloader(
     // Two simultaneous downloads at most; the rest wait in queue.
     private val slots = Semaphore(2)
 
+    // 80/20 playback vs. download: downloads run on background-priority threads
+    // and, WHILE music is playing, are held to a single concurrent job plus a
+    // bandwidth cap so decoding/IO never steals cycles from the audio pipeline.
+    private val downloadDispatcher = Executors.newFixedThreadPool(2) { r ->
+        Thread(r, "yt-download").apply { priority = Thread.MIN_PRIORITY }
+    }.asCoroutineDispatcher()
+    private val soloWhilePlaying = Mutex()
+
+    /** Wired from the app: true while audio is actually playing. */
+    var isPlayingProvider: () -> Boolean = { false }
+
+    // Per-id coroutine handles and titles, so downloads can be cancelled and the
+    // notification can name what's downloading.
+    private val jobs = ConcurrentHashMap<String, Job>()
+    private val titles = ConcurrentHashMap<String, String>()
+    // Ids the user cancelled: killing yt-dlp makes execute() throw a *normal*
+    // exception (not CancellationException), so the download loop consults this
+    // set to treat that as a cancel (clean up, drop pending) instead of a retry.
+    private val cancelled: MutableSet<String> =
+        java.util.Collections.newSetFromMap(ConcurrentHashMap<String, Boolean>())
+
     suspend fun search(query: String, limit: Int = 20): List<SearchResult> =
         kotlinx.coroutines.withTimeoutOrNull(45_000) {
             searchInner(query, limit)
@@ -101,54 +129,137 @@ class YtDownloader(
     fun enqueue(result: SearchResult, targetPlaylistId: Long? = null) {
         val current = _downloads.value[result.id]
         if (current is DownloadState.Queued || current is DownloadState.Downloading) return
+        titles[result.id] = result.title
         setState(result.id, DownloadState.Queued)
-        scope.launch(Dispatchers.IO) {
-            // Dedup: si ya tienes esta canción (mismo título+artista, de cualquier
-            // fuente) no se descarga otra vez; la copia existente va al destino.
-            val dup = dao.findByTitleArtist(result.title, result.artist)
-            if (dup != null && dup.id != result.id) {
-                targetPlaylistId?.let { pid ->
-                    dao.addToPlaylist(
-                        com.aar.privatemusic.data.db.PlaylistSongCrossRef(pid, dup.id, dao.playlistSize(pid))
-                    )
-                }
-                setState(result.id, DownloadState.Done)
-                com.aar.privatemusic.util.Feedback.show("Ya tienes \"${result.title}\", no se descarga otra vez")
-                return@launch
-            }
-            // Persist BEFORE downloading: if Android kills the process with a
-            // full import queue, everything resumes on next app start.
-            runCatching {
-                dao.upsertPending(
-                    com.aar.privatemusic.data.db.PendingDownload(
-                        id = result.id,
-                        title = result.title,
-                        artist = result.artist,
-                        durationSec = result.durationSec,
-                        thumbnailUrl = result.thumbnailUrl,
-                        targetPlaylistId = targetPlaylistId,
-                        addedAt = System.currentTimeMillis(),
-                    )
-                )
-            }
-            slots.withPermit {
-                try {
-                    if (!dao.songExists(result.id)) download(result)
-                    targetPlaylistId?.let { playlistId ->
-                        val position = dao.playlistSize(playlistId)
+        // Foreground notification (progress + pending count + cancel) while active.
+        DownloadService.ensureRunning(context)
+        val job = scope.launch(downloadDispatcher) {
+            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
+            try {
+                // Dedup: si ya tienes esta canción (mismo título+artista, de cualquier
+                // fuente) no se descarga otra vez; la copia existente va al destino.
+                val dup = dao.findByTitleArtist(result.title, result.artist)
+                if (dup != null && dup.id != result.id) {
+                    targetPlaylistId?.let { pid ->
                         dao.addToPlaylist(
-                            com.aar.privatemusic.data.db.PlaylistSongCrossRef(playlistId, result.id, position)
+                            com.aar.privatemusic.data.db.PlaylistSongCrossRef(pid, dup.id, dao.playlistSize(pid))
                         )
                     }
+                    setState(result.id, DownloadState.Done)
+                    com.aar.privatemusic.util.Feedback.show("Ya tienes \"${result.title}\", no se descarga otra vez")
+                    return@launch
+                }
+                if (result.id in cancelled) return@launch
+                // Persist BEFORE downloading: if Android kills the process with a
+                // full import queue, everything resumes on next app start.
+                runCatching {
+                    dao.upsertPending(
+                        com.aar.privatemusic.data.db.PendingDownload(
+                            id = result.id,
+                            title = result.title,
+                            artist = result.artist,
+                            durationSec = result.durationSec,
+                            thumbnailUrl = result.thumbnailUrl,
+                            targetPlaylistId = targetPlaylistId,
+                            addedAt = System.currentTimeMillis(),
+                        )
+                    )
+                }
+                slots.withPermit {
+                    if (result.id in cancelled) return@withPermit
+                    // While playing, only ONE download runs the heavy phase at a
+                    // time (the other permit-holder waits here): playback first.
+                    val playing = isPlayingProvider()
+                    val runHeavy: suspend () -> Unit = {
+                        if (!dao.songExists(result.id)) download(result)
+                        targetPlaylistId?.let { playlistId ->
+                            val position = dao.playlistSize(playlistId)
+                            dao.addToPlaylist(
+                                com.aar.privatemusic.data.db.PlaylistSongCrossRef(playlistId, result.id, position)
+                            )
+                        }
+                    }
+                    if (playing) soloWhilePlaying.withLock { runHeavy() } else runHeavy()
                     dao.deletePending(result.id)
                     setState(result.id, DownloadState.Done)
-                } catch (e: Exception) {
+                }
+            } catch (e: CancellationException) {
+                purgeCancelled(result.id)
+                throw e
+            } catch (e: Exception) {
+                if (result.id in cancelled) {
+                    // The exception came from us killing the yt-dlp process.
+                    purgeCancelled(result.id)
+                } else {
                     Log.e("YtDownloader", "download failed for ${result.id}", e)
                     runCatching { dao.bumpPendingAttempts(result.id) }
                     setState(result.id, DownloadState.Failed(e.message ?: "error"))
                 }
+            } finally {
+                jobs.remove(result.id)
+                titles.remove(result.id)
+                cancelled.remove(result.id)
             }
         }
+        jobs[result.id] = job
+    }
+
+    /** Drops all trace of a cancelled download (pending row, partials, state). */
+    private suspend fun purgeCancelled(id: String) {
+        runCatching { dao.deletePending(id) }
+        cleanupPartial(id)
+        _downloads.update { it - id }
+    }
+
+    /** Cancels a single download: kills the process, forgets it, cleans partials. */
+    fun cancel(id: String) {
+        cancelled.add(id)
+        jobs.remove(id)?.cancel()
+        titles.remove(id)
+        _downloads.update { it - id }
+        scope.launch(Dispatchers.IO) {
+            runCatching { YoutubeDL.getInstance().destroyProcessById(id) }
+            runCatching { dao.deletePending(id) }
+            cleanupPartial(id)
+        }
+    }
+
+    /** Cancels every queued/running download and wipes the pending queue. */
+    fun cancelAll() {
+        val ids = _downloads.value
+            .filterValues { it is DownloadState.Queued || it is DownloadState.Downloading }
+            .keys.toList()
+        cancelled.addAll(ids)
+        jobs.values.toList().forEach { it.cancel() }
+        jobs.clear()
+        titles.clear()
+        _downloads.update { m ->
+            m.filterValues { it !is DownloadState.Queued && it !is DownloadState.Downloading }
+        }
+        scope.launch(Dispatchers.IO) {
+            ids.forEach { runCatching { YoutubeDL.getInstance().destroyProcessById(it) } }
+            runCatching { dao.clearPending() }
+            // A killed download may re-insert its pending row moments later; clear twice.
+            kotlinx.coroutines.delay(300)
+            runCatching { dao.clearPending() }
+            ids.forEach { cleanupPartial(it) }
+        }
+    }
+
+    /** How many downloads are queued or in progress. */
+    fun activeCount(): Int =
+        _downloads.value.count { it.value is DownloadState.Queued || it.value is DownloadState.Downloading }
+
+    /** Title + progress (0-100) of the item currently downloading, for the notification. */
+    fun currentDownloading(): Pair<String, Float>? =
+        _downloads.value.entries.firstOrNull { it.value is DownloadState.Downloading }
+            ?.let { (titles[it.key] ?: "…") to (it.value as DownloadState.Downloading).progress }
+
+    /** Removes half-written files left by a cancelled/failed download. */
+    private fun cleanupPartial(id: String) {
+        musicDir.listFiles()
+            ?.filter { it.name.startsWith("$id.") }
+            ?.forEach { runCatching { it.delete() } }
     }
 
     /** Re-enqueues downloads that were pending when the process last died. */
@@ -324,13 +435,20 @@ class YtDownloader(
             addOption("--convert-thumbnails", "jpg")
             addOption("-o", "${musicDir.absolutePath}/%(id)s.%(ext)s")
             addOption("-o", "thumbnail:${musicDir.absolutePath}/%(id)s.%(ext)s")
+            // 80/20: while music plays, cap the download rate so it never
+            // saturates network/IO ahead of the audio pipeline.
+            if (isPlayingProvider()) addOption("--limit-rate", "1M")
             // SponsorBlock: strip non-music segments (intros, outros, talking).
             if (AppSettings.readSponsorBlock(context)) {
                 addOption("--sponsorblock-remove", "music_offtopic")
             }
         }
         ytdl.execute(request, result.id) { progress, _, _ ->
-            setState(result.id, DownloadState.Downloading(progress.coerceIn(0f, 100f)))
+            // Ignore late progress ticks after the user cancelled (the native
+            // process is being torn down): otherwise they'd re-add the id.
+            if (result.id !in cancelled) {
+                setState(result.id, DownloadState.Downloading(progress.coerceIn(0f, 100f)))
+            }
         }
 
         val audioFile = musicDir.listFiles()

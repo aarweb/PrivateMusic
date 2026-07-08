@@ -10,6 +10,7 @@ import com.aar.privatemusic.data.db.Song
 import com.aar.privatemusic.util.readAudioQuality
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -25,6 +26,7 @@ import org.libtorrent4j.TorrentHandle
 import org.libtorrent4j.TorrentInfo
 import java.io.File
 import java.security.MessageDigest
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Descarga torrents de música con un motor BitTorrent embebido (libtorrent4j) e
@@ -54,6 +56,9 @@ class TorrentDownloader(
     // Un solo torrent a la vez: son grandes y compiten por ancho de banda.
     private val slots = Semaphore(1)
 
+    private val jobs = ConcurrentHashMap<String, Job>()
+    private val handles = ConcurrentHashMap<String, TorrentHandle>()
+
     // El motor es caro de arrancar (carga .so nativos), así que se comparte y se
     // inicia perezosamente la primera vez que se descarga algo.
     @Volatile private var session: SessionManager? = null
@@ -78,18 +83,33 @@ class TorrentDownloader(
         val current = _downloads.value[id]
         if (current is DownloadState.Queued || current is DownloadState.Downloading) return
         setState(id, DownloadState.Queued)
-        scope.launch(Dispatchers.IO) {
+        val job = scope.launch(Dispatchers.IO) {
             slots.withPermit {
                 try {
                     val imported = downloadAndImport(result, magnet)
                     if (imported == 0) throw IllegalStateException("Sin audios en el torrent")
                     setState(id, DownloadState.Done)
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    runCatching { handles.remove(id)?.let { ensureSession().remove(it) } }
+                    _downloads.update { it - id }
+                    throw e
                 } catch (e: Exception) {
                     Log.e("TorrentDownloader", "torrent failed for $id", e)
                     setState(id, DownloadState.Failed(e.message ?: "error"))
+                } finally {
+                    jobs.remove(id)
+                    handles.remove(id)
                 }
             }
         }
+        jobs[id] = job
+    }
+
+    /** Cancels a torrent download: stops the transfer and forgets it. */
+    fun cancel(id: String) {
+        jobs.remove(id)?.cancel()
+        runCatching { handles.remove(id)?.let { ensureSession().remove(it) } }
+        _downloads.update { it - id }
     }
 
     /** Descarga el torrent y devuelve cuántas pistas de audio se importaron. */
@@ -112,6 +132,7 @@ class TorrentDownloader(
             s.download(magnet, downloadDir, flags)
             val handle = awaitHandle(s, hash)
                 ?: throw IllegalStateException("El torrent no arrancó")
+            handles[result.id] = handle
 
             // Espera a resolver los metadatos (lista de ficheros) vía trackers+DHT.
             val info = awaitMetadata(handle)

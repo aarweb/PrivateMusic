@@ -67,6 +67,8 @@ class PrivateMusicApp : Application() {
                 }
             }
         }
+        // 80/20: downloads throttle themselves while audio is actually playing.
+        downloader.isPlayingProvider = { playerController.isPlaying.value }
         // Restore the last session's queue (paused) after a cold start.
         appScope.launch {
             playerController.savedQueue()?.let { saved ->

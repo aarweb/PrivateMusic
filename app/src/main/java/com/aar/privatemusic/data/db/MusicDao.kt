@@ -322,6 +322,9 @@ interface MusicDao {
     @Query("DELETE FROM pending_downloads WHERE id = :id")
     suspend fun deletePending(id: String)
 
+    @Query("DELETE FROM pending_downloads")
+    suspend fun clearPending()
+
     @Query("UPDATE pending_downloads SET attempts = attempts + 1 WHERE id = :id")
     suspend fun bumpPendingAttempts(id: String)
 

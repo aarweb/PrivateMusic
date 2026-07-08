@@ -23,6 +23,7 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Card
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.Dp
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.PlayCircleOutline
@@ -561,6 +562,13 @@ fun SearchScreen(app: PrivateMusicApp) {
                                 else -> app.downloader.enqueue(result)
                             }
                         },
+                        onCancel = {
+                            when {
+                                result.isTorrent -> app.torrents.cancel(result.id)
+                                result.isArchive -> app.archive.cancel(result.id)
+                                else -> app.downloader.cancel(result.id)
+                            }
+                        },
                     )
                 }
             }
@@ -632,6 +640,7 @@ private fun SearchResultRow(
     previewLoaded: Boolean,
     onPreview: () -> Unit,
     onDownload: () -> Unit,
+    onCancel: () -> Unit = {},
     qualityLabel: String? = null,
 ) {
     Row(
@@ -703,13 +712,23 @@ private fun SearchResultRow(
             inLibrary || state is DownloadState.Done ->
                 Icon(Icons.Filled.Check, "Descargada", tint = MaterialTheme.colorScheme.primary)
             state is DownloadState.Queued ->
-                CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+                IconButton(onClick = onCancel) {
+                    Box(contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+                        Icon(Icons.Filled.Close, "Cancelar", modifier = Modifier.size(14.dp))
+                    }
+                }
             state is DownloadState.Downloading ->
-                CircularProgressIndicator(
-                    progress = { state.progress / 100f },
-                    modifier = Modifier.size(24.dp),
-                    strokeWidth = 2.dp,
-                )
+                IconButton(onClick = onCancel) {
+                    Box(contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(
+                            progress = { state.progress / 100f },
+                            modifier = Modifier.size(24.dp),
+                            strokeWidth = 2.dp,
+                        )
+                        Icon(Icons.Filled.Close, "Cancelar", modifier = Modifier.size(14.dp))
+                    }
+                }
             state is DownloadState.Failed ->
                 IconButton(onClick = onDownload) {
                     Icon(Icons.Filled.ErrorOutline, "Reintentar", tint = MaterialTheme.colorScheme.error)
