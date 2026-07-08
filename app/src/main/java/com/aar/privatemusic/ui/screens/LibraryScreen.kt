@@ -25,6 +25,7 @@ import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlaylistAdd
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Sort
 import androidx.compose.material3.AlertDialog
@@ -72,6 +73,17 @@ fun LibraryScreen(app: PrivateMusicApp, onOpenArtist: (String) -> Unit = {}) {
     val nowPlaying by app.playerController.nowPlaying.collectAsState()
     val recent by app.repository.observeRecentlyPlayed(10).collectAsState(initial = emptyList())
     val playlists by app.repository.observePlaylists().collectAsState(initial = emptyList())
+    val pendingDownloads by app.repository.observePendingDownloads().collectAsState(initial = emptyList())
+    val downloadStates by app.downloader.downloads.collectAsState()
+    // Downloads that failed (this session, or a stuck row from a past session):
+    // shown in an errors section with a retry button. Active ones are excluded.
+    val failedDownloads = pendingDownloads.filter { p ->
+        when (val st = downloadStates[p.id]) {
+            is com.aar.privatemusic.downloader.DownloadState.Failed -> true
+            null -> p.attempts >= 1
+            else -> false
+        }
+    }
     val scope = rememberCoroutineScope()
 
     var songForPlaylist by remember { mutableStateOf<Song?>(null) }
@@ -250,6 +262,26 @@ fun LibraryScreen(app: PrivateMusicApp, onOpenArtist: (String) -> Unit = {}) {
             return@Column
         }
         LazyColumn(Modifier.fillMaxSize()) {
+            if (failedDownloads.isNotEmpty() && query.isBlank() && !selectionMode) {
+                item(key = "dl-errors-header") {
+                    Text(
+                        "Descargas con error",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                    )
+                }
+                items(failedDownloads, key = { "dlerr-${it.id}" }, contentType = { "dlerr" }) { p ->
+                    val msg = (downloadStates[p.id] as? com.aar.privatemusic.downloader.DownloadState.Failed)?.message
+                    DownloadErrorRow(
+                        title = p.title,
+                        thumbnailUrl = p.thumbnailUrl,
+                        message = msg,
+                        onRetry = { app.downloader.retry(p) },
+                        onDismiss = { app.downloader.cancel(p.id) },
+                    )
+                }
+            }
             if (recent.isNotEmpty() && query.isBlank() && !onlyFavorites && !selectionMode) {
                 item(key = "recent-header") {
                     Text(
@@ -688,6 +720,49 @@ private fun SelectionBar(
                     tint = MaterialTheme.colorScheme.error,
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun DownloadErrorRow(
+    title: String,
+    thumbnailUrl: String,
+    message: String?,
+    onRetry: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        ArtImage(thumbnailUrl, 48.dp)
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .padding(horizontal = 12.dp),
+        ) {
+            Text(
+                title,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Text(
+                message?.take(90) ?: "No se pudo descargar",
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+        }
+        IconButton(onClick = onRetry) {
+            Icon(Icons.Filled.Refresh, contentDescription = "Reintentar")
+        }
+        IconButton(onClick = onDismiss) {
+            Icon(Icons.Filled.Close, contentDescription = "Descartar")
         }
     }
 }

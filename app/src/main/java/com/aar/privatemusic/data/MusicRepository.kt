@@ -32,6 +32,8 @@ class MusicRepository(
     fun observeSongIds(): Flow<List<String>> = dao.observeSongIds()
     fun observeSong(id: String): Flow<Song?> = dao.observeSong(id)
     fun observeRecentlyPlayed(limit: Int = 10): Flow<List<Song>> = dao.observeRecentlyPlayed(limit)
+    fun observePendingDownloads(): Flow<List<com.aar.privatemusic.data.db.PendingDownload>> =
+        dao.observePendingDownloads()
 
     suspend fun setFavorite(id: String, favorite: Boolean) = dao.setFavorite(id, favorite)
 

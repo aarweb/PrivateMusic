@@ -331,6 +331,10 @@ interface MusicDao {
     @Query("SELECT * FROM pending_downloads WHERE attempts < 3 ORDER BY addedAt ASC")
     suspend fun pendingDownloads(): List<PendingDownload>
 
+    /** All pending rows (incl. exhausted retries) for the library "errors" section. */
+    @Query("SELECT * FROM pending_downloads ORDER BY addedAt ASC")
+    fun observePendingDownloads(): kotlinx.coroutines.flow.Flow<List<PendingDownload>>
+
     // ---- Playlist folders ----
 
     @Query("SELECT * FROM playlist_folders ORDER BY createdAt ASC")

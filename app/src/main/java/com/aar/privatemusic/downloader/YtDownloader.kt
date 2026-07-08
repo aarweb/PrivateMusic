@@ -129,6 +129,9 @@ class YtDownloader(
     fun enqueue(result: SearchResult, targetPlaylistId: Long? = null) {
         val current = _downloads.value[result.id]
         if (current is DownloadState.Queued || current is DownloadState.Downloading) return
+        // Re-enqueuing clears any stale "cancelled" flag from a prior dismiss so
+        // the new attempt isn't aborted on start.
+        cancelled.remove(result.id)
         titles[result.id] = result.title
         setState(result.id, DownloadState.Queued)
         // Foreground notification (progress + pending count + cancel) while active.
@@ -222,6 +225,16 @@ class YtDownloader(
             runCatching { dao.deletePending(id) }
             cleanupPartial(id)
         }
+    }
+
+    /** Manual retry from the library errors list: clears the failed state and
+     *  re-enqueues. `enqueue` upserts the pending row (REPLACE) so attempts reset. */
+    fun retry(p: com.aar.privatemusic.data.db.PendingDownload) {
+        _downloads.update { it - p.id }
+        enqueue(
+            SearchResult(p.id, p.title, p.artist, p.durationSec, p.thumbnailUrl),
+            p.targetPlaylistId,
+        )
     }
 
     /** Cancels every queued/running download and wipes the pending queue. */
