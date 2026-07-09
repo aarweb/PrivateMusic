@@ -85,14 +85,22 @@ fun App(shortcuts: KeyShortcuts) {
 
     val database = remember { openMusicDatabase(DesktopStorage.dataDir) }
     val dao = remember { database.musicDao() }
-    val player = remember { DesktopPlayer(engine, dao) }
+    val settings = remember { DesktopSettings() }
+    val player = remember { DesktopPlayer(engine, dao, settings) }
+    // El ecualizador guardado tiene que sonar desde la primera canción.
+    remember {
+        engine.setEqualizer(
+            settings.eqEnabled.value,
+            settings.eqPreamp.value,
+            FloatArray(engine.equalizerBands.size) { settings.eqAmps.value.getOrElse(it) { 0f } },
+        )
+    }
     val sync = remember { SyncClient(dao, DesktopStorage.musicDir, DesktopStorage.artDir) }
     val scope = rememberCoroutineScope()
 
     // Las descargas sobreviven a cualquier recomposición y a cambiar de pestaña:
     // su ámbito es la aplicación, no la interfaz.
     val appScope = remember { CoroutineScope(SupervisorJob() + Dispatchers.IO) }
-    val settings = remember { DesktopSettings() }
     val downloaderEnv = remember { DesktopDownloaderEnv() }
     val yt = remember { YtDlpDownloader(downloaderEnv, dao, appScope, DesktopStorage.binDir) }
     val deezer = remember {
@@ -186,6 +194,7 @@ fun App(shortcuts: KeyShortcuts) {
                         Tab.AJUSTES -> SettingsScreen(
                             songs = songs,
                             settings = settings,
+                            engine = engine,
                             syncing = syncing,
                             syncStatus = syncStatus,
                             onSync = ::runSync,

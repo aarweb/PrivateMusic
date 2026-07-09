@@ -20,6 +20,52 @@ class DesktopSettings(dataDir: File = DesktopStorage.dataDir) {
         if (file.exists()) file.inputStream().use(::load)
     }
 
+    // --- Reproducción ----------------------------------------------------
+
+    /** Segundos de fundido entre canciones. 0 = desactivado. */
+    private val _crossfadeSec = MutableStateFlow(props.getProperty(KEY_CROSSFADE, "0").toIntOrNull() ?: 0)
+    val crossfadeSec: StateFlow<Int> = _crossfadeSec
+
+    private val _normalizeVolume = MutableStateFlow(props.getProperty(KEY_NORMALIZE, "false").toBoolean())
+    val normalizeVolume: StateFlow<Boolean> = _normalizeVolume
+
+    /** Iguala el tempo de la saliente al de la entrante durante el fundido. */
+    private val _autoMix = MutableStateFlow(props.getProperty(KEY_AUTOMIX, "false").toBoolean())
+    val autoMix: StateFlow<Boolean> = _autoMix
+
+    private val _eqEnabled = MutableStateFlow(props.getProperty(KEY_EQ_ENABLED, "false").toBoolean())
+    val eqEnabled: StateFlow<Boolean> = _eqEnabled
+
+    private val _eqPreamp = MutableStateFlow(props.getProperty(KEY_EQ_PREAMP, "0").toFloatOrNull() ?: 0f)
+    val eqPreamp: StateFlow<Float> = _eqPreamp
+
+    /** Amplificación en dB por banda; lista vacía = nunca se ha tocado. */
+    private val _eqAmps = MutableStateFlow(
+        props.getProperty(KEY_EQ_AMPS, "").split(",").mapNotNull { it.toFloatOrNull() },
+    )
+    val eqAmps: StateFlow<List<Float>> = _eqAmps
+
+    fun setCrossfadeSec(value: Int) = put(KEY_CROSSFADE, value.toString()) { _crossfadeSec.value = value }
+
+    fun setNormalizeVolume(value: Boolean) = put(KEY_NORMALIZE, value.toString()) { _normalizeVolume.value = value }
+
+    fun setAutoMix(value: Boolean) = put(KEY_AUTOMIX, value.toString()) { _autoMix.value = value }
+
+    fun setEqEnabled(value: Boolean) = put(KEY_EQ_ENABLED, value.toString()) { _eqEnabled.value = value }
+
+    fun setEqPreamp(value: Float) = put(KEY_EQ_PREAMP, value.toString()) { _eqPreamp.value = value }
+
+    fun setEqAmps(value: List<Float>) =
+        put(KEY_EQ_AMPS, value.joinToString(",")) { _eqAmps.value = value }
+
+    private inline fun put(key: String, value: String, update: () -> Unit) {
+        props.setProperty(key, value)
+        update()
+        save()
+    }
+
+    // --- Deezer ----------------------------------------------------------
+
     private val _deezerArl = MutableStateFlow(props.getProperty(KEY_ARL, ""))
     val deezerArl: StateFlow<String> = _deezerArl
 
@@ -70,6 +116,12 @@ class DesktopSettings(dataDir: File = DesktopStorage.dataDir) {
     }
 
     private companion object {
+        const val KEY_CROSSFADE = "crossfade_sec"
+        const val KEY_NORMALIZE = "normalize_volume"
+        const val KEY_AUTOMIX = "automix"
+        const val KEY_EQ_ENABLED = "eq_enabled"
+        const val KEY_EQ_PREAMP = "eq_preamp"
+        const val KEY_EQ_AMPS = "eq_amps"
         const val KEY_ARL = "deezer_arl"
         const val KEY_USER = "deezer_user"
         const val KEY_COUNTRY = "deezer_country"

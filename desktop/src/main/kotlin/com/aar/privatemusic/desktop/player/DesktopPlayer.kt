@@ -3,6 +3,7 @@ package com.aar.privatemusic.desktop.player
 import com.aar.privatemusic.data.db.MusicDao
 import com.aar.privatemusic.data.db.PlayEvent
 import com.aar.privatemusic.data.db.Song
+import com.aar.privatemusic.desktop.DesktopSettings
 import com.aar.privatemusic.desktop.audio.AudioEngine
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -22,7 +23,11 @@ import java.io.File
  */
 enum class RepeatMode { OFF, ALL, ONE }
 
-class DesktopPlayer(private val engine: AudioEngine, private val dao: MusicDao) {
+class DesktopPlayer(
+    private val engine: AudioEngine,
+    private val dao: MusicDao,
+    private val settings: DesktopSettings,
+) {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -52,6 +57,80 @@ class DesktopPlayer(private val engine: AudioEngine, private val dao: MusicDao) 
         // Terminar sola una canción y pulsar "siguiente" no son lo mismo: sólo
         // lo primero repite o vuelve al principio de la cola.
         engine.onFinished = { advanceAutomatically() }
+        scope.launch { crossfadeWatcher() }
+    }
+
+    // --- Fundido y normalización -----------------------------------------
+
+    /**
+     * Ganancia que lleva la pista a [TARGET_LOUDNESS_DB]. Sólo se baja, nunca se
+     * sube por encima de su nivel original: subir una pista bajita hasta el
+     * objetivo la haría saturar.
+     */
+    private fun gainOf(song: Song): Float {
+        val loudness = song.loudnessDb
+        if (!settings.normalizeVolume.value || loudness == null) return 1f
+        val gainDb = (TARGET_LOUDNESS_DB - loudness).coerceIn(-12f, 0f)
+        return Math.pow(10.0, gainDb / 20.0).toFloat()
+    }
+
+    /**
+     * Vigila el final de la pista para lanzar el cruce. VLC no avisa "quedan N
+     * segundos": hay que preguntarle. A 200 ms el error del punto de entrada es
+     * inaudible y no cuesta nada.
+     */
+    private suspend fun crossfadeWatcher() {
+        while (true) {
+            kotlinx.coroutines.delay(200)
+            val crossfadeMs = settings.crossfadeSec.value * 1000L
+            if (crossfadeMs == 0L) continue
+            if (_preview.value != null || engine.crossfading.value) continue
+            if (!engine.isPlaying.value) continue
+            // Repetir-una vuelve a la misma pista: cruzarla consigo misma no.
+            if (_repeat.value == RepeatMode.ONE) continue
+            val song = _current.value ?: continue
+            val duration = engine.durationMs.value
+            // Una pista más corta que dos ventanas de cruce se pasaría la vida
+            // fundiéndose. Y sin duración conocida no hay dónde apuntar.
+            if (duration <= crossfadeMs * 2) continue
+            // El silencio final ya medido no forma parte de la canción: cruzar
+            // hacia él suena a corte por mucho que el motor sea perfecto.
+            val effectiveEnd = duration - (song.tailSilenceMs ?: 0L)
+            if (effectiveEnd - engine.positionMs.value > crossfadeMs) continue
+            val position = nextPosition() ?: continue
+            crossfadeTo(position, crossfadeMs, song)
+        }
+    }
+
+    /** Índice de la siguiente según el modo de repetición, o null si no hay. */
+    private fun nextPosition(): Int? {
+        val next = _index.value + 1
+        return when {
+            next in _queue.value.indices -> next
+            _repeat.value == RepeatMode.ALL && _queue.value.isNotEmpty() -> 0
+            else -> null
+        }
+    }
+
+    private fun crossfadeTo(position: Int, crossfadeMs: Long, outgoing: Song) {
+        val song = _queue.value.getOrNull(position) ?: return
+        val file = File(song.filePath)
+        if (!file.canRead()) return
+        // AutoMix: la saliente se lleva al tempo de la entrante mientras se apaga,
+        // así el cruce no suena a dos canciones a destiempo. Nunca más de un 10%:
+        // pasado ahí, el cambio de tono se nota.
+        val outBpm = outgoing.bpm
+        val inBpm = song.bpm
+        val rateOut = if (settings.autoMix.value && outBpm != null && inBpm != null && outBpm > 0f) {
+            (inBpm / outBpm).coerceIn(0.9f, 1.1f)
+        } else 1f
+
+        _index.value = position
+        _current.value = song
+        engine.crossfadeTo(file, gainOf(song), crossfadeMs, rateOut)
+        scope.launch {
+            runCatching { dao.insertPlayEvent(PlayEvent(songId = song.id, playedAt = System.currentTimeMillis())) }
+        }
     }
 
     // --- Preescucha ------------------------------------------------------
@@ -115,6 +194,7 @@ class DesktopPlayer(private val engine: AudioEngine, private val dao: MusicDao) 
         _index.value = position
         _current.value = song
         _preview.value = null
+        engine.setGain(gainOf(song))
         engine.play(file)
         scope.launch {
             runCatching { dao.insertPlayEvent(PlayEvent(songId = song.id, playedAt = System.currentTimeMillis())) }
@@ -174,5 +254,10 @@ class DesktopPlayer(private val engine: AudioEngine, private val dao: MusicDao) 
     fun refresh(songs: List<Song>) {
         val id = _current.value?.id ?: return
         songs.firstOrNull { it.id == id }?.let { _current.value = it }
+    }
+
+    companion object {
+        /** Sonoridad objetivo al normalizar, la misma que el móvil (y que el streaming). */
+        const val TARGET_LOUDNESS_DB = -14f
     }
 }

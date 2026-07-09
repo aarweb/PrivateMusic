@@ -1,6 +1,8 @@
 package com.aar.privatemusic.desktop.ui
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -264,13 +266,15 @@ private fun PlaylistDetail(
 fun SettingsScreen(
     songs: List<Song>,
     settings: com.aar.privatemusic.desktop.DesktopSettings,
+    engine: com.aar.privatemusic.desktop.audio.AudioEngine,
     syncing: Boolean,
     syncStatus: String?,
     onSync: () -> Unit,
     update: DesktopUpdater.UpdateInfo?,
     onUpdate: () -> Unit,
 ) {
-    Column(Modifier.fillMaxSize().padding(24.dp)) {
+    // Con el ecualizador desplegado esto mide más que cualquier ventana.
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp)) {
         Text("Ajustes", style = MaterialTheme.typography.headlineSmall)
 
         Text("Móvil", Modifier.padding(top = 24.dp, bottom = 8.dp), style = MaterialTheme.typography.titleMedium)
@@ -292,6 +296,8 @@ fun SettingsScreen(
                 Text("  $it", Modifier.padding(start = 8.dp), style = MaterialTheme.typography.bodySmall)
             }
         }
+
+        PlaybackSettings(settings, engine)
 
         DeezerSettings(settings)
 
