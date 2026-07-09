@@ -164,10 +164,19 @@ fun DeezerLoginDialog(app: PrivateMusicApp, onClose: () -> Unit) {
     // El WebView principal vive aquí; la emergente se añade encima, ya adjunta.
     val container = remember { FrameLayout(context) }
 
+    /**
+     * Nunca destruyas el WebView dentro de un callback suyo: `onCloseWindow`
+     * llega mientras la emergente todavía está entregando el resultado del
+     * OAuth al `opener` por postMessage, y arrasarla ahí deja a Deezer sin
+     * respuesta ("Se ha producido un error"). Lo aplazamos a la cola de la
+     * vista, cuando Chromium ya ha soltado la ventana.
+     */
     fun dismissPopup(child: WebView) {
-        container.removeView(child)
-        child.destroy()
         popup = null
+        child.post {
+            container.removeView(child)
+            child.destroy()
+        }
     }
 
     /** Chrome client de la emergente: Google la cierra sola al terminar el OAuth. */
@@ -238,8 +247,11 @@ fun DeezerLoginDialog(app: PrivateMusicApp, onClose: () -> Unit) {
             ),
         )
         onDispose {
-            popup?.let { runCatching { dismissPopup(it) } }
+            // Aquí sí destruimos ya: el diálogo se va y no hay callback en curso.
+            val child = popup
+            popup = null
             container.removeAllViews()
+            child?.destroy()
             webView.destroy()
         }
     }
