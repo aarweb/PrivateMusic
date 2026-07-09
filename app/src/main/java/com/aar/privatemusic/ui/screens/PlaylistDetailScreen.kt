@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -21,7 +22,9 @@ import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.PlaylistAdd
 import androidx.compose.material.icons.filled.PlaylistRemove
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Shuffle
+import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
@@ -33,6 +36,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
@@ -53,14 +57,63 @@ import sh.calvin.reorderable.ReorderableItem
 import sh.calvin.reorderable.rememberReorderableLazyListState
 import java.io.File
 
+/**
+ * Orden de VISTA de una playlist. Es no destructivo: [MANUAL] sirve el orden
+ * guardado en `position` y el resto sólo reordena en memoria, así que el orden
+ * manual del usuario sobrevive a mirar la lista por artista o por duración.
+ */
+private enum class PlaylistSort(val label: String) {
+    MANUAL("Manual"),
+    TITLE("Título"),
+    ARTIST("Artista"),
+    ALBUM("Álbum"),
+    ADDED("Más recientes"),
+    DURATION("Duración"),
+    MOST_PLAYED("Más escuchadas"),
+}
+
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun PlaylistDetailScreen(app: PrivateMusicApp, playlistId: Long) {
-    val songs by app.repository.observePlaylistSongs(playlistId).collectAsState(initial = emptyList())
+    val allSongs by app.repository.observePlaylistSongs(playlistId).collectAsState(initial = emptyList())
     val playlists by app.repository.observePlaylists().collectAsState(initial = emptyList())
     val playlist = playlists.firstOrNull { it.id == playlistId }
     val nowPlaying by app.playerController.nowPlaying.collectAsState()
     val scope = rememberCoroutineScope()
+
+    var sort by remember { mutableStateOf(PlaylistSort.MANUAL) }
+    var sortMenuOpen by remember { mutableStateOf(false) }
+    var query by remember { mutableStateOf("") }
+    var searching by remember { mutableStateOf(false) }
+    // Conteos sólo cuando hacen falta: es una consulta, no un Flow.
+    var playCounts by remember { mutableStateOf<Map<String, Int>>(emptyMap()) }
+    LaunchedEffect(sort) {
+        if (sort == PlaylistSort.MOST_PLAYED && playCounts.isEmpty()) {
+            playCounts = runCatching { app.repository.playCounts() }.getOrDefault(emptyMap())
+        }
+    }
+
+    val songs = remember(allSongs, sort, query, playCounts) {
+        val sorted = when (sort) {
+            PlaylistSort.MANUAL -> allSongs
+            PlaylistSort.TITLE -> allSongs.sortedBy { it.title.lowercase() }
+            PlaylistSort.ARTIST -> allSongs.sortedWith(compareBy({ it.artist.lowercase() }, { it.title.lowercase() }))
+            PlaylistSort.ALBUM -> allSongs.sortedWith(compareBy({ it.album?.lowercase() ?: "￿" }, { it.trackNumber ?: 0 }))
+            PlaylistSort.ADDED -> allSongs.sortedByDescending { it.addedAt }
+            PlaylistSort.DURATION -> allSongs.sortedByDescending { it.durationSec }
+            PlaylistSort.MOST_PLAYED -> allSongs.sortedByDescending { playCounts[it.id] ?: 0 }
+        }
+        if (query.isBlank()) sorted else sorted.filter { s ->
+            val q = query.trim().lowercase()
+            s.title.lowercase().contains(q) || s.artist.lowercase().contains(q) ||
+                s.album?.lowercase()?.contains(q) == true
+        }
+    }
+
+    // Arrastrar sólo tiene sentido con el orden guardado y sin filtrar: en
+    // cualquier otra vista los índices de pantalla no son los de `position`,
+    // y reordenar corrompería el orden manual.
+    val canReorder = sort == PlaylistSort.MANUAL && query.isBlank() && !searching
 
     // Multi-select: long-press a row to enter, tap to toggle.
     var selectionMode by remember { mutableStateOf(false) }
@@ -82,13 +135,17 @@ fun PlaylistDetailScreen(app: PrivateMusicApp, playlistId: Long) {
 
     val lazyListState = rememberLazyListState()
     val reorderableState = rememberReorderableLazyListState(lazyListState) { from, to ->
-        val reordered = songs.toMutableList().apply {
-            add(to.index, removeAt(from.index))
+        // Por clave y no por índice: los índices de la lista perezosa cuentan
+        // también la cabecera, así que usarlos movía la canción de al lado.
+        val fromIdx = allSongs.indexOfFirst { it.id == from.key }
+        val toIdx = allSongs.indexOfFirst { it.id == to.key }
+        if (canReorder && fromIdx >= 0 && toIdx >= 0) {
+            val reordered = allSongs.toMutableList().apply { add(toIdx, removeAt(fromIdx)) }
+            scope.launch { app.repository.reorderPlaylist(playlistId, reordered.map { it.id }) }
         }
-        scope.launch { app.repository.reorderPlaylist(playlistId, reordered.map { it.id }) }
     }
 
-    if (songs.isEmpty()) {
+    if (allSongs.isEmpty()) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Text(
                 "Playlist vacía.\nAñade canciones desde la Biblioteca.",
@@ -141,7 +198,7 @@ fun PlaylistDetailScreen(app: PrivateMusicApp, playlistId: Long) {
     }
     LazyColumn(state = lazyListState, modifier = Modifier.weight(1f).fillMaxWidth()) {
         item(key = "header") {
-            val totalMin = songs.sumOf { it.durationSec } / 60
+            val totalMin = allSongs.sumOf { it.durationSec } / 60
             Row(
                 Modifier
                     .fillMaxWidth()
@@ -161,7 +218,9 @@ fun PlaylistDetailScreen(app: PrivateMusicApp, playlistId: Long) {
                         overflow = TextOverflow.Ellipsis,
                     )
                     Text(
-                        "${songs.size} canciones · $totalMin min",
+                        // Al filtrar, el contador de la playlist entera engañaría.
+                        if (songs.size != allSongs.size) "${songs.size} de ${allSongs.size} canciones"
+                        else "${allSongs.size} ${if (allSongs.size == 1) "canción" else "canciones"} · $totalMin min",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -180,11 +239,63 @@ fun PlaylistDetailScreen(app: PrivateMusicApp, playlistId: Long) {
                     Text("Reproducir", Modifier.padding(start = 6.dp))
                 }
                 androidx.compose.material3.OutlinedButton(
-                    onClick = { app.playerController.playQueueShuffled(songs) },
+                    onClick = {
+                        // Aleatorio que no repite lo de ayer (ver shuffleFewerRepeats).
+                        scope.launch {
+                            app.playerController.playQueueInOrder(
+                                app.repository.shuffleFewerRepeats(songs),
+                            )
+                        }
+                    },
                     modifier = Modifier.weight(1f).padding(start = 12.dp),
                 ) {
                     Icon(Icons.Filled.Shuffle, contentDescription = null)
                     Text("Aleatorio", Modifier.padding(start = 6.dp))
+                }
+            }
+
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (searching) {
+                    androidx.compose.material3.OutlinedTextField(
+                        value = query,
+                        onValueChange = { query = it },
+                        singleLine = true,
+                        placeholder = { Text("Buscar en la playlist") },
+                        modifier = Modifier.weight(1f).padding(vertical = 4.dp),
+                    )
+                    IconButton(onClick = { searching = false; query = "" }) {
+                        Icon(Icons.Filled.Close, contentDescription = "Cerrar búsqueda")
+                    }
+                } else {
+                    IconButton(onClick = { searching = true }) {
+                        Icon(Icons.Filled.Search, contentDescription = "Buscar en la playlist")
+                    }
+                    Box {
+                        TextButton(onClick = { sortMenuOpen = true }) {
+                            Icon(Icons.AutoMirrored.Filled.Sort, contentDescription = null)
+                            Text(sort.label, Modifier.padding(start = 6.dp))
+                        }
+                        DropdownMenu(sortMenuOpen, onDismissRequest = { sortMenuOpen = false }) {
+                            PlaylistSort.entries.forEach { option ->
+                                DropdownMenuItem(
+                                    text = { Text(option.label) },
+                                    onClick = { sort = option; sortMenuOpen = false },
+                                )
+                            }
+                        }
+                    }
+                    Spacer(Modifier.weight(1f))
+                    if (sort != PlaylistSort.MANUAL) {
+                        Text(
+                            "orden de vista",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(end = 12.dp),
+                        )
+                    }
                 }
             }
         }
@@ -275,8 +386,10 @@ fun PlaylistDetailScreen(app: PrivateMusicApp, playlistId: Long) {
                                 )
                             }
                         }
-                        IconButton(onClick = {}, modifier = Modifier.draggableHandle()) {
-                            Icon(Icons.Filled.DragHandle, contentDescription = "Reordenar")
+                        if (canReorder) {
+                            IconButton(onClick = {}, modifier = Modifier.draggableHandle()) {
+                                Icon(Icons.Filled.DragHandle, contentDescription = "Reordenar")
+                            }
                         }
                         }
                     }

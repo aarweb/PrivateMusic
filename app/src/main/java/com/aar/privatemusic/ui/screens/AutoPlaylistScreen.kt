@@ -52,28 +52,11 @@ fun AutoPlaylistScreen(app: PrivateMusicApp, type: AutoPlaylistType) {
             style = MaterialTheme.typography.titleLarge,
             modifier = Modifier.padding(16.dp),
         )
-        if (songs.isNotEmpty()) {
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 4.dp),
-            ) {
-                Button(
-                    onClick = { app.playerController.playQueue(songs, 0) },
-                    modifier = Modifier.weight(1f),
-                ) {
-                    Icon(Icons.Filled.PlayArrow, contentDescription = null)
-                    Text("Reproducir", Modifier.padding(start = 6.dp))
-                }
-                OutlinedButton(
-                    onClick = { app.playerController.playQueueShuffled(songs) },
-                    modifier = Modifier.weight(1f).padding(start = 12.dp),
-                ) {
-                    Icon(Icons.Filled.Shuffle, contentDescription = null)
-                    Text("Aleatorio", Modifier.padding(start = 6.dp))
-                }
-            }
-        }
+        com.aar.privatemusic.ui.components.GeneratedPlaylistActions(
+            app = app,
+            songs = songs,
+            defaultName = type.title,
+        )
         if (songs.isEmpty()) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text(

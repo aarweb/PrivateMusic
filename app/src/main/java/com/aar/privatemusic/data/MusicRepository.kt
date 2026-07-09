@@ -3,6 +3,7 @@ package com.aar.privatemusic.data
 import com.aar.privatemusic.data.db.ArtistPlays
 import com.aar.privatemusic.data.db.DayPlays
 import com.aar.privatemusic.data.db.MusicDao
+import com.aar.privatemusic.data.db.LastPlay
 import com.aar.privatemusic.data.db.PlayCount
 import com.aar.privatemusic.data.db.PlayEvent
 import com.aar.privatemusic.data.db.Playlist
@@ -20,6 +21,7 @@ import com.aar.privatemusic.util.AudioAnalyzer
 import com.aar.privatemusic.util.LoudnessScanner
 import com.aar.privatemusic.util.readAudioQuality
 import com.aar.privatemusic.util.saveCoverImage
+import kotlin.math.pow
 import kotlinx.coroutines.flow.Flow
 
 class MusicRepository(
@@ -403,6 +405,10 @@ class MusicRepository(
     fun observeSmartPlaylist(id: Long): Flow<SmartPlaylist?> = dao.observeSmartPlaylist(id)
     fun observePlayCounts(): Flow<List<PlayCount>> = dao.observePlayCounts()
 
+    /** Reproducciones por canción, para ordenar una vista puntualmente. */
+    suspend fun playCounts(): Map<String, Int> =
+        dao.playCountsOnce().associate { it.songId to it.plays }
+
     suspend fun createSmartPlaylist(sp: SmartPlaylist): Long = dao.insertSmartPlaylist(sp)
     suspend fun deleteSmartPlaylist(sp: SmartPlaylist) = dao.deleteSmartPlaylist(sp)
 
@@ -471,5 +477,29 @@ class MusicRepository(
         val toRemove = duplicateGroups().flatMap { it.drop(1) }
         deleteSongs(toRemove)
         return toRemove.size
+    }
+
+    /**
+     * Aleatorio que evita repetir lo que acabas de escuchar. Sigue siendo azar:
+     * es un muestreo sin reemplazo con pesos (Efraimidis–Spirakis, clave
+     * `random^(1/peso)`), no una ordenación por antigüedad, que sería
+     * determinista y sonaría siempre igual.
+     *
+     * El peso crece con los días desde la última escucha y se satura al mes;
+     * lo nunca reproducido pesa lo máximo.
+     */
+    suspend fun shuffleFewerRepeats(songs: List<Song>): List<Song> {
+        if (songs.size < 3) return songs.shuffled()
+        val lastPlayed = runCatching { dao.lastPlayedOnce() }.getOrDefault(emptyList())
+            .associate { it.songId to it.lastPlayed }
+        val now = System.currentTimeMillis()
+        val month = 30.0 * 24 * 60 * 60 * 1000
+
+        return songs.map { song ->
+            val age = lastPlayed[song.id]?.let { (now - it).coerceAtLeast(0L) / month } ?: 1.0
+            // 0.05 evita que un peso 0 lo destierre al final para siempre.
+            val weight = 0.05 + age.coerceAtMost(1.0)
+            song to Math.random().pow(1.0 / weight)
+        }.sortedByDescending { it.second }.map { it.first }
     }
 }

@@ -129,6 +129,8 @@ data class ArtistPlays(val artist: String, val plays: Int)
 
 data class PlayCount(val songId: String, val plays: Int)
 
+data class LastPlay(val songId: String, val lastPlayed: Long)
+
 data class PlaylistWithSongs(
     @androidx.room.Embedded val playlist: Playlist,
     @Relation(

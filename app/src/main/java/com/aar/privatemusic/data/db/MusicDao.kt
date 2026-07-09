@@ -162,6 +162,10 @@ interface MusicDao {
     @Query("UPDATE playlists SET coverPath = :coverPath WHERE id = :id")
     suspend fun updatePlaylistCover(id: Long, coverPath: String)
 
+    /** Última escucha por canción; alimenta el aleatorio que evita repetir lo reciente. */
+    @Query("SELECT songId, MAX(playedAt) AS lastPlayed FROM play_history GROUP BY songId")
+    suspend fun lastPlayedOnce(): List<LastPlay>
+
     // ---- Stats (Replay) ----
 
     @Query(

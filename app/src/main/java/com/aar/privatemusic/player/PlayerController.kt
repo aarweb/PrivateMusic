@@ -208,6 +208,21 @@ class PlayerController(
         c.play()
     }
 
+    /**
+     * Reproduce la lista EXACTAMENTE en el orden dado, apagando el aleatorio del
+     * reproductor. Para colas ya barajadas por nosotros (ver
+     * `MusicRepository.shuffleFewerRepeats`): si dejáramos `shuffleModeEnabled`,
+     * ExoPlayer rebarajaría por encima y tiraría los pesos.
+     */
+    fun playQueueInOrder(songs: List<Song>) {
+        val c = controller ?: return
+        if (songs.isEmpty()) return
+        c.shuffleModeEnabled = false
+        c.setMediaItems(songs.map { it.toMediaItem() }, 0, 0L)
+        c.prepare()
+        c.play()
+    }
+
     /** Inserts the song right after the current one. Starts playback if idle. */
     fun playNext(song: Song) {
         val c = controller ?: return

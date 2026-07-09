@@ -148,6 +148,13 @@ fun SmartPlaylistDetailScreen(app: PrivateMusicApp, smartPlaylistId: Long) {
             return
         }
 
+        com.aar.privatemusic.ui.components.GeneratedPlaylistActions(
+            app = app,
+            songs = matching,
+            defaultName = playlist.name,
+            modifier = Modifier.padding(top = 8.dp),
+        )
+
         LazyColumn(Modifier.fillMaxSize()) {
             itemsIndexed(matching, key = { _, s -> s.id }) { index, song ->
                 SongRow(
