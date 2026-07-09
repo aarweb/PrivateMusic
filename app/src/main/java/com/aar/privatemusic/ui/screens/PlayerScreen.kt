@@ -656,12 +656,15 @@ private fun LyricsPanel(
     // cayendo en otra línea: pulsabas un verso y saltaba a otro sitio.
     var touching by remember { mutableStateOf(false) }
     LaunchedEffect(currentIdx, touching) {
-        if (currentIdx >= 0 && !touching) listState.animateScrollToItem(maxOf(0, currentIdx - 2))
-    }
-    LaunchedEffect(touching) {
-        // Y si ya estaba animando cuando el usuario tocó, se corta en seco:
-        // un scroll de cero píxeles con prioridad alta cancela la animación.
-        if (touching) listState.scroll(androidx.compose.foundation.MutatePriority.UserInput) {}
+        if (currentIdx < 0 || touching) return@LaunchedEffect
+        // La espera no es cosmética. Cuando la lista se desplaza, el gesto de
+        // scroll cancela la pulsación de la línea que hay debajo del dedo, y el
+        // toque se pierde. Con `touching` a secas no basta: el cambio de verso
+        // puede caer en el mismo fotograma que el dedo, antes de que el efecto
+        // se entere. Esperando, cualquier toque en curso da tiempo a completarse
+        // y, al empezar, relanza este efecto y cancela el desplazamiento.
+        delay(300)
+        if (!touching) listState.animateScrollToItem(maxOf(0, currentIdx - 2))
     }
 
     LazyColumn(
