@@ -25,7 +25,6 @@ import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material.icons.filled.PushPin
-import androidx.compose.material.icons.filled.QueueMusic
 import androidx.compose.foundation.layout.height
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
@@ -56,9 +55,8 @@ import androidx.compose.ui.unit.dp
 import com.aar.privatemusic.PrivateMusicApp
 import com.aar.privatemusic.data.db.Playlist
 import com.aar.privatemusic.data.db.PlaylistFolder
-import com.aar.privatemusic.ui.components.ArtImage
+import com.aar.privatemusic.ui.components.PlaylistCover
 import kotlinx.coroutines.launch
-import java.io.File
 
 @Composable
 fun PlaylistsScreen(
@@ -78,6 +76,7 @@ fun PlaylistsScreen(
     var playlistForFolder by remember { mutableStateOf<Playlist?>(null) }
     var fabMenuOpen by remember { mutableStateOf(false) }
     var playlistForCover by remember { mutableStateOf<Playlist?>(null) }
+    var playlistForRename by remember { mutableStateOf<Playlist?>(null) }
     var playlistForDelete by remember { mutableStateOf<Playlist?>(null) }
     var folderForDelete by remember { mutableStateOf<PlaylistFolder?>(null) }
     var smartForDelete by remember { mutableStateOf<com.aar.privatemusic.data.db.SmartPlaylist?>(null) }
@@ -247,6 +246,13 @@ fun PlaylistsScreen(
                     indent = indent,
                     onClick = { onOpenPlaylist(pl.id) },
                     onDelete = { playlistForDelete = pl },
+                    onRename = { playlistForRename = pl },
+                    onDuplicate = {
+                        scope.launch {
+                            app.repository.duplicatePlaylist(pl)
+                            com.aar.privatemusic.util.Feedback.show("Playlist duplicada")
+                        }
+                    },
                     onChangeCover = {
                         playlistForCover = pl
                         coverPicker.launch(
@@ -360,6 +366,42 @@ fun PlaylistsScreen(
                 }) { Text("Guardar") }
             },
             dismissButton = { TextButton(onClick = { folderForRename = null }) { Text("Cancelar") } },
+        )
+    }
+
+    playlistForRename?.let { pl ->
+        var name by remember(pl.id) { mutableStateOf(pl.name) }
+        var description by remember(pl.id) { mutableStateOf(pl.description.orEmpty()) }
+        AlertDialog(
+            onDismissRequest = { playlistForRename = null },
+            title = { Text("Editar playlist") },
+            text = {
+                Column {
+                    OutlinedTextField(
+                        value = name,
+                        onValueChange = { name = it },
+                        label = { Text("Nombre") },
+                        singleLine = true,
+                    )
+                    OutlinedTextField(
+                        value = description,
+                        onValueChange = { description = it },
+                        label = { Text("Descripción (opcional)") },
+                        modifier = Modifier.padding(top = 8.dp),
+                        maxLines = 3,
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = name.isNotBlank(),
+                    onClick = {
+                        scope.launch { app.repository.renamePlaylist(pl.id, name, description) }
+                        playlistForRename = null
+                    },
+                ) { Text("Guardar") }
+            },
+            dismissButton = { TextButton(onClick = { playlistForRename = null }) { Text("Cancelar") } },
         )
     }
 
@@ -517,10 +559,13 @@ private fun PlaylistRow(
     indent: Boolean,
     onClick: () -> Unit,
     onDelete: () -> Unit,
+    onRename: () -> Unit,
+    onDuplicate: () -> Unit,
     onChangeCover: () -> Unit,
     onMoveToFolder: () -> Unit,
 ) {
     val count by app.repository.observePlaylistSize(playlist.id).collectAsState(initial = 0)
+    val art by app.repository.observePlaylistArt(playlist.id).collectAsState(initial = emptyList())
     var menuOpen by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     Row(
@@ -531,11 +576,7 @@ private fun PlaylistRow(
             .padding(vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        if (playlist.coverPath != null) {
-            ArtImage(File(playlist.coverPath), 48.dp)
-        } else {
-            Icon(Icons.Filled.QueueMusic, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-        }
+        PlaylistCover(playlist.coverPath, art, 48.dp)
         Column(
             Modifier
                 .weight(1f)
@@ -552,10 +593,13 @@ private fun PlaylistRow(
                 }
                 Text(playlist.name, style = MaterialTheme.typography.bodyLarge)
             }
+            val size = if (count == 1) "1 canción" else "$count canciones"
             Text(
-                "$count canciones",
+                playlist.description?.takeIf { it.isNotBlank() }?.let { "$size · $it" } ?: size,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
             )
         }
         Box {
@@ -563,6 +607,20 @@ private fun PlaylistRow(
                 Icon(Icons.Filled.MoreVert, contentDescription = "Opciones")
             }
             DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                DropdownMenuItem(
+                    text = { Text("Renombrar") },
+                    onClick = {
+                        menuOpen = false
+                        onRename()
+                    },
+                )
+                DropdownMenuItem(
+                    text = { Text("Duplicar") },
+                    onClick = {
+                        menuOpen = false
+                        onDuplicate()
+                    },
+                )
                 DropdownMenuItem(
                     text = { Text(if (playlist.isPinned) "Desfijar" else "Fijar arriba") },
                     onClick = {

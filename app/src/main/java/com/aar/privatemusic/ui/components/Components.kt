@@ -4,6 +4,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -17,6 +18,7 @@ import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
@@ -65,6 +67,54 @@ fun ArtImage(model: Any?, size: androidx.compose.ui.unit.Dp) {
                 contentDescription = null,
                 modifier = Modifier.padding(size / 4),
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+/**
+ * Portada de una playlist: la imagen elegida a mano si la hay; si no, un mosaico
+ * con las carátulas de sus primeras canciones. Con menos de cuatro carátulas
+ * distintas el mosaico quedaría cojo, así que se usa la primera a pantalla
+ * completa, y sin ninguna, el icono de siempre.
+ */
+@Composable
+fun PlaylistCover(
+    coverPath: String?,
+    artPaths: List<String>,
+    size: androidx.compose.ui.unit.Dp,
+) {
+    when {
+        coverPath != null -> ArtImage(File(coverPath), size)
+        artPaths.size >= 4 -> Surface(
+            modifier = Modifier.size(size).clip(RoundedCornerShape(8.dp)),
+            color = MaterialTheme.colorScheme.surfaceVariant,
+        ) {
+            Column {
+                for (row in 0 until 2) {
+                    Row(Modifier.weight(1f)) {
+                        for (col in 0 until 2) {
+                            AsyncImage(
+                                model = File(artPaths[row * 2 + col]),
+                                contentDescription = null,
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier.weight(1f).fillMaxHeight(),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        artPaths.isNotEmpty() -> ArtImage(File(artPaths.first()), size)
+        else -> Surface(
+            modifier = Modifier.size(size).clip(RoundedCornerShape(8.dp)),
+            color = MaterialTheme.colorScheme.surfaceVariant,
+        ) {
+            Icon(
+                Icons.AutoMirrored.Filled.QueueMusic,
+                contentDescription = null,
+                modifier = Modifier.padding(size / 4),
+                tint = MaterialTheme.colorScheme.primary,
             )
         }
     }

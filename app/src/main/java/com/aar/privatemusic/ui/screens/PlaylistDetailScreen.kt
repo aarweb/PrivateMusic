@@ -51,6 +51,7 @@ import androidx.compose.ui.unit.dp
 import com.aar.privatemusic.PrivateMusicApp
 import com.aar.privatemusic.ui.components.AddToPlaylistDialog
 import com.aar.privatemusic.ui.components.ArtImage
+import com.aar.privatemusic.ui.components.PlaylistCover
 import com.aar.privatemusic.ui.components.formatDuration
 import kotlinx.coroutines.launch
 import sh.calvin.reorderable.ReorderableItem
@@ -205,11 +206,10 @@ fun PlaylistDetailScreen(app: PrivateMusicApp, playlistId: Long) {
                     .padding(16.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                ArtImage(
-                    playlist?.coverPath?.let { File(it) }
-                        ?: songs.firstOrNull()?.artPath?.let { File(it) },
-                    72.dp,
-                )
+                val art = remember(allSongs) {
+                    allSongs.mapNotNull { it.artPath }.distinct().take(4)
+                }
+                PlaylistCover(playlist?.coverPath, art, 72.dp)
                 Column(Modifier.weight(1f).padding(start = 16.dp)) {
                     Text(
                         playlist?.name ?: "Playlist",
@@ -217,6 +217,14 @@ fun PlaylistDetailScreen(app: PrivateMusicApp, playlistId: Long) {
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                     )
+                    playlist?.description?.takeIf { it.isNotBlank() }?.let { desc ->
+                        Text(
+                            desc,
+                            style = MaterialTheme.typography.bodySmall,
+                            maxLines = 3,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
                     Text(
                         // Al filtrar, el contador de la playlist entera engañaría.
                         if (songs.size != allSongs.size) "${songs.size} de ${allSongs.size} canciones"

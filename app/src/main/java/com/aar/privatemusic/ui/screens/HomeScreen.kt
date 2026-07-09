@@ -303,23 +303,9 @@ fun HomeScreen(
                             .clickable { onOpenPlaylist(pl.id) },
                         horizontalAlignment = Alignment.CenterHorizontally,
                     ) {
-                        if (pl.coverPath != null) {
-                            ArtImage(File(pl.coverPath), 120.dp)
-                        } else {
-                            Box(
-                                Modifier
-                                    .size(120.dp)
-                                    .background(MaterialTheme.colorScheme.surfaceVariant),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Icon(
-                                    Icons.Filled.QueueMusic,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(40.dp),
-                                )
-                            }
-                        }
+                        val art by app.repository.observePlaylistArt(pl.id)
+                            .collectAsState(initial = emptyList())
+                        com.aar.privatemusic.ui.components.PlaylistCover(pl.coverPath, art, 120.dp)
                         Text(
                             pl.name,
                             style = MaterialTheme.typography.bodySmall,

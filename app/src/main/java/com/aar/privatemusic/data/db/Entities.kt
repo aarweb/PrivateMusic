@@ -72,6 +72,7 @@ data class Playlist(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val name: String,
     val createdAt: Long,
+    val description: String? = null,
     val coverPath: String? = null,
     val isPinned: Boolean = false,
     // Optional grouping folder; null = loose at the top level.

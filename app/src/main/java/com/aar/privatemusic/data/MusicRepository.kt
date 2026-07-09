@@ -54,8 +54,54 @@ class MusicRepository(
     fun observePlaylistSongs(id: Long): Flow<List<Song>> = dao.observePlaylistSongsOrdered(id)
     fun observePlaylistSize(id: Long): Flow<Int> = dao.observePlaylistSize(id)
 
+    /** Las carátulas de las cuatro primeras canciones, para el mosaico de portada. */
+    fun observePlaylistArt(id: Long): Flow<List<String>> = dao.observePlaylistArt(id)
+
     suspend fun createPlaylist(name: String): Long =
         dao.insertPlaylist(Playlist(name = name, createdAt = System.currentTimeMillis()))
+
+    suspend fun renamePlaylist(id: Long, name: String, description: String?) {
+        val clean = name.trim()
+        if (clean.isEmpty()) return
+        dao.renamePlaylist(id, clean, description?.trim()?.ifBlank { null })
+    }
+
+    /**
+     * Copia la playlist con su orden. Las canciones se comparten, no se duplican
+     * en disco. La portada sí se copia a un fichero propio: borrar la copia no
+     * puede llevarse por delante la imagen del original.
+     */
+    suspend fun duplicatePlaylist(playlist: Playlist): Long {
+        val songs = dao.playlistSongsOnce(playlist.id)
+        val existing = dao.playlistsOnce().map { it.name }.toSet()
+        var name = "${playlist.name} (copia)"
+        var n = 2
+        while (name in existing) name = "${playlist.name} (copia $n)".also { n++ }
+
+        val newId = dao.insertPlaylist(
+            playlist.copy(
+                id = 0,
+                name = name,
+                createdAt = System.currentTimeMillis(),
+                coverPath = null,
+                isPinned = false,
+            )
+        )
+        songs.forEachIndexed { index, song ->
+            dao.addToPlaylist(PlaylistSongCrossRef(newId, song.id, index))
+        }
+        playlist.coverPath?.let { old ->
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                runCatching {
+                    val src = java.io.File(old)
+                    val dst = java.io.File(src.parentFile, "playlist_$newId.${src.extension}")
+                    src.copyTo(dst, overwrite = true)
+                    dao.updatePlaylistCover(newId, dst.absolutePath)
+                }
+            }
+        }
+        return newId
+    }
 
     suspend fun deletePlaylist(playlist: Playlist) {
         playlist.coverPath?.let { java.io.File(it).delete() }

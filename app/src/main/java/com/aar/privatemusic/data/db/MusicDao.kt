@@ -317,6 +317,26 @@ interface MusicDao {
     )
     fun observePlaylistSongsOrdered(playlistId: Long): Flow<List<Song>>
 
+    /**
+     * Hasta cuatro carátulas distintas, en el orden de la playlist, para el
+     * mosaico de portada. GROUP BY en vez de DISTINCT porque SQLite no deja
+     * ordenar por una columna que no está en el SELECT de un DISTINCT.
+     */
+    @Query(
+        """
+        SELECT s.artPath FROM songs s
+        INNER JOIN playlist_songs ps ON ps.songId = s.id
+        WHERE ps.playlistId = :playlistId AND s.artPath IS NOT NULL
+        GROUP BY s.artPath
+        ORDER BY MIN(ps.position) ASC
+        LIMIT 4
+        """
+    )
+    fun observePlaylistArt(playlistId: Long): Flow<List<String>>
+
+    @Query("UPDATE playlists SET name = :name, description = :description WHERE id = :id")
+    suspend fun renamePlaylist(id: Long, name: String, description: String?)
+
     @Query("SELECT COUNT(*) FROM playlist_songs WHERE playlistId = :playlistId")
     suspend fun playlistSize(playlistId: Long): Int
 
