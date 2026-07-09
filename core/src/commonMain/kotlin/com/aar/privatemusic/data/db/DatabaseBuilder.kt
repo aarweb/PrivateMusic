@@ -1,6 +1,7 @@
 package com.aar.privatemusic.data.db
 
 import androidx.room.RoomDatabase
+import androidx.room.useWriterConnection
 import androidx.sqlite.driver.bundled.BundledSQLiteDriver
 import kotlin.coroutines.CoroutineContext
 
@@ -19,3 +20,16 @@ fun RoomDatabase.Builder<MusicDatabase>.buildMusicDatabase(
         .setDriver(BundledSQLiteDriver())
         .setQueryCoroutineContext(queryContext)
         .build()
+
+/**
+ * Vuelca el WAL dentro del fichero principal. Sin esto, copiar `music.db` para
+ * una copia de seguridad se lleva una base a medias: lo escrito hace un minuto
+ * vive en `music.db-wal`, no en `music.db`.
+ */
+suspend fun MusicDatabase.walCheckpoint() {
+    // La conexión agrupada de Room sólo deja preparar sentencias: no hay
+    // `execSQL`. Un PRAGMA devuelve una fila, así que hay que pedirle el paso.
+    useWriterConnection { connection ->
+        connection.usePrepared("PRAGMA wal_checkpoint(FULL)") { it.step() }
+    }
+}

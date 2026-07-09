@@ -441,8 +441,12 @@ class MusicRepository(
             val last = ordered.last()
             val next = remaining.minByOrNull { candidate ->
                 val keyCost = AudioAnalyzer.camelotDistance(last.camelot, candidate.camelot).toFloat()
-                val bpmCost = if (last.bpm != null && candidate.bpm != null)
-                    kotlin.math.abs(last.bpm - candidate.bpm) / 8f else 1.5f
+                // Copias locales: `Song` vive ahora en :core y Kotlin no hace
+                // smart cast sobre propiedades públicas de otro módulo.
+                val lastBpm = last.bpm
+                val nextBpm = candidate.bpm
+                val bpmCost = if (lastBpm != null && nextBpm != null)
+                    kotlin.math.abs(lastBpm - nextBpm) / 8f else 1.5f
                 keyCost + bpmCost
             }!!
             remaining.remove(next)

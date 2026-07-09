@@ -2,7 +2,6 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
-    alias(libs.plugins.ksp)
 }
 
 android {
@@ -78,9 +77,8 @@ dependencies {
     implementation(libs.androidx.navigation.compose)
     implementation(libs.media3.exoplayer)
     implementation(libs.media3.session)
-    implementation(libs.room.runtime)
-    implementation(libs.room.ktx)
-    ksp(libs.room.compiler)
+    // El esquema y las consultas viven en :core, compartidos con el escritorio.
+    implementation(project(":core"))
     implementation(libs.coil.compose)
     implementation(libs.androidx.palette)
     implementation(libs.reorderable)

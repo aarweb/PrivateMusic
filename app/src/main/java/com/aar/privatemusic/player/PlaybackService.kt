@@ -1,5 +1,6 @@
 package com.aar.privatemusic.player
 
+import com.aar.privatemusic.data.db.openMusicDatabase
 import android.app.PendingIntent
 import android.content.Intent
 import android.net.Uri
@@ -52,7 +53,7 @@ class PlaybackService : MediaLibraryService() {
             )
             .setHandleAudioBecomingNoisy(true)
             .build()
-        val dao = MusicDatabase.get(this).musicDao()
+        val dao = openMusicDatabase(this).musicDao()
         // Tapping the media notification opens the app.
         val sessionActivity = PendingIntent.getActivity(
             this,

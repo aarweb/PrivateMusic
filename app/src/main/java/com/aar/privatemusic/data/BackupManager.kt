@@ -1,5 +1,7 @@
 package com.aar.privatemusic.data
 
+import com.aar.privatemusic.data.db.openMusicDatabase
+import com.aar.privatemusic.data.db.walCheckpoint
 import android.content.Context
 import android.net.Uri
 import com.aar.privatemusic.data.db.MusicDatabase
@@ -40,7 +42,7 @@ object BackupManager {
     suspend fun exportLibraryZip(context: Context, uri: Uri, repository: MusicRepository): Boolean =
         withContext(Dispatchers.IO) {
             try {
-                val dao = MusicDatabase.get(context).musicDao()
+                val dao = openMusicDatabase(context).musicDao()
                 val songs = dao.songsOnce()
                 val playlists = dao.playlistsOnce()
                 val smart = dao.smartPlaylistsOnce()
@@ -142,7 +144,7 @@ object BackupManager {
                     return@withContext importSmartPlaylists(context, text)
                 }
 
-                val dao = MusicDatabase.get(context).musicDao()
+                val dao = openMusicDatabase(context).musicDao()
                 val songs = dao.songsOnce()
                 val byPath = songs.associateBy { it.filePath }
                 val roots = roots(context)
@@ -203,7 +205,7 @@ object BackupManager {
 
     /** Reglas exportadas: se salta las que ya existen con el mismo nombre. */
     private suspend fun importSmartPlaylists(context: Context, json: String): ImportResult {
-        val dao = MusicDatabase.get(context).musicDao()
+        val dao = openMusicDatabase(context).musicDao()
         val existing = dao.smartPlaylistsOnce().map { it.name.lowercase() }.toSet()
         val array = org.json.JSONArray(json)
         var imported = 0
@@ -234,8 +236,7 @@ object BackupManager {
     /** Copies the Room DB (after a WAL checkpoint) into the app backup dir; keeps the last 5. */
     suspend fun backupDatabase(context: Context): File? = withContext(Dispatchers.IO) {
         try {
-            val db = MusicDatabase.get(context)
-            db.openHelper.writableDatabase.query("PRAGMA wal_checkpoint(FULL)").use { it.moveToFirst() }
+            openMusicDatabase(context).walCheckpoint()
             val source = context.getDatabasePath("music.db")
             val dir = File(context.getExternalFilesDir(null) ?: context.filesDir, "backups")
                 .apply { mkdirs() }

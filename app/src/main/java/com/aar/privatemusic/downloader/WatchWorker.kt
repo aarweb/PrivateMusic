@@ -1,5 +1,6 @@
 package com.aar.privatemusic.downloader
 
+import com.aar.privatemusic.data.db.openMusicDatabase
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
@@ -18,7 +19,7 @@ class WatchWorker(context: Context, params: WorkerParameters) : CoroutineWorker(
 
     override suspend fun doWork(): Result {
         val app = applicationContext as? PrivateMusicApp ?: return Result.failure()
-        val dao = MusicDatabase.get(applicationContext).musicDao()
+        val dao = openMusicDatabase(applicationContext).musicDao()
         val sources = dao.watchedSourcesOnce()
         if (sources.isEmpty()) return Result.success()
 

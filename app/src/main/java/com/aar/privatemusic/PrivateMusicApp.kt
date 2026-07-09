@@ -1,5 +1,6 @@
 package com.aar.privatemusic
 
+import com.aar.privatemusic.data.db.openMusicDatabase
 import android.app.Application
 import android.util.Log
 import androidx.work.Constraints
@@ -56,7 +57,7 @@ class PrivateMusicApp : Application() {
         } catch (e: Exception) {
             Log.e("PrivateMusicApp", "yt-dlp init failed", e)
         }
-        val dao = MusicDatabase.get(this).musicDao()
+        val dao = openMusicDatabase(this).musicDao()
         settings = AppSettings(this)
         downloader = YtDownloader(this, dao, appScope)
         torrents = TorrentDownloader(this, dao, appScope)
