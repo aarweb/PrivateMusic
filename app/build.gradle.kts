@@ -13,8 +13,8 @@ android {
         applicationId = "com.aar.privatemusic"
         minSdk = 26
         targetSdk = 35
-        versionCode = 51
-        versionName = "1.50"
+        versionCode = 52
+        versionName = "1.51"
 
         ndk {
             // arm64 only: every phone since ~2016. Halves the APK (yt-dlp/ffmpeg per ABI).
@@ -27,6 +27,17 @@ android {
         val acoustidKey = (project.findProperty("acoustidKey") as String?)
             ?: System.getenv("ACOUSTID_KEY") ?: ""
         buildConfigField("String", "ACOUSTID_KEY", "\"$acoustidKey\"")
+
+        // Credenciales de Spotify (importar playlists completas). Mismo trato que
+        // la clave de AcoustID: `spotifyClientId`/`spotifyClientSecret` en
+        // ~/.gradle/gradle.properties, o secrets en CI. Vacío = sólo se lee la
+        // página de embed, que corta en 100 pistas.
+        val spotifyClientId = (project.findProperty("spotifyClientId") as String?)
+            ?: System.getenv("SPOTIFY_CLIENT_ID") ?: ""
+        val spotifyClientSecret = (project.findProperty("spotifyClientSecret") as String?)
+            ?: System.getenv("SPOTIFY_CLIENT_SECRET") ?: ""
+        buildConfigField("String", "SPOTIFY_CLIENT_ID", "\"$spotifyClientId\"")
+        buildConfigField("String", "SPOTIFY_CLIENT_SECRET", "\"$spotifyClientSecret\"")
     }
 
     signingConfigs {

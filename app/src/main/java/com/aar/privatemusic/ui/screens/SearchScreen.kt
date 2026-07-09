@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
@@ -29,8 +30,10 @@ import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.PlayCircleOutline
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.StopCircle
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.IconButton
@@ -54,9 +57,14 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.platform.LocalContext
 import com.aar.privatemusic.PrivateMusicApp
+import com.aar.privatemusic.downloader.DeezerSource
+import com.aar.privatemusic.downloader.DeezerTrack
 import com.aar.privatemusic.downloader.DownloadState
 import com.aar.privatemusic.downloader.SearchResult
 import com.aar.privatemusic.downloader.SpotifyResolver
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import com.aar.privatemusic.downloader.SpotifySync
 import com.aar.privatemusic.downloader.SpotifyTrack
 import com.aar.privatemusic.ui.components.ArtImage
@@ -112,6 +120,10 @@ fun SearchScreen(app: PrivateMusicApp) {
     var deezerTracks by remember { mutableStateOf(SearchCache.deezerTracks) }
     // Deezer tracks currently being matched on YouTube before download.
     var deezerResolving by remember { mutableStateOf(setOf<String>()) }
+    // Importación de Spotify: progreso del emparejado y pistas a repasar a mano.
+    var matching by remember { mutableStateOf<Pair<Int, Int>?>(null) }
+    var review by remember { mutableStateOf<List<SpotifyReviewItem>>(emptyList()) }
+    var reviewPlaylistId by remember { mutableStateOf<Long?>(null) }
     androidx.compose.runtime.SideEffect {
         SearchCache.query = query
         SearchCache.source = source
@@ -130,6 +142,7 @@ fun SearchScreen(app: PrivateMusicApp) {
     val archiveDownloads by app.archive.downloads.collectAsState()
     val deezerDownloads by app.deezerDownloader.downloads.collectAsState()
     val deezerQuality by app.settings.deezerQuality.collectAsState()
+    val deezerArl by app.settings.deezerArl.collectAsState()
     val libraryIds by app.repository.observeSongIds().collectAsState(initial = emptyList())
     val nowPlaying by app.playerController.nowPlaying.collectAsState()
     val isPlaying by app.playerController.isPlaying.collectAsState()
@@ -211,11 +224,17 @@ fun SearchScreen(app: PrivateMusicApp) {
             }
             if (SpotifyResolver.isSpotifyUrl(query.trim())) {
                 runCatching { SpotifyResolver.resolve(query.trim()) }
-                    .onSuccess { (title, tracks) ->
+                    .onSuccess { pl ->
                         results = emptyList()
-                        spotifyTracks = tracks
-                        playlistTitle = title
+                        spotifyTracks = pl.tracks
+                        playlistTitle = pl.name
                         playlistUrl = query.trim()
+                        // Nunca truncar en silencio: sin claves de Spotify el embed
+                        // corta en 100 y el usuario creería que las tiene todas.
+                        if (pl.truncated) {
+                            actionMessage = "Spotify sólo deja leer ${pl.tracks.size} pistas de esta " +
+                                "lista sin credenciales; el resto se quedará fuera"
+                        }
                     }
                     .onFailure { error = "Error al leer Spotify: ${it.message}" }
             } else if (isPlaylistUrl(query.trim())) {
@@ -237,6 +256,53 @@ fun SearchScreen(app: PrivateMusicApp) {
             }
             searching = false
         }
+    }
+
+    /**
+     * Importa la playlist de Spotify descargando cada pista de Deezer en HQ.
+     * Sólo se bajan solas las coincidencias exactas (título, artista y duración):
+     * las dudosas y las que Deezer no tiene van a [review] para que decidas.
+     * La posición en la playlist es la de Spotify, no la de fin de descarga.
+     */
+    suspend fun downloadAllFromDeezer() {
+        val title = playlistTitle ?: return
+        val tracks = spotifyTracks ?: return
+        if (matching != null) return
+        val quality = app.settings.deezerQuality.value
+        val playlistId = app.repository.createPlaylist(title.take(40))
+        reviewPlaylistId = playlistId
+        actionMessage = null
+        matching = 0 to tracks.size
+
+        val problems = mutableListOf<SpotifyReviewItem>()
+        var done = 0
+        // Una búsqueda por pista: en tandas de 4 para no encadenar 100 esperas.
+        tracks.withIndex().chunked(4).forEach { chunk ->
+            val matches = coroutineScope {
+                chunk.map { (i, t) ->
+                    async {
+                        i to runCatching {
+                            DeezerSource.bestMatch(t.title, t.mainArtist, t.durationSec)
+                        }.getOrNull()
+                    }
+                }.awaitAll()
+            }
+            matches.forEach { (i, match) ->
+                val track = tracks[i]
+                if (match != null && match.exact) {
+                    app.deezerDownloader.enqueue(match.track, quality, playlistId, i)
+                } else {
+                    problems += SpotifyReviewItem(track, i, match?.track)
+                }
+                done++
+            }
+            matching = done to tracks.size
+        }
+        matching = null
+        review = problems
+        val ok = tracks.size - problems.size
+        actionMessage = "Descargando $ok de ${tracks.size} desde Deezer en \"$title\"" +
+            if (problems.isNotEmpty()) " · ${problems.size} por repasar" else ""
     }
 
     suspend fun downloadAll(watch: Boolean) {
@@ -402,7 +468,7 @@ fun SearchScreen(app: PrivateMusicApp) {
                         Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
                             val count = spotifyTracks?.size ?: results.size
                             Text(
-                                "$title · $count canciones" +
+                                "$title · $count " + (if (count == 1) "canción" else "canciones") +
                                     if (spotifyTracks != null) " · Spotify" else "",
                                 style = MaterialTheme.typography.titleMedium,
                             )
@@ -410,12 +476,41 @@ fun SearchScreen(app: PrivateMusicApp) {
                                 modifier = Modifier.padding(top = 8.dp),
                                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                             ) {
-                                Button(onClick = { scope.launch { downloadAll(watch = false) } }) {
-                                    Text("Descargar todo")
+                                val hasDeezer = spotifyTracks != null && deezerArl.isNotBlank()
+                                if (hasDeezer) {
+                                    Button(
+                                        onClick = { scope.launch { downloadAllFromDeezer() } },
+                                        enabled = matching == null,
+                                    ) {
+                                        Text("Descargar de Deezer")
+                                    }
+                                    OutlinedButton(onClick = { scope.launch { downloadAll(watch = false) } }) {
+                                        Text("YouTube")
+                                    }
+                                } else {
+                                    Button(onClick = { scope.launch { downloadAll(watch = false) } }) {
+                                        Text("Descargar todo")
+                                    }
                                 }
                                 OutlinedButton(onClick = { scope.launch { downloadAll(watch = true) } }) {
                                     Text("Observar")
                                 }
+                            }
+                            if (spotifyTracks != null && deezerArl.isBlank()) {
+                                Text(
+                                    "Inicia sesión en Deezer (Ajustes) para bajarla en HQ/FLAC",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(top = 8.dp),
+                                )
+                            }
+                            matching?.let { (done, total) ->
+                                Text(
+                                    "Buscando en Deezer: $done de $total",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.padding(top = 8.dp),
+                                )
                             }
                             actionMessage?.let {
                                 Text(
@@ -574,6 +669,93 @@ fun SearchScreen(app: PrivateMusicApp) {
             }
         }
     }
+
+    if (review.isNotEmpty()) {
+        val playlistId = reviewPlaylistId
+        SpotifyReviewDialog(
+            items = review,
+            onDismiss = { review = emptyList() },
+            onUseDeezer = { item ->
+                item.candidate?.let {
+                    app.deezerDownloader.enqueue(it, deezerQuality, playlistId, item.index)
+                }
+                review = review - item
+            },
+            onYouTube = { item ->
+                // La búsqueda en YouTube sobrevive a salir de la pantalla.
+                app.appScope.launch {
+                    app.downloader.searchBestMatch(item.track.searchQuery, item.track.durationSec)
+                        ?.let { app.downloader.enqueue(it, playlistId) }
+                }
+                review = review - item
+            },
+            onSkip = { review = review - it },
+        )
+    }
+}
+
+/** Pista de Spotify que Deezer no supo casar: [candidate] es lo más parecido, si hay algo. */
+private data class SpotifyReviewItem(
+    val track: SpotifyTrack,
+    /** Posición en la playlist de Spotify, para no perder el orden. */
+    val index: Int,
+    val candidate: DeezerTrack?,
+)
+
+/**
+ * Repaso de las pistas dudosas: Deezer devuelve remixes, directos y versiones
+ * alargadas con el mismo título, así que estas no se bajan solas.
+ */
+@Composable
+private fun SpotifyReviewDialog(
+    items: List<SpotifyReviewItem>,
+    onDismiss: () -> Unit,
+    onUseDeezer: (SpotifyReviewItem) -> Unit,
+    onYouTube: (SpotifyReviewItem) -> Unit,
+    onSkip: (SpotifyReviewItem) -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Repasar ${items.size} canciones") },
+        text = {
+            LazyColumn(Modifier.heightIn(max = 420.dp)) {
+                items(items, key = { it.index }) { item ->
+                    Column(Modifier.padding(vertical = 8.dp)) {
+                        Text(
+                            item.track.title,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            style = MaterialTheme.typography.bodyLarge,
+                        )
+                        Text(
+                            "${item.track.artists} · ${formatDuration(item.track.durationSec)}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        val candidate = item.candidate
+                        Text(
+                            if (candidate == null) "Deezer no la tiene"
+                            else "Deezer: ${candidate.title} · ${candidate.artist} · " +
+                                formatDuration(candidate.durationSec),
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 2.dp),
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            if (candidate != null) {
+                                TextButton(onClick = { onUseDeezer(item) }) { Text("Usar") }
+                            }
+                            TextButton(onClick = { onYouTube(item) }) { Text("YouTube") }
+                            TextButton(onClick = { onSkip(item) }) { Text("Omitir") }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Cerrar") } },
+    )
 }
 
 /** A searchable catalog: id, display name, brand color and badge icon. */

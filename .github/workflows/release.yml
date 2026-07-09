@@ -35,6 +35,9 @@ jobs:
       - name: Compilar APK
         env:
           ACOUSTID_KEY: ${{ secrets.ACOUSTID_KEY }}
+          # Sin estos secrets la app cae al embed de Spotify, que corta en 100 pistas.
+          SPOTIFY_CLIENT_ID: ${{ secrets.SPOTIFY_CLIENT_ID }}
+          SPOTIFY_CLIENT_SECRET: ${{ secrets.SPOTIFY_CLIENT_SECRET }}
         run: ./gradlew assembleDebug --no-daemon
 
       - name: Comprobar firma

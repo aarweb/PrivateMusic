@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import com.aar.privatemusic.data.AppSettings
 import com.aar.privatemusic.data.db.MusicDao
+import com.aar.privatemusic.data.db.PlaylistSongCrossRef
 import com.aar.privatemusic.data.db.Song
 import com.aar.privatemusic.util.readAudioQuality
 import kotlinx.coroutines.CoroutineScope
@@ -59,7 +60,17 @@ class DeezerDownloader(
 
     fun stateKey(trackId: Long) = "dz_$trackId"
 
-    fun enqueue(track: DeezerTrack, quality: String) {
+    /**
+     * [targetPlaylistId] + [position] preservan el orden original al importar una
+     * playlist: sin la posición explícita las canciones quedarían en el orden en
+     * que acaban de descargarse, que no es el mismo.
+     */
+    fun enqueue(
+        track: DeezerTrack,
+        quality: String,
+        targetPlaylistId: Long? = null,
+        position: Int? = null,
+    ) {
         val key = stateKey(track.id)
         val current = _downloads.value[key]
         if (current is DownloadState.Queued || current is DownloadState.Downloading) return
@@ -69,12 +80,27 @@ class DeezerDownloader(
                 try {
                     if (!dao.songExists(key)) download(track, quality)
                     setState(key, DownloadState.Done)
+                    targetPlaylistId?.let { addToPlaylist(it, track, key, position) }
                 } catch (e: Exception) {
                     Log.e("DeezerDownloader", "download failed for ${track.id}", e)
                     setState(key, DownloadState.Failed(e.message ?: "error"))
                 }
             }
         }
+    }
+
+    /**
+     * `download` se salta la descarga si ya tienes la canción con otro id (dedup
+     * por título+artista), así que la playlist debe apuntar a ESA, no a `dz_<id>`.
+     */
+    private suspend fun addToPlaylist(playlistId: Long, track: DeezerTrack, key: String, position: Int?) {
+        val songId = if (dao.songExists(key)) key
+        else dao.findByTitleArtist(track.title, track.artist)?.id ?: return
+        runCatching {
+            dao.addToPlaylist(
+                PlaylistSongCrossRef(playlistId, songId, position ?: dao.playlistSize(playlistId)),
+            )
+        }.onFailure { Log.w("DeezerDownloader", "no se pudo añadir a la playlist", it) }
     }
 
     private suspend fun download(track: DeezerTrack, quality: String) {
