@@ -158,7 +158,27 @@ fun DeezerLoginDialog(app: PrivateMusicApp, onClose: () -> Unit) {
                     Log.w("DeezerLogin", "error ${error.errorCode} en ${request.url.host}: ${error.description}")
                 }
             }
+
+            /** Sin query: ahí viajan tokens de sesión y del OAuth. */
+            override fun onReceivedHttpError(
+                view: WebView,
+                request: WebResourceRequest,
+                response: android.webkit.WebResourceResponse,
+            ) {
+                if (response.statusCode >= 400) {
+                    val u = request.url
+                    Log.w("DeezerLogin", "http ${response.statusCode} ${request.method} ${u.host}${u.path}")
+                }
+            }
         }
+    }
+
+    /** Los errores de consola son los que delatan por qué Deezer aborta el login. */
+    fun logConsole(tag: String, msg: ConsoleMessage): Boolean {
+        if (msg.messageLevel() == ConsoleMessage.MessageLevel.ERROR) {
+            Log.w("DeezerLogin", "$tag js: ${msg.message().take(300)}")
+        }
+        return true
     }
 
     // El WebView principal vive aquí; la emergente se añade encima, ya adjunta.
@@ -186,12 +206,7 @@ fun DeezerLoginDialog(app: PrivateMusicApp, onClose: () -> Unit) {
             scope.launch { tryCaptureArl() }
         }
 
-        override fun onConsoleMessage(msg: ConsoleMessage): Boolean {
-            if (msg.messageLevel() == ConsoleMessage.MessageLevel.ERROR) {
-                Log.w("DeezerLogin", "popup js: ${msg.message()}")
-            }
-            return true
-        }
+        override fun onConsoleMessage(msg: ConsoleMessage) = logConsole("popup", msg)
     }
 
     val mainChrome = remember {
@@ -226,6 +241,8 @@ fun DeezerLoginDialog(app: PrivateMusicApp, onClose: () -> Unit) {
                 popup?.let { dismissPopup(it) }
                 scope.launch { tryCaptureArl() }
             }
+
+            override fun onConsoleMessage(msg: ConsoleMessage) = logConsole("main", msg)
         }
     }
 
