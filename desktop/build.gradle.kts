@@ -10,6 +10,8 @@ dependencies {
     implementation(project(":core"))
     implementation(compose.desktop.currentOs)
     implementation(compose.material3)
+    @OptIn(org.jetbrains.compose.ExperimentalComposeLibrary::class)
+    implementation(compose.materialIconsExtended)
     implementation(libs.kotlinx.coroutines.core)
     // libVLC hace el trabajo sucio: decodifica los siete formatos, sabe buscar
     // dentro del fichero y trae ecualizador. En Linux usa el del sistema; en
