@@ -229,11 +229,11 @@ fun SearchScreen(app: PrivateMusicApp) {
                         spotifyTracks = pl.tracks
                         playlistTitle = pl.name
                         playlistUrl = query.trim()
-                        // Nunca truncar en silencio: sin claves de Spotify el embed
-                        // corta en 100 y el usuario creería que las tiene todas.
+                        // Nunca truncar en silencio: Spotify no sirve más de 100
+                        // pistas por playlist y el usuario creería tenerlas todas.
                         if (pl.truncated) {
-                            actionMessage = "Spotify sólo deja leer ${pl.tracks.size} pistas de esta " +
-                                "lista sin credenciales; el resto se quedará fuera"
+                            actionMessage = "Spotify sólo deja leer ${pl.tracks.size} pistas por " +
+                                "playlist; si tiene más, el resto se quedará fuera"
                         }
                     }
                     .onFailure { error = "Error al leer Spotify: ${it.message}" }

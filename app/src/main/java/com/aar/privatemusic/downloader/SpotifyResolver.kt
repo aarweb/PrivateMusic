@@ -1,8 +1,5 @@
 package com.aar.privatemusic.downloader
 
-import android.util.Base64
-import android.util.Log
-import com.aar.privatemusic.BuildConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -24,152 +21,38 @@ data class SpotifyTrack(
 data class SpotifyPlaylist(
     val name: String,
     val tracks: List<SpotifyTrack>,
-    /** Pistas que dice Spotify que hay; mayor que `tracks.size` si nos quedamos cortos. */
-    val total: Int,
 ) {
-    val truncated: Boolean get() = total > tracks.size
+    /** El embed nunca sirve más de [EMBED_LIMIT]: si vienen justo esas, hay más detrás. */
+    val truncated: Boolean get() = tracks.size >= EMBED_LIMIT
 }
 
+/** Tope duro de la página de embed de Spotify. */
+private const val EMBED_LIMIT = 100
+
 /**
- * Lee la lista de pistas pública de una playlist/álbum/pista de Spotify. El
- * audio de Spotify tiene DRM: aquí sólo leemos metadatos, y cada pista se
- * descarga después de Deezer (o de YouTube).
+ * Lee la lista de pistas pública de una playlist/álbum/pista de Spotify desde
+ * la página de embed. El audio de Spotify tiene DRM: aquí sólo leemos
+ * metadatos, y cada pista se descarga después de Deezer (o de YouTube).
  *
- * Dos caminos, porque ninguno vale solo:
- * - **API oficial** (client credentials), si hay claves compiladas: playlists
- *   completas y paginadas. Pero desde nov-2024 Spotify responde 404 a las
- *   playlists *editoriales* (`37i9dQZF1...`) para las apps nuevas.
- * - **Página de embed**, sin claves: sí lee las editoriales, pero corta en 100
- *   pistas. Es la red de seguridad cuando la API falla o no hay claves.
+ * Sin API oficial a propósito. Spotify responde **403 a `playlists/{id}/tracks`**
+ * para las aplicaciones registradas después de nov-2024, y no lo levanta ni el
+ * token de usuario con `playlist-read-private` sobre una playlist propia y
+ * pública (medido: `/me` y `/me/playlists` responden 200, y las pistas 403).
+ * Las credenciales sólo servían para álbumes y pistas sueltas, que el embed ya
+ * lee igual de bien, así que no compensaban llevar un client secret dentro del
+ * APK. El precio es el tope de 100 pistas por playlist, que se avisa en pantalla.
  */
 object SpotifyResolver {
 
     private val URL_PATTERN = Regex("""open\.spotify\.com/(?:intl-[a-z-]+/)?(playlist|album|track)/([A-Za-z0-9]+)""")
-    private const val EMBED_LIMIT = 100
-
-    private val hasKeys: Boolean
-        get() = BuildConfig.SPOTIFY_CLIENT_ID.isNotBlank() && BuildConfig.SPOTIFY_CLIENT_SECRET.isNotBlank()
-
-    /** Token de client-credentials cacheado (valor, instante de caducidad). */
-    @Volatile private var token: Pair<String, Long>? = null
 
     fun isSpotifyUrl(text: String): Boolean = URL_PATTERN.containsMatchIn(text)
 
     suspend fun resolve(url: String): SpotifyPlaylist = withContext(Dispatchers.IO) {
         val match = URL_PATTERN.find(url) ?: throw IllegalArgumentException("URL de Spotify no válida")
         val (type, id) = match.destructured
-
-        if (hasKeys) {
-            runCatching { resolveViaApi(type, id) }
-                .onSuccess { return@withContext it }
-                .onFailure { Log.w("Spotify", "API falló (${it.message}); usando el embed", it) }
-        }
         resolveViaEmbed(type, id)
     }
-
-    // ---------------------------------------------------------------- API
-
-    private fun accessToken(): String {
-        token?.let { (value, expiry) -> if (System.currentTimeMillis() < expiry) return value }
-        val basic = Base64.encodeToString(
-            "${BuildConfig.SPOTIFY_CLIENT_ID}:${BuildConfig.SPOTIFY_CLIENT_SECRET}".toByteArray(),
-            Base64.NO_WRAP,
-        )
-        val conn = (URL("https://accounts.spotify.com/api/token").openConnection() as HttpURLConnection).apply {
-            requestMethod = "POST"
-            connectTimeout = 15_000
-            readTimeout = 15_000
-            doOutput = true
-            setRequestProperty("Authorization", "Basic $basic")
-            setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
-        }
-        conn.outputStream.use { it.write("grant_type=client_credentials".toByteArray()) }
-        val body = conn.inputStream.bufferedReader().readText().also { conn.disconnect() }
-        val json = JSONObject(body)
-        val value = json.optString("access_token").takeIf { it.isNotBlank() }
-            ?: throw IllegalStateException("Spotify no devolvió token")
-        // Un minuto de margen sobre la caducidad que anuncia.
-        token = value to (System.currentTimeMillis() + (json.optLong("expires_in", 3600) - 60) * 1000)
-        return value
-    }
-
-    private fun api(path: String): JSONObject {
-        val conn = (URL("https://api.spotify.com/v1/$path").openConnection() as HttpURLConnection).apply {
-            connectTimeout = 15_000
-            readTimeout = 15_000
-            setRequestProperty("Authorization", "Bearer ${accessToken()}")
-        }
-        if (conn.responseCode == 404) {
-            conn.disconnect()
-            // Playlists editoriales: la API las niega a las apps nuevas.
-            throw IllegalStateException("404 (¿playlist editorial de Spotify?)")
-        }
-        if (conn.responseCode >= 400) {
-            val err = conn.errorStream?.bufferedReader()?.readText().orEmpty().take(200)
-            conn.disconnect()
-            throw IllegalStateException("HTTP ${conn.responseCode}: $err")
-        }
-        return JSONObject(conn.inputStream.bufferedReader().readText().also { conn.disconnect() })
-    }
-
-    private fun resolveViaApi(type: String, id: String): SpotifyPlaylist = when (type) {
-        "track" -> {
-            val t = api("tracks/$id")
-            SpotifyPlaylist(t.optString("name"), listOfNotNull(parseApiTrack(t)), 1)
-        }
-        "album" -> {
-            val album = api("albums/$id")
-            val name = album.optString("name")
-            val artist = album.optJSONArray("artists")?.joinNames().orEmpty()
-            // Los tracks de un álbum no repiten el artista: se lo ponemos nosotros.
-            val tracks = pageThrough(50) { offset ->
-                api("albums/$id/tracks?limit=50&offset=$offset").optJSONArray("items")
-            }.mapNotNull { parseApiTrack(it, fallbackArtist = artist) }
-            SpotifyPlaylist(name, tracks, tracks.size)
-        }
-        else -> {
-            val name = api("playlists/$id?fields=name").optString("name")
-            val tracks = pageThrough(100) { offset ->
-                api("playlists/$id/tracks?limit=100&offset=$offset").optJSONArray("items")
-            }.mapNotNull { item ->
-                // Los episodios de podcast y las pistas locales vienen sin `track`.
-                parseApiTrack(item.optJSONObject("track") ?: return@mapNotNull null)
-            }
-            Log.d("Spotify", "API: ${tracks.size} pistas en \"$name\"")
-            SpotifyPlaylist(name, tracks, tracks.size)
-        }
-    }
-
-    /**
-     * Recorre las páginas hasta que una venga incompleta. No nos fiamos del
-     * `total` que declara Spotify: si la sub-selección de `fields` no le gusta,
-     * lo devuelve a 0 y nos quedaríamos sin pedir ni una página.
-     */
-    private fun pageThrough(pageSize: Int, page: (Int) -> JSONArray?): List<JSONObject> {
-        val out = mutableListOf<JSONObject>()
-        var offset = 0
-        while (true) {
-            val items = page(offset) ?: break
-            for (i in 0 until items.length()) items.optJSONObject(i)?.let { out += it }
-            if (items.length() < pageSize) break
-            offset += pageSize
-            if (offset > 10_000) break // playlist absurda: corta antes de colgarte
-        }
-        return out
-    }
-
-    private fun parseApiTrack(t: JSONObject, fallbackArtist: String = ""): SpotifyTrack? {
-        val title = t.optString("name").takeIf { it.isNotBlank() } ?: return null
-        val artists = t.optJSONArray("artists")?.joinNames().orEmpty().ifBlank { fallbackArtist }
-        return SpotifyTrack(title, artists, (t.optLong("duration_ms") / 1000).toInt())
-    }
-
-    private fun JSONArray.joinNames(): String =
-        (0 until length()).mapNotNull { optJSONObject(it)?.optString("name") }
-            .filter { it.isNotBlank() }
-            .joinToString(", ")
-
-    // -------------------------------------------------------------- Embed
 
     private fun resolveViaEmbed(type: String, id: String): SpotifyPlaylist {
         val html = fetch("https://open.spotify.com/embed/$type/$id")
@@ -193,9 +76,7 @@ object SpotifyResolver {
                     durationSec = (t.optLong("duration", 0) / 1000).toInt(),
                 )
             }
-            // El embed nunca da más de 100; si vienen justo 100, puede haber más.
-            val total = if (tracks.size == EMBED_LIMIT) Int.MAX_VALUE else tracks.size
-            return SpotifyPlaylist(name, tracks, total)
+            return SpotifyPlaylist(name, tracks)
         }
 
         // Single track embeds have no trackList: take the entity itself. Ojo: ahí
@@ -211,8 +92,13 @@ object SpotifyResolver {
             },
             durationSec = (entity.optLong("duration", 0) / 1000).toInt(),
         )
-        return SpotifyPlaylist(title, listOf(track), 1)
+        return SpotifyPlaylist(title, listOf(track))
     }
+
+    private fun JSONArray.joinNames(): String =
+        (0 until length()).mapNotNull { optJSONObject(it)?.optString("name") }
+            .filter { it.isNotBlank() }
+            .joinToString(", ")
 
     private fun fetch(url: String): String {
         val conn = URL(url).openConnection() as HttpURLConnection
