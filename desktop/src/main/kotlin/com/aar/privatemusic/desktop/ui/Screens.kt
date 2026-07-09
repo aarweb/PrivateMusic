@@ -270,6 +270,7 @@ fun SettingsScreen(
     syncing: Boolean,
     syncStatus: String?,
     onSync: () -> Unit,
+    onSyncAddress: (String) -> Unit,
     update: DesktopUpdater.UpdateInfo?,
     onUpdate: () -> Unit,
 ) {
@@ -295,6 +296,26 @@ fun SettingsScreen(
             syncStatus?.let {
                 Text("  $it", Modifier.padding(start = 8.dp), style = MaterialTheme.typography.bodySmall)
             }
+        }
+
+        // mDNS no llega a todas las redes: las de invitados aíslan a los clientes,
+        // una VPN se lleva el multicast, y algún cortafuegos lo tira. La dirección
+        // a mano siempre funciona; el móvil la enseña bajo su interruptor.
+        var address by remember { mutableStateOf("") }
+        Row(Modifier.padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            OutlinedTextField(
+                value = address,
+                onValueChange = { address = it },
+                label = { Text("…o escribe la dirección del móvil") },
+                placeholder = { Text("192.168.1.152") },
+                singleLine = true,
+                modifier = Modifier.width(320.dp),
+            )
+            Button(
+                onClick = { onSyncAddress(address.trim()) },
+                enabled = !syncing && address.isNotBlank(),
+                modifier = Modifier.padding(start = 12.dp),
+            ) { Text("Sincronizar") }
         }
 
         PlaybackSettings(settings, engine)
