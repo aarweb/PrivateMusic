@@ -152,7 +152,66 @@ fun SongRow(
     selectionMode: Boolean = false,
     selected: Boolean = false,
     onLongClick: (() -> Unit)? = null,
+    onSwipeToQueue: (() -> Unit)? = null,
     trailing: @Composable () -> Unit = {},
+) {
+    // Deslizar hacia la derecha encola la canción. La fila NO se va: vuelve a su
+    // sitio (confirmValueChange devuelve false), porque encolar no la quita de
+    // ninguna parte. Se desactiva durante la selección múltiple, donde el gesto
+    // competiría con las casillas.
+    if (onSwipeToQueue != null && !selectionMode) {
+        val state = androidx.compose.material3.rememberSwipeToDismissBoxState(
+            confirmValueChange = { value ->
+                if (value == androidx.compose.material3.SwipeToDismissBoxValue.StartToEnd) onSwipeToQueue()
+                false
+            },
+        )
+        androidx.compose.material3.SwipeToDismissBox(
+            state = state,
+            enableDismissFromEndToStart = false,
+            backgroundContent = {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .background(MaterialTheme.colorScheme.secondaryContainer)
+                        .padding(horizontal = 24.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        Icons.AutoMirrored.Filled.QueueMusic,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                    )
+                    Text(
+                        "A la cola",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer,
+                        modifier = Modifier.padding(start = 12.dp),
+                    )
+                }
+            },
+        ) {
+            // Opaca a propósito: la fila es transparente y dejaría ver el fondo
+            // verde deslizándose por debajo.
+            Surface(color = MaterialTheme.colorScheme.surface) {
+                SongRowContent(song, onClick, isCurrent, selectionMode, selected, onLongClick, trailing)
+            }
+        }
+        return
+    }
+    SongRowContent(song, onClick, isCurrent, selectionMode, selected, onLongClick, trailing)
+}
+
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+@Composable
+private fun SongRowContent(
+    song: Song,
+    onClick: () -> Unit,
+    isCurrent: Boolean,
+    selectionMode: Boolean,
+    selected: Boolean,
+    onLongClick: (() -> Unit)?,
+    trailing: @Composable () -> Unit,
 ) {
     Row(
         modifier = Modifier

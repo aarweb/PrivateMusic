@@ -72,6 +72,10 @@ fun AutoPlaylistScreen(app: PrivateMusicApp, type: AutoPlaylistType) {
                     song = song,
                     isCurrent = song.id == nowPlaying?.songId,
                     onClick = { app.playerController.playQueue(songs, index) },
+                    onSwipeToQueue = {
+                        app.playerController.addToQueue(song)
+                        com.aar.privatemusic.util.Feedback.show("Añadida a la cola")
+                    },
                 )
             }
         }

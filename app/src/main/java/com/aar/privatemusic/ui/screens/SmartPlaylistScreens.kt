@@ -92,6 +92,10 @@ fun SmartPlaylistDetailScreen(app: PrivateMusicApp, smartPlaylistId: Long) {
                     song = song,
                     isCurrent = song.id == nowPlaying?.songId,
                     onClick = { app.playerController.playQueue(matching, index) },
+                    onSwipeToQueue = {
+                        app.playerController.addToQueue(song)
+                        com.aar.privatemusic.util.Feedback.show("Añadida a la cola")
+                    },
                 )
             }
         }

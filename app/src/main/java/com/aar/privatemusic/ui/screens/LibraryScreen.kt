@@ -348,6 +348,10 @@ fun LibraryScreen(app: PrivateMusicApp, onOpenArtist: (String) -> Unit = {}) {
                     selectionMode = selectionMode,
                     selected = song.id in selectedIds,
                     onLongClick = { startSelection(song.id) },
+                    onSwipeToQueue = {
+                        app.playerController.addToQueue(song)
+                        com.aar.privatemusic.util.Feedback.show("Añadida a la cola")
+                    },
                     onClick = {
                         if (selectionMode) {
                             toggleSelect(song.id)

@@ -326,6 +326,10 @@ fun PlaylistDetailScreen(app: PrivateMusicApp, playlistId: Long) {
                             else app.playerController.playQueue(songs, index)
                         },
                         onLongClick = { startSelection(song.id) },
+                        onSwipeToQueue = {
+                            app.playerController.addToQueue(song)
+                            com.aar.privatemusic.util.Feedback.show("Añadida a la cola")
+                        },
                         trailing = {
                             Box {
                                 IconButton(onClick = { menuOpen = true }) {
