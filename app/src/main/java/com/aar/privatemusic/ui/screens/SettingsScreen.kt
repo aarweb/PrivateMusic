@@ -124,11 +124,17 @@ fun SettingsScreen(app: PrivateMusicApp, onOpenStats: () -> Unit, onOpenEq: () -
         ActivityResultContracts.OpenDocument()
     ) { uri ->
         if (uri != null) scope.launch {
-            val count = BackupManager.importPlaylist(context, uri, app.repository)
+            val r = BackupManager.importPlaylist(context, uri, app.repository)
             operationResult = when {
-                count > 0 -> "Playlist importada: $count canciones encontradas"
-                count == 0 -> "No se encontraron coincidencias en tu biblioteca"
-                else -> "Error al importar el archivo"
+                r == null -> "Error al importar el archivo"
+                r.smartImported == 1 -> "Importada 1 playlist inteligente"
+                r.smartImported > 1 -> "Importadas ${r.smartImported} playlists inteligentes"
+                r.smartImported == 0 && r.matched == 0 && r.added == 0 && r.playlistName == "Playlists inteligentes" ->
+                    "Esas playlists inteligentes ya estaban"
+                r.matched == 0 -> "No se encontraron coincidencias en tu biblioteca"
+                r.merged && r.added == 0 -> "\"${r.playlistName}\" ya tenía esas ${r.matched} canciones"
+                r.merged -> "Añadidas ${r.added} a \"${r.playlistName}\" (${r.matched - r.added} ya estaban)"
+                else -> "Playlist \"${r.playlistName}\" importada: ${r.added} canciones"
             }
         }
     }
@@ -423,12 +429,12 @@ fun SettingsScreen(app: PrivateMusicApp, onOpenStats: () -> Unit, onOpenEq: () -
 
         SettingsAction(
             title = "Exportar biblioteca (ZIP)",
-            subtitle = "Playlists en M3U + catálogo CSV, a donde tú elijas",
+            subtitle = "M3U con rutas relativas, catálogo CSV y las reglas inteligentes",
         ) { exportLauncher.launch("privatemusic-export.zip") }
 
         SettingsAction(
-            title = "Importar playlist (M3U/CSV)",
-            subtitle = "Crea una playlist emparejando con tu biblioteca",
+            title = "Importar playlist o reglas",
+            subtitle = "M3U, CSV o smart-playlists.json; si la playlist ya existe, se fusiona",
         ) { importLauncher.launch(arrayOf("*/*")) }
 
         SettingsAction(

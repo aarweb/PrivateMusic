@@ -250,6 +250,9 @@ interface MusicDao {
     @Query("SELECT * FROM smart_playlists ORDER BY createdAt DESC")
     fun observeSmartPlaylists(): Flow<List<SmartPlaylist>>
 
+    @Query("SELECT * FROM smart_playlists ORDER BY createdAt DESC")
+    suspend fun smartPlaylistsOnce(): List<SmartPlaylist>
+
     @Query("SELECT * FROM smart_playlists WHERE id = :id")
     fun observeSmartPlaylist(id: Long): Flow<SmartPlaylist?>
 
