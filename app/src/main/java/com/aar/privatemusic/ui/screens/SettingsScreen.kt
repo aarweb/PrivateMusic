@@ -538,6 +538,31 @@ fun SettingsScreen(app: PrivateMusicApp, onOpenStats: () -> Unit, onOpenEq: () -
             modifier = Modifier.padding(bottom = 8.dp),
         )
 
+        val themeMode by app.settings.themeMode.collectAsState()
+        Text("Tema", style = MaterialTheme.typography.bodyLarge)
+        Text(
+            "El acento sigue saliendo del color del sistema",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Column(Modifier.padding(top = 4.dp, bottom = 8.dp)) {
+            com.aar.privatemusic.data.ThemeMode.entries.forEach { mode ->
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clickable { app.settings.setThemeMode(mode) }
+                        .padding(vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    androidx.compose.material3.RadioButton(
+                        selected = themeMode == mode,
+                        onClick = { app.settings.setThemeMode(mode) },
+                    )
+                    Text(mode.label, style = MaterialTheme.typography.bodyMedium)
+                }
+            }
+        }
+
         var updateInfo by remember { mutableStateOf<AppUpdater.UpdateInfo?>(null) }
         var updateStatus by remember { mutableStateOf<String?>(null) }
         var downloadProgress by remember { mutableStateOf<Int?>(null) }

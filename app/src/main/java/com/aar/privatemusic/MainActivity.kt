@@ -64,7 +64,8 @@ class MainActivity : ComponentActivity() {
         handleShareIntent(intent)
 
         setContent {
-            PrivateMusicTheme {
+            val themeMode by app.settings.themeMode.collectAsState()
+            PrivateMusicTheme(themeMode) {
                 MainScaffold(app)
             }
         }

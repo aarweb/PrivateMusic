@@ -12,7 +12,10 @@ import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
+import com.aar.privatemusic.data.ThemeMode
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 
@@ -57,14 +60,56 @@ private val AppTypography = Typography().let { d ->
 }
 
 @Composable
-fun PrivateMusicTheme(content: @Composable () -> Unit) {
-    val darkTheme = isSystemInDarkTheme()
-    val colorScheme = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+fun PrivateMusicTheme(
+    themeMode: ThemeMode = ThemeMode.SYSTEM,
+    content: @Composable () -> Unit,
+) {
+    val darkTheme = when (themeMode) {
+        ThemeMode.SYSTEM -> isSystemInDarkTheme()
+        ThemeMode.LIGHT -> false
+        ThemeMode.DARK, ThemeMode.BLACK -> true
+    }
+    var colorScheme = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
         val context = LocalContext.current
         if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
     } else {
         if (darkTheme) DarkColors else LightColors
     }
+    if (themeMode == ThemeMode.BLACK) {
+        // No basta con poner el fondo a negro: Material eleva las superficies
+        // tiñéndolas, y el mini-reproductor o las tarjetas quedarían gris carbón
+        // sobre un fondo apagado. Se apagan también sus contenedores.
+        colorScheme = colorScheme.copy(
+            background = Color.Black,
+            surface = Color.Black,
+            surfaceContainerLowest = Color.Black,
+            surfaceContainerLow = Color(0xFF0A0A0A),
+            surfaceContainer = Color(0xFF0F0F0F),
+            surfaceContainerHigh = Color(0xFF161616),
+            surfaceContainerHighest = Color(0xFF1D1D1D),
+        )
+    }
+    // Las barras del sistema las pinta el sistema, no Compose. Sin esto, en tema
+    // claro los iconos seguían blancos sobre fondo blanco (no se veía ni la hora),
+    // y la barra de navegación se quedaba gris carbón aunque el tema fuera negro
+    // puro, que es justo lo que un OLED no quiere.
+    val view = LocalView.current
+    if (!view.isInEditMode) {
+        val activity = view.context as? android.app.Activity
+        val barColor = colorScheme.background.toArgb()
+        androidx.compose.runtime.SideEffect {
+            activity?.window?.let { window ->
+                @Suppress("DEPRECATION")
+                window.statusBarColor = barColor
+                @Suppress("DEPRECATION")
+                window.navigationBarColor = barColor
+                val controller = androidx.core.view.WindowCompat.getInsetsController(window, view)
+                controller.isAppearanceLightStatusBars = !darkTheme
+                controller.isAppearanceLightNavigationBars = !darkTheme
+            }
+        }
+    }
+
     MaterialTheme(
         colorScheme = colorScheme,
         typography = AppTypography,

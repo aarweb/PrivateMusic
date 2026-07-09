@@ -5,6 +5,17 @@ import android.content.SharedPreferences
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
+/**
+ * [BLACK] es negro puro, no "muy oscuro": en una pantalla OLED el píxel negro
+ * está apagado, así que se nota en la batería y de noche no deslumbra.
+ */
+enum class ThemeMode(val label: String) {
+    SYSTEM("Como el sistema"),
+    LIGHT("Claro"),
+    DARK("Oscuro"),
+    BLACK("Negro puro (OLED)"),
+}
+
 /** App-wide playback preferences; read from both the UI and the playback service. */
 class AppSettings(context: Context) {
 
@@ -13,6 +24,17 @@ class AppSettings(context: Context) {
 
     private val _crossfadeSec = MutableStateFlow(prefs.getInt(KEY_CROSSFADE, 0))
     val crossfadeSec: StateFlow<Int> = _crossfadeSec
+
+    private val _themeMode = MutableStateFlow(
+        runCatching { ThemeMode.valueOf(prefs.getString(KEY_THEME, null) ?: "") }
+            .getOrDefault(ThemeMode.SYSTEM)
+    )
+    val themeMode: StateFlow<ThemeMode> = _themeMode
+
+    fun setThemeMode(value: ThemeMode) {
+        prefs.edit().putString(KEY_THEME, value.name).apply()
+        _themeMode.value = value
+    }
 
     private val _normalizeVolume = MutableStateFlow(prefs.getBoolean(KEY_NORMALIZE, false))
     val normalizeVolume: StateFlow<Boolean> = _normalizeVolume
@@ -91,6 +113,7 @@ class AppSettings(context: Context) {
 
     companion object {
         private const val KEY_CROSSFADE = "crossfade_sec"
+        private const val KEY_THEME = "theme_mode"
         private const val KEY_NORMALIZE = "normalize_volume"
         private const val KEY_SPONSORBLOCK = "sponsorblock"
         private const val KEY_LISTENBRAINZ = "listenbrainz_token"
