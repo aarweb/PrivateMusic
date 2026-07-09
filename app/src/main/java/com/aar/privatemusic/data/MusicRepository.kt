@@ -409,21 +409,26 @@ class MusicRepository(
     suspend fun playCounts(): Map<String, Int> =
         dao.playCountsOnce().associate { it.songId to it.plays }
 
+    fun observeLastPlayed(): Flow<List<LastPlay>> = dao.observeLastPlayed()
+
     suspend fun createSmartPlaylist(sp: SmartPlaylist): Long = dao.insertSmartPlaylist(sp)
+    suspend fun updateSmartPlaylist(sp: SmartPlaylist) = dao.updateSmartPlaylist(sp)
     suspend fun deleteSmartPlaylist(sp: SmartPlaylist) = dao.deleteSmartPlaylist(sp)
 
-    /** Applies the smart playlist rules in memory. */
-    fun evaluateSmartPlaylist(sp: SmartPlaylist, songs: List<Song>, counts: Map<String, Int>): List<Song> {
-        val cutoff = if (sp.addedWithinDays > 0)
-            System.currentTimeMillis() - sp.addedWithinDays * 24L * 3600 * 1000 else 0L
-        return songs.filter { song ->
-            (sp.artistContains.isNullOrBlank() ||
-                song.artist.contains(sp.artistContains, ignoreCase = true)) &&
-                (!sp.onlyFavorites || song.isFavorite) &&
-                ((counts[song.id] ?: 0) >= sp.minPlays) &&
-                (cutoff == 0L || song.addedAt >= cutoff)
-        }
-    }
+    /**
+     * Aplica las reglas en memoria. Las playlists creadas antes del motor no
+     * tienen `rulesJson`: [SmartRuleEngine.rulesOf] traduce sus columnas viejas.
+     */
+    fun evaluateSmartPlaylist(
+        sp: SmartPlaylist,
+        songs: List<Song>,
+        counts: Map<String, Int>,
+        lastPlayed: Map<String, Long> = emptyMap(),
+    ): List<Song> = SmartRuleEngine.evaluate(
+        SmartRuleEngine.rulesOf(sp),
+        songs,
+        RuleContext(playCounts = counts, lastPlayed = lastPlayed),
+    )
 
     suspend fun deleteSong(song: Song) {
         downloader.deleteSongFiles(song)

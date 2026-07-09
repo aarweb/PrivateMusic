@@ -31,111 +31,42 @@ import com.aar.privatemusic.data.db.SmartPlaylist
 import com.aar.privatemusic.ui.components.SongRow
 import kotlinx.coroutines.launch
 
-/** Dialog to create a rule-based playlist. */
-@Composable
-fun CreateSmartPlaylistDialog(app: PrivateMusicApp, onDismiss: () -> Unit) {
-    val scope = rememberCoroutineScope()
-    var name by remember { mutableStateOf("") }
-    var artistContains by remember { mutableStateOf("") }
-    var onlyFavorites by remember { mutableStateOf(false) }
-    var minPlays by remember { mutableStateOf("") }
-    var addedWithinDays by remember { mutableStateOf("") }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Playlist inteligente") },
-        text = {
-            Column(Modifier.verticalScroll(rememberScrollState())) {
-                OutlinedTextField(
-                    value = name,
-                    onValueChange = { name = it },
-                    label = { Text("Nombre") },
-                    singleLine = true,
-                    modifier = Modifier.padding(bottom = 8.dp),
-                )
-                OutlinedTextField(
-                    value = artistContains,
-                    onValueChange = { artistContains = it },
-                    label = { Text("Artista contiene… (opcional)") },
-                    singleLine = true,
-                    modifier = Modifier.padding(bottom = 8.dp),
-                )
-                OutlinedTextField(
-                    value = minPlays,
-                    onValueChange = { minPlays = it.filter { c -> c.isDigit() } },
-                    label = { Text("Mínimo de reproducciones (opcional)") },
-                    singleLine = true,
-                    modifier = Modifier.padding(bottom = 8.dp),
-                )
-                OutlinedTextField(
-                    value = addedWithinDays,
-                    onValueChange = { addedWithinDays = it.filter { c -> c.isDigit() } },
-                    label = { Text("Añadida en los últimos N días (opcional)") },
-                    singleLine = true,
-                    modifier = Modifier.padding(bottom = 8.dp),
-                )
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Checkbox(checked = onlyFavorites, onCheckedChange = { onlyFavorites = it })
-                    Text("Solo favoritas")
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(
-                onClick = {
-                    val trimmed = name.trim()
-                    if (trimmed.isNotEmpty()) {
-                        scope.launch {
-                            app.repository.createSmartPlaylist(
-                                SmartPlaylist(
-                                    name = trimmed,
-                                    artistContains = artistContains.trim().ifBlank { null },
-                                    onlyFavorites = onlyFavorites,
-                                    minPlays = minPlays.toIntOrNull() ?: 0,
-                                    addedWithinDays = addedWithinDays.toIntOrNull() ?: 0,
-                                    createdAt = System.currentTimeMillis(),
-                                )
-                            )
-                        }
-                    }
-                    onDismiss()
-                },
-            ) { Text("Crear") }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancelar") } },
-    )
-}
-
 @Composable
 fun SmartPlaylistDetailScreen(app: PrivateMusicApp, smartPlaylistId: Long) {
     val sp by app.repository.observeSmartPlaylist(smartPlaylistId).collectAsState(initial = null)
     val songs by app.repository.observeSongs().collectAsState(initial = emptyList())
     val nowPlaying by app.playerController.nowPlaying.collectAsState()
     val counts by app.repository.observePlayCounts().collectAsState(initial = emptyList())
+    val lastPlays by app.repository.observeLastPlayed().collectAsState(initial = emptyList())
+    var editing by remember { mutableStateOf(false) }
 
     val playlist = sp ?: return
     val countMap = remember(counts) { counts.associate { it.songId to it.plays } }
-    val matching = remember(playlist, songs, countMap) {
-        app.repository.evaluateSmartPlaylist(playlist, songs, countMap)
+    val lastMap = remember(lastPlays) { lastPlays.associate { it.songId to it.lastPlayed } }
+    val matching = remember(playlist, songs, countMap, lastMap) {
+        app.repository.evaluateSmartPlaylist(playlist, songs, countMap, lastMap)
+    }
+
+    if (editing) {
+        SmartPlaylistEditorDialog(app, existing = playlist, onDismiss = { editing = false })
     }
 
     Column(Modifier.fillMaxSize()) {
+        Row(
+            Modifier.fillMaxWidth().padding(start = 16.dp, top = 16.dp, end = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                playlist.name,
+                style = MaterialTheme.typography.titleLarge,
+                modifier = Modifier.weight(1f),
+            )
+            TextButton(onClick = { editing = true }) { Text("Editar reglas") }
+        }
         Text(
-            playlist.name,
-            style = MaterialTheme.typography.titleLarge,
-            modifier = Modifier.padding(16.dp),
-        )
-        Text(
-            buildString {
-                append("Reglas: ")
-                val rules = buildList {
-                    playlist.artistContains?.let { add("artista contiene \"$it\"") }
-                    if (playlist.onlyFavorites) add("solo favoritas")
-                    if (playlist.minPlays > 0) add("≥${playlist.minPlays} reproducciones")
-                    if (playlist.addedWithinDays > 0) add("añadida en ${playlist.addedWithinDays} días")
-                }
-                append(if (rules.isEmpty()) "todas las canciones" else rules.joinToString(" · "))
-            },
+            "Reglas: " + com.aar.privatemusic.data.SmartRuleEngine.describe(
+                com.aar.privatemusic.data.SmartRuleEngine.rulesOf(playlist),
+            ),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(horizontal = 16.dp),

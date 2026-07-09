@@ -313,7 +313,7 @@ fun PlaylistsScreen(
     }
 
     if (creatingSmart) {
-        CreateSmartPlaylistDialog(app, onDismiss = { creatingSmart = false })
+        SmartPlaylistEditorDialog(app, onDismiss = { creatingSmart = false })
     }
 
     if (creatingFolder) {

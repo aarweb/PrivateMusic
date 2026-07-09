@@ -46,11 +46,15 @@ data class Song(
 data class SmartPlaylist(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val name: String,
+    // Reglas viejas, previas al motor. Se conservan para que las playlists ya
+    // creadas sigan funcionando; SmartRuleEngine.rulesOf() las traduce al vuelo.
     val artistContains: String?,
     val onlyFavorites: Boolean,
     val minPlays: Int,          // 0 = no requirement
     val addedWithinDays: Int,   // 0 = any time
     val createdAt: Long,
+    /** Reglas del motor (grupos Y/O anidados, orden y límite) serializadas a JSON. */
+    val rulesJson: String? = null,
 )
 
 @Entity(

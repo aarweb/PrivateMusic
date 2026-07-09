@@ -6,6 +6,7 @@ import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.Transaction
+import androidx.room.Update
 import kotlinx.coroutines.flow.Flow
 
 @Dao
@@ -200,6 +201,9 @@ interface MusicDao {
     @Query("SELECT songId, COUNT(*) AS plays FROM play_history GROUP BY songId")
     fun observePlayCounts(): Flow<List<PlayCount>>
 
+    @Query("SELECT songId, MAX(playedAt) AS lastPlayed FROM play_history GROUP BY songId")
+    fun observeLastPlayed(): Flow<List<LastPlay>>
+
     @Query("SELECT songId, COUNT(*) AS plays FROM play_history GROUP BY songId")
     suspend fun playCountsOnce(): List<PlayCount>
 
@@ -248,6 +252,9 @@ interface MusicDao {
 
     @Insert
     suspend fun insertSmartPlaylist(sp: SmartPlaylist): Long
+
+    @Update
+    suspend fun updateSmartPlaylist(sp: SmartPlaylist)
 
     @Delete
     suspend fun deleteSmartPlaylist(sp: SmartPlaylist)
