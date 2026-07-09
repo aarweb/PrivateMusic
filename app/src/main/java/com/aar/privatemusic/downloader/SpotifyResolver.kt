@@ -9,7 +9,6 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
-import java.net.URLEncoder
 
 data class SpotifyTrack(
     val title: String,
@@ -122,39 +121,39 @@ object SpotifyResolver {
             val album = api("albums/$id")
             val name = album.optString("name")
             val artist = album.optJSONArray("artists")?.joinNames().orEmpty()
-            val total = album.optJSONObject("tracks")?.optInt("total") ?: 0
             // Los tracks de un álbum no repiten el artista: se lo ponemos nosotros.
-            val tracks = pageThrough(total, 50) { offset ->
+            val tracks = pageThrough(50) { offset ->
                 api("albums/$id/tracks?limit=50&offset=$offset").optJSONArray("items")
             }.mapNotNull { parseApiTrack(it, fallbackArtist = artist) }
-            SpotifyPlaylist(name, tracks, total)
+            SpotifyPlaylist(name, tracks, tracks.size)
         }
         else -> {
-            val meta = api("playlists/$id?fields=name,tracks(total)")
-            val name = meta.optString("name")
-            val total = meta.optJSONObject("tracks")?.optInt("total") ?: 0
-            val tracks = pageThrough(total, 100) { offset ->
-                api(
-                    "playlists/$id/tracks?limit=100&offset=$offset" +
-                        "&fields=" + URLEncoder.encode("items(track(name,duration_ms,artists(name)))", "UTF-8"),
-                ).optJSONArray("items")
+            val name = api("playlists/$id?fields=name").optString("name")
+            val tracks = pageThrough(100) { offset ->
+                api("playlists/$id/tracks?limit=100&offset=$offset").optJSONArray("items")
             }.mapNotNull { item ->
                 // Los episodios de podcast y las pistas locales vienen sin `track`.
                 parseApiTrack(item.optJSONObject("track") ?: return@mapNotNull null)
             }
-            SpotifyPlaylist(name, tracks, total)
+            Log.d("Spotify", "API: ${tracks.size} pistas en \"$name\"")
+            SpotifyPlaylist(name, tracks, tracks.size)
         }
     }
 
-    /** Recorre las páginas hasta juntar [total] elementos (o hasta que una venga vacía). */
-    private fun pageThrough(total: Int, pageSize: Int, page: (Int) -> JSONArray?): List<JSONObject> {
+    /**
+     * Recorre las páginas hasta que una venga incompleta. No nos fiamos del
+     * `total` que declara Spotify: si la sub-selección de `fields` no le gusta,
+     * lo devuelve a 0 y nos quedaríamos sin pedir ni una página.
+     */
+    private fun pageThrough(pageSize: Int, page: (Int) -> JSONArray?): List<JSONObject> {
         val out = mutableListOf<JSONObject>()
         var offset = 0
-        while (offset < total) {
+        while (true) {
             val items = page(offset) ?: break
-            if (items.length() == 0) break
             for (i in 0 until items.length()) items.optJSONObject(i)?.let { out += it }
+            if (items.length() < pageSize) break
             offset += pageSize
+            if (offset > 10_000) break // playlist absurda: corta antes de colgarte
         }
         return out
     }
