@@ -13,6 +13,8 @@ import com.aar.privatemusic.desktop.ui.KeyShortcuts
 import com.aar.privatemusic.desktop.ui.PrivateMusicTheme
 
 fun main() = application {
+    // Que la app aparezca en el buscador de aplicaciones a partir del primer arranque.
+    remember { LauncherEntry.ensure() }
     val shortcuts = remember { KeyShortcuts() }
     Window(
         onCloseRequest = ::exitApplication,
