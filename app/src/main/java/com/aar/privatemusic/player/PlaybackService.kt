@@ -24,6 +24,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.guava.future
 import kotlinx.coroutines.isActive
@@ -229,6 +230,33 @@ class PlaybackService : MediaLibraryService() {
      */
     private fun startVolumeLoop(player: ExoPlayer, dao: MusicDao) {
         mainScope.launch {
+            // Any throw inside the loop used to kill the crossfade engine silently
+            // for the rest of the session: mainScope has a SupervisorJob, so the
+            // child just dies — no crash, and no more crossfades until the service
+            // restarts. Restart the loop instead of dying.
+            while (isActive) {
+                try {
+                    volumeLoop(player, dao)
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    android.util.Log.e("Crossfade", "volume loop crashed; restarting", e)
+                    runCatching {
+                        tailPlayer?.let {
+                            it.volume = 0f
+                            it.stop()
+                            it.clearMediaItems()
+                            it.setPlaybackSpeed(1f)
+                        }
+                        player.volume = 1f
+                    }
+                    delay(500)
+                }
+            }
+        }
+    }
+
+    private suspend fun volumeLoop(player: ExoPlayer, dao: MusicDao) = coroutineScope {
             // Two streams summed in the OS mixer can peak past 0 dBFS at the
             // crossfade midpoint and clip; a small constant margin (~ -1 dB) keeps
             // the sum in range without an audible loudness dip.
@@ -295,7 +323,11 @@ class PlaybackService : MediaLibraryService() {
                 // ---- Overlap in progress: drive both volume curves. ----
                 if (xfActive && tail != null) {
                     val remainingXf = xfEndsAt - android.os.SystemClock.elapsedRealtime()
-                    val aborted = player.currentMediaItem?.mediaId != xfMainId || !player.isPlaying
+                    // NOT isPlaying: right after seekToNextMediaItem the main player
+                    // dips into BUFFERING for a tick (much more likely with the screen
+                    // off / CPU throttled), and aborting there cut track A dead.
+                    // playWhenReady only drops when the user actually pauses.
+                    val aborted = player.currentMediaItem?.mediaId != xfMainId || !player.playWhenReady
                     if (remainingXf <= 0 || aborted) {
                         tail.volume = 0f
                         tail.stop()
@@ -345,10 +377,12 @@ class PlaybackService : MediaLibraryService() {
                     // Wide window: until armed, `remaining` is measured against the
                     // FILE end, but the anchor may sit up to ~20s earlier (trimmed
                     // tail silence) — arm early enough to cover the worst case.
+                    val nextIdx = player.nextMediaItemIndex
                     if (eligible && armedForId != curId &&
-                        remaining < crossfadeMs + 25000
+                        remaining < crossfadeMs + 25000 &&
+                        nextIdx != androidx.media3.common.C.INDEX_UNSET
                     ) {
-                        val nextId = player.getMediaItemAt(player.nextMediaItemIndex).mediaId
+                        val nextId = player.getMediaItemAt(nextIdx).mediaId
                         val (gains, ratio, tailSilence) = withContext(Dispatchers.IO) {
                             runCatching {
                                 val la = dao.getLoudness(curId)
@@ -384,7 +418,9 @@ class PlaybackService : MediaLibraryService() {
                         }
                     }
 
-                    if (eligible && armedForId == curId && remaining < crossfadeMs) {
+                    if (eligible && armedForId == curId && remaining < crossfadeMs &&
+                        nextIdx != androidx.media3.common.C.INDEX_UNSET
+                    ) {
                         val armedReady = armedForId == curId &&
                             tail.playbackState == Player.STATE_READY
                         if (!armedReady) {
@@ -404,7 +440,7 @@ class PlaybackService : MediaLibraryService() {
                             armedAtPos = player.currentPosition
                             armedGainA = gainFactor
                             armedGainB = 1f
-                            armedNextId = player.getMediaItemAt(player.nextMediaItemIndex).mediaId
+                            armedNextId = player.getMediaItemAt(nextIdx).mediaId
                             var prep = 0
                             while (tail.playbackState != Player.STATE_READY && prep < 1200) {
                                 delay(20)
@@ -521,7 +557,6 @@ class PlaybackService : MediaLibraryService() {
                 touchedVolume = true
                 delay(200)
             }
-        }
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibrarySession? =
