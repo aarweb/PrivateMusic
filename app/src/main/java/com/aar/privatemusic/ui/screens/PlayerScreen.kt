@@ -651,11 +651,30 @@ private fun LyricsPanel(
     val listState = rememberLazyListState()
     val currentIdx = if (lyrics.synced) lyrics.lines.indexOfLast { it.timeMs <= positionMs } else -1
 
-    LaunchedEffect(currentIdx) {
-        if (currentIdx >= 0) listState.animateScrollToItem(maxOf(0, currentIdx - 2))
+    // Mientras haya un dedo en la letra no se desplaza sola. Antes, cada vez que
+    // cambiaba la línea activa la lista se movía bajo el dedo, y el toque acababa
+    // cayendo en otra línea: pulsabas un verso y saltaba a otro sitio.
+    var touching by remember { mutableStateOf(false) }
+    LaunchedEffect(currentIdx, touching) {
+        if (currentIdx >= 0 && !touching) listState.animateScrollToItem(maxOf(0, currentIdx - 2))
+    }
+    LaunchedEffect(touching) {
+        // Y si ya estaba animando cuando el usuario tocó, se corta en seco:
+        // un scroll de cero píxeles con prioridad alta cancela la animación.
+        if (touching) listState.scroll(androidx.compose.foundation.MutatePriority.UserInput) {}
     }
 
-    LazyColumn(state = listState, modifier = modifier) {
+    LazyColumn(
+        state = listState,
+        modifier = modifier.pointerInput(Unit) {
+            awaitPointerEventScope {
+                while (true) {
+                    val event = awaitPointerEvent(androidx.compose.ui.input.pointer.PointerEventPass.Initial)
+                    touching = event.changes.any { it.pressed }
+                }
+            }
+        },
+    ) {
         itemsIndexed(lyrics.lines) { i, line ->
             // La línea que suena manda; las de alrededor se apagan según lo
             // lejos que queden. Con la letra sin sincronizar no hay "ahora",
