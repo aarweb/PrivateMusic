@@ -71,7 +71,6 @@ class TorrentDownloader(
     private val audioExtensions = setOf(
         "flac", "mp3", "m4a", "aac", "opus", "ogg", "wav", "aiff", "aif", "wma", "alac",
     )
-    private val coverNames = setOf("cover", "folder", "front", "albumart", "album")
 
     fun enqueue(result: SearchResult) {
         val magnet = result.magnetUri
@@ -239,16 +238,8 @@ class TorrentDownloader(
         }
     }
 
-    private fun findCover(files: List<File>, root: File): File? {
-        val fromTorrent = files.firstOrNull {
-            it.extension.lowercase() in setOf("jpg", "jpeg", "png") &&
-                it.nameWithoutExtension.lowercase() in coverNames
-        }
-        if (fromTorrent?.exists() == true) return fromTorrent
-        // Cualquier imagen del directorio raíz sirve de portada de reserva.
-        return root.takeIf { it.isDirectory }?.listFiles()
-            ?.firstOrNull { it.extension.lowercase() in setOf("jpg", "jpeg", "png") }
-    }
+    private fun findCover(files: List<File>, root: File): File? =
+        com.aar.privatemusic.util.CoverFinder.pick(files, root)
 
     /** Espera a que el motor registre el handle tras añadir el magnet. */
     private suspend fun awaitHandle(s: SessionManager, hash: Sha1Hash): TorrentHandle? {

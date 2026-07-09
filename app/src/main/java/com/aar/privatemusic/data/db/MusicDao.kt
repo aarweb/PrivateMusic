@@ -160,6 +160,9 @@ interface MusicDao {
     @Query("UPDATE songs SET artPath = :artPath WHERE id = :id")
     suspend fun updateSongArt(id: String, artPath: String)
 
+    @Query("UPDATE songs SET artPath = NULL WHERE id = :id")
+    suspend fun clearSongArt(id: String)
+
     @Query("UPDATE playlists SET coverPath = :coverPath WHERE id = :id")
     suspend fun updatePlaylistCover(id: Long, coverPath: String)
 

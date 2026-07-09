@@ -332,6 +332,39 @@ class MusicRepository(
     // ---- On-device sonic analysis ----
 
     /** Analyzes any song without BPM/key/fingerprint (runs on app start). */
+    /**
+     * Carátulas que apuntan a ficheros que ya no están (o que nunca llegaron a
+     * descargarse: un torrent puede anunciar `Artwork/Front.jpg` y no traerlo).
+     * Busca una imagen de recambio en la carpeta del álbum y, si no hay ninguna,
+     * deja el campo a null para que la interfaz muestre su icono en vez de un
+     * hueco gris.
+     *
+     * Sólo mira dentro de carpetas de álbum: en el directorio común de música
+     * cada canción tiene su propia imagen y cogeríamos la de la canción de al lado.
+     */
+    suspend fun repairMissingArt(): Int = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        var repaired = 0
+        val shared = musicDir.absolutePath
+        // Una imagen por carpeta de álbum: los discos traen quince pistas y una portada.
+        val perDir = HashMap<String, java.io.File?>()
+        dao.songsOnce().forEach { song ->
+            val art = song.artPath ?: return@forEach
+            if (java.io.File(art).exists()) return@forEach
+            val albumDir = java.io.File(song.filePath).parentFile
+            val replacement = albumDir
+                ?.takeIf { it.absolutePath != shared }
+                ?.let { dir ->
+                    perDir.getOrPut(dir.absolutePath) {
+                        com.aar.privatemusic.util.CoverFinder.findIn(dir, maxDepth = 2)
+                    }
+                }
+            if (replacement != null) dao.updateSongArt(song.id, replacement.absolutePath)
+            else dao.clearSongArt(song.id)
+            repaired++
+        }
+        repaired
+    }
+
     suspend fun backfillAnalysis() {
         dao.songsMissingAnalysis().forEach { song ->
             AudioAnalyzer.analyze(song.filePath, song.durationSec)?.let {

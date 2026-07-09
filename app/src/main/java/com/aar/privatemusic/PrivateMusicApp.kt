@@ -91,6 +91,7 @@ class PrivateMusicApp : Application() {
         appScope.launch {
             downloader.updateYtDlp() // YouTube breaks old extractors regularly
             downloader.resumePending() // finish downloads cut off by process death
+            repository.repairMissingArt() // carátulas que apuntan a ficheros que no existen
             repository.backfillQuality()
             repository.backfillLoudness()
             repository.backfillAnalysis()
