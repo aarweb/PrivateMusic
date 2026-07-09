@@ -22,6 +22,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -37,6 +38,7 @@ import androidx.compose.ui.window.DialogProperties
 import com.aar.privatemusic.PrivateMusicApp
 import com.aar.privatemusic.downloader.DeezerDownloader
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -58,37 +60,71 @@ private const val BROWSER_UA =
 fun DeezerLoginDialog(app: PrivateMusicApp, onClose: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    // Overlay opaco: solo cuando comprobamos un arl recién aparecido.
     var validating by remember { mutableStateOf(false) }
     // WebView emergente (p.ej. el OAuth de Google) mostrado por encima del principal.
     var popup by remember { mutableStateOf<WebView?>(null) }
+    // Comprobación en curso, sin UI: evita peticiones solapadas del sondeo.
+    var busy by remember { mutableStateOf(false) }
+    // Último arl comprobado y cuándo: Deezer pone un arl de invitado antes de
+    // iniciar sesión, así que sin esto el sondeo machacaría la red validándolo.
+    var checked by remember { mutableStateOf<Pair<String, Long>?>(null) }
 
-    // Lee la cookie arl; si es de una sesión real (USER_ID != 0), la guarda y cierra.
-    fun tryCaptureArl() {
-        if (validating) return
-        val cookies = CookieManager.getInstance()
-        cookies.flush()
-        val arl = cookies.getCookie("https://www.deezer.com")
+    fun readArl(): String? =
+        CookieManager.getInstance().getCookie("https://www.deezer.com")
             ?.split(";")?.map { it.trim() }
             ?.firstOrNull { it.startsWith("arl=") }
             ?.removePrefix("arl=")
             ?.takeIf { it.isNotBlank() }
-            ?: return
-        validating = true
-        scope.launch {
-            val info = withContext(Dispatchers.IO) { DeezerDownloader.fetchUserInfo(context, arl) }
-            if (info != null) {
-                app.settings.setDeezerSession(arl, info.name, info.country, info.hasFlac, info.hasHq)
-                onClose()
-            } else {
-                validating = false // arl aún de invitado: seguir esperando al login real
-            }
+
+    // El arl que ya había al abrir (de invitado o de una sesión anterior): al
+    // iniciar sesión Deezer lo sustituye, y ese cambio es la señal de captura.
+    val initialArl = remember { readArl() }
+
+    // Lee la cookie arl; si es de una sesión real (USER_ID != 0), la guarda y cierra.
+    suspend fun tryCaptureArl() {
+        if (busy) return
+        val arl = readArl() ?: return
+        val now = android.os.SystemClock.elapsedRealtime()
+        val last = checked
+        // Revalida el mismo arl solo cada 5s (por si el fallo fue de red).
+        if (last != null && last.first == arl && now - last.second < 5_000) return
+        checked = arl to now
+        busy = true
+        // Tapar el formulario en cada reintento del arl de invitado impediría
+        // escribir: el overlay solo sale cuando la cookie ha cambiado.
+        validating = arl != initialArl
+        val info = withContext(Dispatchers.IO) { DeezerDownloader.fetchUserInfo(context, arl) }
+        if (info != null) {
+            CookieManager.getInstance().flush()
+            app.settings.setDeezerSession(arl, info.name, info.country, info.hasFlac, info.hasHq)
+            onClose()
+        } else {
+            // arl aún de invitado: seguir esperando al login real
+            busy = false
+            validating = false
+        }
+    }
+
+    // Deezer termina el login con navegación de SPA (y el OAuth de Google en una
+    // emergente): ahí onPageFinished ya no vuelve a dispararse, así que sin este
+    // sondeo el diálogo se quedaba abierto sobre la web-app (pantalla en blanco).
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(1000)
+            tryCaptureArl()
         }
     }
 
     val pageWatcher = object : WebViewClient() {
         override fun onPageFinished(view: WebView, url: String) {
             Log.d("DeezerLogin", "page: ${Uri.parse(url).host}")
-            tryCaptureArl()
+            scope.launch { tryCaptureArl() }
+        }
+
+        /** Cambios de ruta de la SPA (pushState), que no disparan onPageFinished. */
+        override fun doUpdateVisitedHistory(view: WebView, url: String, isReload: Boolean) {
+            scope.launch { tryCaptureArl() }
         }
     }
 
@@ -151,7 +187,7 @@ fun DeezerLoginDialog(app: PrivateMusicApp, onClose: () -> Unit) {
                                     override fun onCloseWindow(window: WebView) {
                                         // El OAuth cerró la emergente: recoge la sesión ya establecida.
                                         popup = null
-                                        tryCaptureArl()
+                                        scope.launch { tryCaptureArl() }
                                     }
                                 }
                                 loadUrl("https://www.deezer.com/login")
@@ -185,8 +221,19 @@ fun DeezerLoginDialog(app: PrivateMusicApp, onClose: () -> Unit) {
                     }
 
                     if (validating) {
-                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            CircularProgressIndicator()
+                        // Opaco a propósito: la web-app de Deezer queda detrás y en
+                        // WebView se ve en blanco mientras validamos la sesión.
+                        Surface(Modifier.fillMaxSize()) {
+                            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    CircularProgressIndicator()
+                                    Text(
+                                        "Validando sesión…",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        modifier = Modifier.padding(top = 16.dp),
+                                    )
+                                }
+                            }
                         }
                     }
                 }
