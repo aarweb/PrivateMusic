@@ -44,6 +44,8 @@ kotlinx-coroutines-core = { group = "org.jetbrains.kotlinx", name = "kotlinx-cor
 vlcj = { group = "uk.co.caprica", name = "vlcj", version.ref = "vlcj" }
 jmdns = { group = "org.jmdns", name = "jmdns", version = "3.6.3" }
 json = { group = "org.json", name = "json", version = "20250107" }
+# Lee etiquetas y cabeceras de audio en el escritorio, donde no hay MediaMetadataRetriever.
+jaudiotagger = { group = "net.jthink", name = "jaudiotagger", version = "3.0.1" }
 coil-compose = { group = "io.coil-kt", name = "coil-compose", version.ref = "coil" }
 androidx-palette = { group = "androidx.palette", name = "palette-ktx", version = "1.0.0" }
 reorderable = { group = "sh.calvin.reorderable", name = "reorderable", version = "2.4.0" }

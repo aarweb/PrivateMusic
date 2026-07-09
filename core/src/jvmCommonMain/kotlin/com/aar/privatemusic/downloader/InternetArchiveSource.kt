@@ -58,7 +58,8 @@ object InternetArchiveSource {
         }
 
     /** Ranking de formatos de audio de archive.org: menor = mejor calidad. 99 = no es audio. */
-    internal fun audioFormatRank(format: String): Int {
+    /** Público, no `internal`: los descargadores viven en otro módulo desde el puerto a escritorio. */
+    fun audioFormatRank(format: String): Int {
         val f = format.lowercase()
         return when {
             "24bit" in f && "flac" in f -> 0

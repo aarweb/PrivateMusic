@@ -30,28 +30,6 @@ import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 
-data class SearchResult(
-    val id: String,
-    val title: String,
-    val artist: String,
-    val durationSec: Int,
-    val thumbnailUrl: String,
-    /** Resultado de torrent (1337x): sin preescucha, la acción copia el magnet. */
-    val isTorrent: Boolean = false,
-    val magnetUri: String? = null,
-    /** Ítem de Internet Archive (álbum/concierto): sin preescucha, descarga el ítem. */
-    val isArchive: Boolean = false,
-    /** Etiqueta de calidad que se descargará (p.ej. "FLAC", "FLAC 24-bit", "MP3"). */
-    val qualityLabel: String? = null,
-)
-
-sealed interface DownloadState {
-    data object Queued : DownloadState
-    data class Downloading(val progress: Float) : DownloadState
-    data object Done : DownloadState
-    data class Failed(val message: String) : DownloadState
-}
-
 /**
  * Search and download via the bundled yt-dlp. Audio is fetched with `-f bestaudio`
  * and kept in its original codec (Opus/M4A) — no re-encode, so nothing is lost.

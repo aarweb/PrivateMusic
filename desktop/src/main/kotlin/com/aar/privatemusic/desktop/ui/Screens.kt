@@ -263,6 +263,7 @@ private fun PlaylistDetail(
 @Composable
 fun SettingsScreen(
     songs: List<Song>,
+    settings: com.aar.privatemusic.desktop.DesktopSettings,
     syncing: Boolean,
     syncStatus: String?,
     onSync: () -> Unit,
@@ -292,6 +293,8 @@ fun SettingsScreen(
             }
         }
 
+        DeezerSettings(settings)
+
         Text("Biblioteca", Modifier.padding(top = 28.dp, bottom = 8.dp), style = MaterialTheme.typography.titleMedium)
         InfoRow("Canciones", "${songs.size}")
         InfoRow("Carpeta", DesktopStorage.dataDir.absolutePath)
@@ -308,7 +311,7 @@ fun SettingsScreen(
 }
 
 @Composable
-private fun InfoRow(label: String, value: String) {
+internal fun InfoRow(label: String, value: String) {
     Row(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
         Text(label, Modifier.width(120.dp), style = MaterialTheme.typography.bodyMedium)
         Text(

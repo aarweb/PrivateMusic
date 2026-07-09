@@ -61,8 +61,14 @@ class PrivateMusicApp : Application() {
         settings = AppSettings(this)
         downloader = YtDownloader(this, dao, appScope)
         torrents = TorrentDownloader(this, dao, appScope)
-        deezerDownloader = DeezerDownloader(this, dao, appScope)
-        archive = InternetArchiveDownloader(this, dao, appScope)
+        val downloaderEnv = com.aar.privatemusic.downloader.AndroidDownloaderEnv(this)
+        deezerDownloader = DeezerDownloader(
+            downloaderEnv,
+            com.aar.privatemusic.downloader.AndroidDeezerAccount(this),
+            dao,
+            appScope,
+        )
+        archive = InternetArchiveDownloader(downloaderEnv, dao, appScope)
         repository = MusicRepository(dao, downloader)
         metadataService = com.aar.privatemusic.metadata.MetadataService(this, dao, downloader.musicDir)
         libraryShare = com.aar.privatemusic.sync.LibraryShare(this, dao)

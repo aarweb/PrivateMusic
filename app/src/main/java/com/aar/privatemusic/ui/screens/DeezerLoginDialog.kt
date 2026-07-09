@@ -115,7 +115,7 @@ fun DeezerLoginDialog(app: PrivateMusicApp, onClose: () -> Unit) {
         // Tapar el formulario en cada reintento del arl de invitado impediría
         // escribir: el overlay solo sale cuando la cookie ha cambiado.
         validating = arl != initialArl
-        val info = withContext(Dispatchers.IO) { DeezerDownloader.fetchUserInfo(context, arl) }
+        val info = withContext(Dispatchers.IO) { DeezerDownloader.fetchUserInfo(arl) }
         if (info != null) {
             CookieManager.getInstance().flush()
             app.settings.setDeezerSession(arl, info.name, info.country, info.hasFlac, info.hasHq)

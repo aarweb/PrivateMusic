@@ -53,6 +53,28 @@ fun Cover(artPath: String?, size: Dp, modifier: Modifier = Modifier) {
     }
 }
 
+/** Igual que [Cover], pero la imagen está en la red (resultados de búsqueda). */
+@Composable
+fun RemoteCover(url: String?, size: Dp, modifier: Modifier = Modifier) {
+    val image = rememberRemoteArt(url)
+    val shape = if (size > 120.dp) MaterialTheme.shapes.medium else MaterialTheme.shapes.small
+    Box(
+        modifier.size(size).clip(shape).background(MaterialTheme.colorScheme.surfaceContainerHigh),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (image != null) {
+            Image(image, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+        } else {
+            Icon(
+                Icons.Filled.MusicNote,
+                null,
+                Modifier.size(size / 2.5f),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
 /** Mosaico de hasta cuatro carátulas, como en las playlists del móvil. */
 @Composable
 fun PlaylistCover(artPaths: List<String>, size: Dp) {

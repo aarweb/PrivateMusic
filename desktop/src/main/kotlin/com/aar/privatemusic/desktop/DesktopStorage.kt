@@ -22,4 +22,8 @@ object DesktopStorage {
     val musicDir: File by lazy { File(dataDir, "music").apply { mkdirs() } }
 
     val artDir: File by lazy { File(dataDir, "art").apply { mkdirs() } }
+
+    /** Herramientas que la app se descarga sola (yt-dlp). Fuera de la instalación:
+     *  sobreviven a una actualización, que reemplaza la carpeta entera. */
+    val binDir: File by lazy { File(dataDir, "bin").apply { mkdirs() } }
 }

@@ -51,7 +51,8 @@ import com.aar.privatemusic.desktop.player.RepeatMode
  */
 @Composable
 fun PlayerBar(
-    song: Song,
+    song: Song?,
+    preview: DesktopPlayer.Preview?,
     player: DesktopPlayer,
     panelOpen: Boolean,
     onTogglePanel: () -> Unit,
@@ -70,31 +71,39 @@ fun PlayerBar(
         ) {
             // Qué suena. Clicar abre el panel: la carátula es el mando más grande.
             Row(
-                Modifier.weight(1f).clickable(onClick = onTogglePanel),
+                Modifier.weight(1f).clickable(enabled = song != null, onClick = onTogglePanel),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Cover(song.artPath, 56.dp)
+                if (song != null) Cover(song.artPath, 56.dp) else RemoteCover(preview?.coverUrl, 56.dp)
                 // `fill = false`: el texto ocupa lo que necesita y encoge si no
                 // cabe, pero no estira la fila. Con `weight(1f)` a secas, el
                 // corazón salía disparado al centro de la ventana.
                 Column(Modifier.weight(1f, fill = false).padding(horizontal = 12.dp)) {
-                    Text(song.title, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     Text(
-                        song.artist,
+                        song?.title ?: preview?.title.orEmpty(),
+                        style = MaterialTheme.typography.bodyMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        // Una preescucha no es una canción tuya: dilo, no la disfraces.
+                        if (song != null) song.artist else "Preescucha · ${preview?.artist.orEmpty()}",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
-                IconButton(player::toggleFavorite, Modifier.size(36.dp)) {
-                    Icon(
-                        if (song.isFavorite) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
-                        "Favorita",
-                        Modifier.size(20.dp),
-                        tint = if (song.isFavorite) MaterialTheme.colorScheme.primary
-                        else MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                if (song != null) {
+                    IconButton(player::toggleFavorite, Modifier.size(36.dp)) {
+                        Icon(
+                            if (song.isFavorite) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
+                            "Favorita",
+                            Modifier.size(20.dp),
+                            tint = if (song.isFavorite) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
             }
 
@@ -103,8 +112,10 @@ fun PlayerBar(
                 Modifier.weight(1f),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
+                // Durante una preescucha no hay cola que recorrer ni orden que barajar.
+                val hasQueue = song != null
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    IconButton(player::toggleShuffle, Modifier.size(32.dp)) {
+                    IconButton(player::toggleShuffle, Modifier.size(32.dp), enabled = hasQueue) {
                         Icon(
                             Icons.Filled.Shuffle,
                             "Aleatorio",
@@ -113,7 +124,7 @@ fun PlayerBar(
                             else MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
-                    IconButton(player::previous, Modifier.size(36.dp)) {
+                    IconButton(player::previous, Modifier.size(36.dp), enabled = hasQueue) {
                         Icon(Icons.Filled.SkipPrevious, "Anterior", Modifier.size(24.dp))
                     }
                     FilledIconButton(
@@ -126,10 +137,10 @@ fun PlayerBar(
                             Modifier.size(22.dp),
                         )
                     }
-                    IconButton(player::next, Modifier.size(36.dp)) {
+                    IconButton(player::next, Modifier.size(36.dp), enabled = hasQueue) {
                         Icon(Icons.Filled.SkipNext, "Siguiente", Modifier.size(24.dp))
                     }
-                    IconButton(player::cycleRepeat, Modifier.size(32.dp)) {
+                    IconButton(player::cycleRepeat, Modifier.size(32.dp), enabled = hasQueue) {
                         Icon(
                             if (repeat == RepeatMode.ONE) Icons.Filled.RepeatOne else Icons.Filled.Repeat,
                             "Repetir",
@@ -157,7 +168,7 @@ fun PlayerBar(
                 horizontalArrangement = Arrangement.End,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                IconButton(onTogglePanel) {
+                IconButton(onTogglePanel, enabled = song != null) {
                     Icon(
                         Icons.Filled.QueueMusic,
                         "Panel de reproducción",

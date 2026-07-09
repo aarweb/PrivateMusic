@@ -1,8 +1,5 @@
 package com.aar.privatemusic.downloader
 
-import android.content.Context
-import android.util.Log
-import com.aar.privatemusic.data.AppSettings
 import com.aar.privatemusic.data.db.MusicDao
 import com.aar.privatemusic.data.db.PlaylistSongCrossRef
 import com.aar.privatemusic.data.db.Song
@@ -39,15 +36,15 @@ data class DeezerUserInfo(
  * Comparte el modelo [DownloadState] con [YtDownloader] para reutilizar la UI.
  */
 class DeezerDownloader(
-    private val context: Context,
+    private val env: DownloaderEnv,
+    private val account: DeezerAccount,
     private val dao: MusicDao,
     private val scope: CoroutineScope,
 ) {
     // Mismo directorio que las descargas de YouTube. Deezer escribe una pista a
     // la vez (temp cifrado -> final), así que no dispara el bug de FUSE que sí
     // afectaba a los torrents (muchos ficheros a la vez).
-    val musicDir: File = File(context.getExternalFilesDir(null) ?: context.filesDir, "music")
-        .apply { mkdirs() }
+    val musicDir: File = env.musicDir.apply { mkdirs() }
 
     private val _downloads = MutableStateFlow<Map<String, DownloadState>>(emptyMap())
     val downloads: StateFlow<Map<String, DownloadState>> = _downloads
@@ -82,7 +79,7 @@ class DeezerDownloader(
                     setState(key, DownloadState.Done)
                     targetPlaylistId?.let { addToPlaylist(it, track, key, position) }
                 } catch (e: Exception) {
-                    Log.e("DeezerDownloader", "download failed for ${track.id}", e)
+                    env.log("DeezerDownloader", "download failed for ${track.id}", e)
                     setState(key, DownloadState.Failed(e.message ?: "error"))
                 }
             }
@@ -100,14 +97,14 @@ class DeezerDownloader(
             dao.addToPlaylist(
                 PlaylistSongCrossRef(playlistId, songId, position ?: dao.playlistSize(playlistId)),
             )
-        }.onFailure { Log.w("DeezerDownloader", "no se pudo añadir a la playlist", it) }
+        }.onFailure { env.log("DeezerDownloader", "no se pudo añadir a la playlist", it) }
     }
 
     private suspend fun download(track: DeezerTrack, quality: String) {
         // Dedup: si ya tienes esta canción (mismo título+artista) no la bajes otra vez.
         dao.findByTitleArtist(track.title, track.artist)?.let { dup ->
             if (dup.id != stateKey(track.id)) {
-                com.aar.privatemusic.util.Feedback.show("Ya tienes \"${track.title}\" en la biblioteca")
+                env.notify("Ya tienes \"${track.title}\" en la biblioteca")
                 return
             }
         }
@@ -196,13 +193,12 @@ class DeezerDownloader(
     /** Devuelve una sesión válida, refrescándola si falta o lleva más de 30 min. */
     private fun ensureSession(): Session {
         session?.let { if (System.currentTimeMillis() - it.ts < 30 * 60_000) return it }
-        val arl = AppSettings.readDeezerArl(context)
+        val arl = account.readArl()
         if (arl.isBlank()) throw IllegalStateException("Inicia sesión en Deezer en Ajustes")
-        val pair = fetchSession(context, arl)
+        val pair = fetchSession(arl)
             ?: throw IllegalStateException("Sesión de Deezer inválida (vuelve a iniciar sesión)")
-        val info = pair.first
         // Mantén al día el plan por si cambió (p.ej. renovó HiFi).
-        AppSettings(context).setDeezerSession(arl, info.name, info.country, info.hasFlac, info.hasHq)
+        account.saveSession(arl, pair.first)
         session = pair.second
         return pair.second
     }
@@ -210,7 +206,7 @@ class DeezerDownloader(
     private fun gwCall(method: String, apiToken: String, body: JSONObject): JSONObject {
         val url = "https://www.deezer.com/ajax/gw-light.php" +
             "?method=$method&input=3&api_version=1.0&api_token=$apiToken"
-        val arl = AppSettings.readDeezerArl(context)
+        val arl = account.readArl()
         val sid = session?.sid.orEmpty()
         val cookie = buildString {
             append("arl=$arl")
@@ -254,7 +250,7 @@ class DeezerDownloader(
          * Valida el ARL y obtiene el plan del usuario. Devuelve también la sesión
          * (token CSRF + license token + sid) para reutilizarla en las descargas.
          */
-        private fun fetchSession(context: Context, arl: String): Pair<DeezerUserInfo, Session>? = runCatching {
+        private fun fetchSession(arl: String): Pair<DeezerUserInfo, Session>? = runCatching {
             val conn = URL(
                 "https://www.deezer.com/ajax/gw-light.php" +
                     "?method=deezer.getUserData&input=3&api_version=1.0&api_token="
@@ -293,7 +289,6 @@ class DeezerDownloader(
         }.getOrNull()
 
         /** Sólo la info del usuario, para el flujo de login. */
-        fun fetchUserInfo(context: Context, arl: String): DeezerUserInfo? =
-            fetchSession(context, arl)?.first
+        fun fetchUserInfo(arl: String): DeezerUserInfo? = fetchSession(arl)?.first
     }
 }

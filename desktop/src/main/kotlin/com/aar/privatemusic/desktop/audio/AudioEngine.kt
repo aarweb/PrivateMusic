@@ -25,6 +25,9 @@ interface AudioEngine {
     /** Carga el fichero y empieza a sonar. */
     fun play(file: File)
 
+    /** Reproduce audio remoto por HTTP, para preescuchar sin descargar. */
+    fun playUrl(url: String)
+
     fun pause()
 
     fun resume()

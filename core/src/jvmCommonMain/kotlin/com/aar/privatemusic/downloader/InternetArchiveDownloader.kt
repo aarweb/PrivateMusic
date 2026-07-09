@@ -1,13 +1,11 @@
 package com.aar.privatemusic.downloader
 
-import android.content.Context
-import android.media.MediaMetadataRetriever
-import android.util.Log
 import com.aar.privatemusic.data.db.MusicDao
 import com.aar.privatemusic.data.db.Playlist
 import com.aar.privatemusic.data.db.PlaylistSongCrossRef
 import com.aar.privatemusic.data.db.Song
 import com.aar.privatemusic.util.readAudioQuality
+import com.aar.privatemusic.util.readAudioTags
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -36,14 +34,13 @@ import java.util.concurrent.ConcurrentHashMap
  * Comparte el modelo [DownloadState] con [YtDownloader] para reutilizar la UI.
  */
 class InternetArchiveDownloader(
-    private val context: Context,
+    private val env: DownloaderEnv,
     private val dao: MusicDao,
     private val scope: CoroutineScope,
 ) {
     // Mismo directorio que el resto de descargas. Se baja una pista a la vez, así
     // que no dispara el bug de FUSE que sí afectaba a los torrents.
-    private val musicDir: File =
-        File(context.getExternalFilesDir(null) ?: context.filesDir, "music").apply { mkdirs() }
+    private val musicDir: File = env.musicDir.apply { mkdirs() }
 
     private val _downloads = MutableStateFlow<Map<String, DownloadState>>(emptyMap())
     val downloads: StateFlow<Map<String, DownloadState>> = _downloads
@@ -102,7 +99,7 @@ class InternetArchiveDownloader(
                     _downloads.update { it - id }
                     throw e
                 } catch (e: Exception) {
-                    Log.e("ArchiveDownloader", "archive failed for $id", e)
+                    env.log("ArchiveDownloader", "archive failed for $id", e)
                     setState(id, DownloadState.Failed(e.message ?: "error"))
                 } finally {
                     jobs.remove(id)
@@ -176,11 +173,11 @@ class InternetArchiveDownloader(
             try {
                 downloadTo(url, out)
             } catch (e: Exception) {
-                Log.w("ArchiveDownloader", "skip ${af.name}: ${e.message}")
+                env.log("ArchiveDownloader", "skip ${af.name}: ${e.message}")
                 out.delete()
                 return@forEachIndexed
             }
-            val tags = readTags(out)
+            val tags = readAudioTags(out.absolutePath)
             val title = tags.title ?: af.name.substringAfterLast('/').substringBeforeLast('.')
             val artist = tags.artist ?: fallbackArtist
             // Dedup: si ya tienes esta pista (mismo título+artista), usa la existente.
@@ -216,25 +213,6 @@ class InternetArchiveDownloader(
     private suspend fun addToPlaylistEnd(playlistId: Long, songId: String) {
         val position = dao.playlistSize(playlistId)
         dao.addToPlaylist(PlaylistSongCrossRef(playlistId, songId, position))
-    }
-
-    private data class Tags(val title: String?, val artist: String?, val durationSec: Int)
-
-    private fun readTags(file: File): Tags {
-        val mmr = MediaMetadataRetriever()
-        return try {
-            mmr.setDataSource(file.absolutePath)
-            Tags(
-                title = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE)?.takeIf { it.isNotBlank() },
-                artist = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST)?.takeIf { it.isNotBlank() },
-                durationSec = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
-                    ?.toLongOrNull()?.let { (it / 1000).toInt() } ?: 0,
-            )
-        } catch (e: Exception) {
-            Tags(null, null, 0)
-        } finally {
-            runCatching { mmr.release() }
-        }
     }
 
     private fun downloadTo(url: String, out: File) {

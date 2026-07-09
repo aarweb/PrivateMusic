@@ -4,10 +4,9 @@ import android.media.MediaExtractor
 import android.media.MediaFormat
 import java.io.File
 
-data class AudioQuality(val codec: String, val bitrateKbps: Int?, val sampleRateHz: Int?)
 
-/** Reads the real stream properties of a local audio file. */
-fun readAudioQuality(path: String, durationSec: Int): AudioQuality? {
+
+actual fun readAudioQuality(path: String, durationSec: Int): AudioQuality? {
     val extractor = MediaExtractor()
     return try {
         extractor.setDataSource(path)

@@ -72,6 +72,14 @@ class VlcAudioEngine : AudioEngine {
         player.media().play(file.absolutePath)
     }
 
+    // libVLC no distingue entre una ruta y una URL: las dos son "media resource
+    // locators". La preescucha remota no necesita nada más que pasarle la URL.
+    override fun playUrl(url: String) {
+        _positionMs.value = 0
+        _durationMs.value = 0
+        player.media().play(url)
+    }
+
     override fun pause() = player.controls().pause()
 
     override fun resume() = player.controls().play()

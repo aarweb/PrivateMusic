@@ -54,7 +54,31 @@ class DesktopPlayer(private val engine: AudioEngine, private val dao: MusicDao) 
         engine.onFinished = { advanceAutomatically() }
     }
 
+    // --- Preescucha ------------------------------------------------------
+
+    /** Lo que suena desde la red al preescuchar un resultado de búsqueda. */
+    data class Preview(val id: String, val title: String, val artist: String, val coverUrl: String)
+
+    private val _preview = MutableStateFlow<Preview?>(null)
+    val preview: StateFlow<Preview?> = _preview.asStateFlow()
+
+    /**
+     * Toma el control de la reproducción: preescuchar es lo que el usuario quiere
+     * oír AHORA. La cola sigue intacta, y vuelve en cuanto se pulse cualquier
+     * canción de la biblioteca.
+     */
+    fun playPreview(preview: Preview, url: String) {
+        _preview.value = preview
+        _current.value = null
+        engine.playUrl(url)
+    }
+
     private fun advanceAutomatically() {
+        // Una preescucha que se acaba no arrastra la cola detrás.
+        if (_preview.value != null) {
+            _preview.value = null
+            return
+        }
         when (_repeat.value) {
             RepeatMode.ONE -> playAt(_index.value)
             RepeatMode.ALL -> playAt(if (_index.value + 1 in _queue.value.indices) _index.value + 1 else 0)
@@ -90,6 +114,7 @@ class DesktopPlayer(private val engine: AudioEngine, private val dao: MusicDao) 
         }
         _index.value = position
         _current.value = song
+        _preview.value = null
         engine.play(file)
         scope.launch {
             runCatching { dao.insertPlayEvent(PlayEvent(songId = song.id, playedAt = System.currentTimeMillis())) }

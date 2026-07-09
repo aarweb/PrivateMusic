@@ -24,6 +24,25 @@ kotlin {
             api(libs.kotlinx.coroutines.core)
             implementation(libs.sqlite.bundled)
         }
+
+        // Código que necesita la JVM (HttpURLConnection, javax.crypto, org.json)
+        // pero no Android. Lo comparten el móvil y el escritorio.
+        //
+        // `org.json` es `compileOnly` aquí porque Android lo trae en su
+        // framework: añadir el artefacto al APK duplicaría clases del sistema.
+        // El escritorio sí lo necesita de verdad, y lo añade en jvmMain.
+        val jvmCommonMain by creating {
+            dependsOn(commonMain.get())
+            dependencies { compileOnly(libs.json) }
+        }
+        androidMain.get().dependsOn(jvmCommonMain)
+        jvmMain.get().dependsOn(jvmCommonMain)
+
+        jvmMain.dependencies {
+            implementation(libs.json)
+            implementation(libs.jaudiotagger)
+        }
+
         jvmTest.dependencies {
             implementation(kotlin("test"))
         }
