@@ -6,6 +6,7 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.background
@@ -87,8 +88,15 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
-fun PlayerScreen(app: PrivateMusicApp, onBack: () -> Unit, onOpenQueue: () -> Unit = {}) {
+fun PlayerScreen(
+    app: PrivateMusicApp,
+    onBack: () -> Unit,
+    onOpenQueue: () -> Unit = {},
+    /** Ancla del elemento compartido con la carátula del mini-reproductor. */
+    coverModifier: Modifier = Modifier,
+) {
     val controller = app.playerController
     val nowPlaying by controller.nowPlaying.collectAsState()
     val isPlaying by controller.isPlaying.collectAsState()
@@ -371,6 +379,7 @@ fun PlayerScreen(app: PrivateMusicApp, onBack: () -> Unit, onOpenQueue: () -> Un
                 lyrics = lyrics!!,
                 positionMs = sliderPosition.toLong(),
                 onSeek = { controller.seekTo(it) },
+                accent = accent,
                 onShareFrom = { lyricShareFrom = it },
                 modifier = Modifier
                     .fillMaxWidth()
@@ -385,7 +394,7 @@ fun PlayerScreen(app: PrivateMusicApp, onBack: () -> Unit, onOpenQueue: () -> Un
             )
             var dragged by remember { mutableFloatStateOf(0f) }
             Box(
-                Modifier
+                coverModifier
                     .scale(scale)
                     .pointerInput(np.songId) {
                         detectHorizontalDragGestures(
@@ -446,6 +455,17 @@ fun PlayerScreen(app: PrivateMusicApp, onBack: () -> Unit, onOpenQueue: () -> Un
         Spacer(Modifier.weight(1f))
 
         val durationMs = np.durationMs.coerceAtLeast(1)
+        val sliderInteractions = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+        // Al arrastrar, el pulgar crece: te dice que lo tienes cogido, y el dedo
+        // tapa menos de lo que estás buscando.
+        val thumbWidth by androidx.compose.animation.core.animateDpAsState(
+            targetValue = if (dragging) 8.dp else 4.dp,
+            label = "thumbWidth",
+        )
+        val thumbHeight by androidx.compose.animation.core.animateDpAsState(
+            targetValue = if (dragging) 36.dp else 24.dp,
+            label = "thumbHeight",
+        )
         Slider(
             value = sliderPosition.coerceIn(0f, durationMs.toFloat()),
             onValueChange = {
@@ -457,10 +477,18 @@ fun PlayerScreen(app: PrivateMusicApp, onBack: () -> Unit, onOpenQueue: () -> Un
                 dragging = false
             },
             valueRange = 0f..durationMs.toFloat(),
+            interactionSource = sliderInteractions,
             colors = androidx.compose.material3.SliderDefaults.colors(
                 thumbColor = accent,
                 activeTrackColor = accent,
             ),
+            thumb = {
+                androidx.compose.material3.SliderDefaults.Thumb(
+                    interactionSource = sliderInteractions,
+                    colors = androidx.compose.material3.SliderDefaults.colors(thumbColor = accent),
+                    thumbSize = androidx.compose.ui.unit.DpSize(thumbWidth, thumbHeight),
+                )
+            },
         )
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text(formatDuration((sliderPosition / 1000).toInt()), style = MaterialTheme.typography.labelMedium)
@@ -608,6 +636,7 @@ private fun LyricsPanel(
     lyrics: com.aar.privatemusic.lyrics.Lyrics,
     positionMs: Long,
     onSeek: (Long) -> Unit,
+    accent: Color,
     onShareFrom: (Int) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
@@ -615,19 +644,46 @@ private fun LyricsPanel(
     val currentIdx = if (lyrics.synced) lyrics.lines.indexOfLast { it.timeMs <= positionMs } else -1
 
     LaunchedEffect(currentIdx) {
-        if (currentIdx >= 0) listState.animateScrollToItem(maxOf(0, currentIdx - 3))
+        if (currentIdx >= 0) listState.animateScrollToItem(maxOf(0, currentIdx - 2))
     }
 
     LazyColumn(state = listState, modifier = modifier) {
         itemsIndexed(lyrics.lines) { i, line ->
+            // La línea que suena manda; las de alrededor se apagan según lo
+            // lejos que queden. Con la letra sin sincronizar no hay "ahora",
+            // así que se leen todas por igual.
+            val distance = if (currentIdx < 0) 0 else kotlin.math.abs(i - currentIdx)
+            val active = currentIdx >= 0 && distance == 0
+            val alpha by animateFloatAsState(
+                targetValue = when {
+                    currentIdx < 0 -> 0.9f
+                    distance == 0 -> 1f
+                    distance == 1 -> 0.55f
+                    distance == 2 -> 0.38f
+                    else -> 0.25f
+                },
+                label = "lyricAlpha",
+            )
+            val scale by animateFloatAsState(
+                targetValue = if (active) 1.12f else 1f,
+                animationSpec = spring(dampingRatio = Spring.DampingRatioLowBouncy),
+                label = "lyricScale",
+            )
             Text(
                 line.text,
                 style = MaterialTheme.typography.titleMedium,
+                fontWeight = if (active) androidx.compose.ui.text.font.FontWeight.SemiBold else null,
                 textAlign = TextAlign.Center,
-                color = if (i == currentIdx) MaterialTheme.colorScheme.primary
-                else MaterialTheme.colorScheme.onSurfaceVariant,
+                // El mismo color de la portada que el resto de los mandos: si no,
+                // la línea que suena es la única cosa azul en una pantalla amarilla.
+                color = if (active) accent else MaterialTheme.colorScheme.onSurface,
                 modifier = Modifier
                     .fillMaxWidth()
+                    .graphicsLayer {
+                        this.alpha = alpha
+                        scaleX = scale
+                        scaleY = scale
+                    }
                     .combinedClickable(
                         onClick = { if (lyrics.synced) onSeek(line.timeMs) },
                         onLongClick = { onShareFrom(i) },

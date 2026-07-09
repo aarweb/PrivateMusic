@@ -109,6 +109,7 @@ class MainActivity : ComponentActivity() {
 
 private data class Tab(val route: String, val label: String, val icon: @Composable () -> Unit)
 
+@OptIn(androidx.compose.animation.ExperimentalSharedTransitionApi::class)
 @Composable
 private fun MainScaffold(app: PrivateMusicApp) {
     val navController: NavHostController = rememberNavController()
@@ -133,10 +134,21 @@ private fun MainScaffold(app: PrivateMusicApp) {
         }
     }
 
+    // La carátula del mini-reproductor y la del reproductor son el MISMO
+    // elemento para Compose: al abrir el reproductor, vuela y crece en vez de
+    // desaparecer abajo y aparecer arriba. Las dos tienen que estar dentro de
+    // este layout, y cada una dentro de su propia AnimatedVisibility.
+    androidx.compose.animation.SharedTransitionLayout {
+    val sharedScope = this
     Scaffold(
         snackbarHost = { androidx.compose.material3.SnackbarHost(snackbarHostState) },
         bottomBar = {
-            if (currentRoute != "player") {
+            androidx.compose.animation.AnimatedVisibility(
+                visible = currentRoute != "player",
+                enter = androidx.compose.animation.fadeIn(),
+                exit = androidx.compose.animation.fadeOut(),
+            ) {
+                val visibilityScope = this
                 Column {
                     nowPlaying?.let { np ->
                         val song by app.repository.observeSong(np.songId)
@@ -151,6 +163,12 @@ private fun MainScaffold(app: PrivateMusicApp) {
                                 scope.launch {
                                     app.repository.setFavorite(current.id, !current.isFavorite)
                                 }
+                            },
+                            coverModifier = with(sharedScope) {
+                                Modifier.sharedElement(
+                                    rememberSharedContentState(key = "cover"),
+                                    animatedVisibilityScope = visibilityScope,
+                                )
                             },
                         )
                     }
@@ -231,13 +249,21 @@ private fun MainScaffold(app: PrivateMusicApp) {
                 AutoPlaylistScreen(app, type)
             }
             composable("player") {
+                val visibilityScope = this
                 PlayerScreen(
                     app,
                     onBack = { navController.popBackStack() },
                     onOpenQueue = { navController.navigate("queue") },
+                    coverModifier = with(sharedScope) {
+                        Modifier.sharedElement(
+                            rememberSharedContentState(key = "cover"),
+                            animatedVisibilityScope = visibilityScope,
+                        )
+                    },
                 )
             }
             composable("queue") { QueueScreen(app, onBack = { navController.popBackStack() }) }
         }
+    }
     }
 }

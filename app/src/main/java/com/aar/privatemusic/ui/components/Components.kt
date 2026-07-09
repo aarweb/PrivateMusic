@@ -276,6 +276,8 @@ fun MiniPlayer(
     onOpenPlayer: () -> Unit,
     isFavorite: Boolean = false,
     onToggleFavorite: (() -> Unit)? = null,
+    /** Ancla del elemento compartido: la carátula vuela hasta el reproductor. */
+    coverModifier: Modifier = Modifier,
 ) {
     val nowPlaying by controller.nowPlaying.collectAsState()
     val isPlaying by controller.isPlaying.collectAsState()
@@ -319,7 +321,9 @@ fun MiniPlayer(
                     .padding(horizontal = 12.dp, vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                ArtImage(np.artPath?.let { File(it) }, 40.dp)
+                androidx.compose.foundation.layout.Box(coverModifier) {
+                    ArtImage(np.artPath?.let { File(it) }, 40.dp)
+                }
                 Column(
                     modifier = Modifier
                         .weight(1f)
