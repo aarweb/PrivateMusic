@@ -1,6 +1,13 @@
 package com.aar.privatemusic.ui.screens
 
 import android.graphics.BitmapFactory
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -96,23 +103,31 @@ fun PlayerScreen(app: PrivateMusicApp, onBack: () -> Unit, onOpenQueue: () -> Un
     val song by remember(np.songId) { app.repository.observeSong(np.songId) }
         .collectAsState(initial = null)
 
-    // Dominant colour extracted from the cover for the dynamic background.
+    // Dos colores de la carátula: uno apagado para el fondo y otro vivo para
+    // los mandos. Se extraen juntos porque decodificar el bitmap es lo caro.
     val surface = MaterialTheme.colorScheme.surface
-    val dominant by produceState(initialValue = surface, np.artPath) {
+    val fallbackAccent = MaterialTheme.colorScheme.primary
+    val cover by produceState(initialValue = surface to fallbackAccent, np.artPath) {
         value = withContext(Dispatchers.IO) {
             np.artPath?.let { path ->
                 runCatching {
                     val opts = BitmapFactory.Options().apply { inSampleSize = 4 }
                     val bitmap = BitmapFactory.decodeFile(path, opts) ?: return@runCatching null
                     val palette = Palette.from(bitmap).generate()
-                    val rgb = palette.darkMutedSwatch?.rgb
+                    val bg = palette.darkMutedSwatch?.rgb
                         ?: palette.darkVibrantSwatch?.rgb
                         ?: palette.mutedSwatch?.rgb
-                    rgb?.let { Color(it) }
+                    val fg = palette.vibrantSwatch?.rgb
+                        ?: palette.lightVibrantSwatch?.rgb
+                        ?: palette.lightMutedSwatch?.rgb
+                    (bg?.let { Color(it) } ?: surface) to
+                        (fg?.let { readable(Color(it), surface) } ?: fallbackAccent)
                 }.getOrNull()
-            } ?: surface
+            } ?: (surface to fallbackAccent)
         }
     }
+    val dominant = cover.first
+    val accent = cover.second
 
     var sliderPosition by remember { mutableFloatStateOf(0f) }
     var dragging by remember { mutableStateOf(false) }
@@ -124,6 +139,7 @@ fun PlayerScreen(app: PrivateMusicApp, onBack: () -> Unit, onOpenQueue: () -> Un
     var speedDialogOpen by remember { mutableStateOf(false) }
     var lyricShareFrom by remember { mutableStateOf<Int?>(null) }
     var castDialogOpen by remember { mutableStateOf(false) }
+    var qualityExpanded by remember { mutableStateOf(false) }
     val playbackSpeed by controller.playbackSpeed.collectAsState()
 
     val lyrics by produceState<com.aar.privatemusic.lyrics.Lyrics?>(initialValue = null, song?.id) {
@@ -154,6 +170,14 @@ fun PlayerScreen(app: PrivateMusicApp, onBack: () -> Unit, onOpenQueue: () -> Un
                 Icon(Icons.Filled.KeyboardArrowDown, contentDescription = "Cerrar")
             }
             Spacer(Modifier.weight(1f))
+            // El temporizador sólo se anuncia mientras corre.
+            sleepRemainingMs?.let {
+                Text(
+                    formatDuration((it / 1000).toInt()),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = accent,
+                )
+            }
             IconButton(onClick = { castDialogOpen = true }) {
                 Icon(
                     Icons.Filled.Cast,
@@ -161,58 +185,31 @@ fun PlayerScreen(app: PrivateMusicApp, onBack: () -> Unit, onOpenQueue: () -> Un
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            IconButton(onClick = onOpenQueue) {
-                Icon(
-                    Icons.AutoMirrored.Filled.QueueMusic,
-                    contentDescription = "Cola de reproducción",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            IconButton(onClick = { showLyrics = !showLyrics }, enabled = lyrics != null) {
-                Icon(
-                    Icons.Filled.Lyrics,
-                    contentDescription = "Letra",
-                    tint = if (showLyrics) MaterialTheme.colorScheme.primary
-                    else MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            // Sleep timer with remaining time when active
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                val sleepActive = sleepRemainingMs != null || stopAfterTrack
-                sleepRemainingMs?.let {
-                    Text(
-                        formatDuration((it / 1000).toInt()),
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
-                }
-                IconButton(onClick = { sleepDialogOpen = true }) {
-                    Icon(
-                        Icons.Filled.Bedtime,
-                        contentDescription = "Temporizador de apagado",
-                        tint = if (sleepActive) MaterialTheme.colorScheme.primary
-                        else MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-            IconButton(onClick = {
-                song?.let { s ->
-                    scope.launch { app.repository.setFavorite(s.id, !s.isFavorite) }
-                }
-            }) {
-                Icon(
-                    if (song?.isFavorite == true) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
-                    contentDescription = "Favorita",
-                    tint = if (song?.isFavorite == true) MaterialTheme.colorScheme.primary
-                    else MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            // Actions on the playing song without leaving the player.
+            // Lo demás baja aquí: siete iconos en fila no se aciertan con el pulgar.
             Box {
                 IconButton(onClick = { playerMenuOpen = true }, enabled = song != null) {
                     Icon(Icons.Filled.MoreVert, contentDescription = "Más opciones")
                 }
                 DropdownMenu(expanded = playerMenuOpen, onDismissRequest = { playerMenuOpen = false }) {
+                    DropdownMenuItem(
+                        text = { Text("Cola de reproducción") },
+                        onClick = {
+                            playerMenuOpen = false
+                            onOpenQueue()
+                        },
+                    )
+                    DropdownMenuItem(
+                        text = {
+                            Text(
+                                if (sleepRemainingMs != null || stopAfterTrack) "Temporizador (activo)"
+                                else "Temporizador de apagado"
+                            )
+                        },
+                        onClick = {
+                            playerMenuOpen = false
+                            sleepDialogOpen = true
+                        },
+                    )
                     DropdownMenuItem(
                         text = { Text("Añadir a playlist") },
                         onClick = {
@@ -368,7 +365,7 @@ fun PlayerScreen(app: PrivateMusicApp, onBack: () -> Unit, onOpenQueue: () -> Un
             )
         }
 
-        Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.weight(0.6f))
         if (showLyrics && lyrics != null) {
             LyricsPanel(
                 lyrics = lyrics!!,
@@ -380,7 +377,29 @@ fun PlayerScreen(app: PrivateMusicApp, onBack: () -> Unit, onOpenQueue: () -> Un
                     .height(280.dp),
             )
         } else {
-            ArtImage(np.artPath?.let { File(it) }, 280.dp)
+            // Encoge al pausar: el disco "respira" mientras suena.
+            val scale by animateFloatAsState(
+                targetValue = if (isPlaying) 1f else 0.92f,
+                animationSpec = spring(dampingRatio = Spring.DampingRatioLowBouncy),
+                label = "cover",
+            )
+            var dragged by remember { mutableFloatStateOf(0f) }
+            Box(
+                Modifier
+                    .scale(scale)
+                    .pointerInput(np.songId) {
+                        detectHorizontalDragGestures(
+                            onDragEnd = {
+                                if (dragged <= -100f) controller.next()
+                                else if (dragged >= 100f) controller.previous()
+                                dragged = 0f
+                            },
+                            onDragCancel = { dragged = 0f },
+                        ) { _, amount -> dragged += amount }
+                    }
+            ) {
+                ArtImage(np.artPath?.let { File(it) }, 280.dp)
+            }
         }
         Spacer(Modifier.height(24.dp))
 
@@ -396,11 +415,11 @@ fun PlayerScreen(app: PrivateMusicApp, onBack: () -> Unit, onOpenQueue: () -> Un
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
 
-        // Real quality of the local file, Amazon-style badge.
+        // Calidad real del fichero. Plegado dice sólo el formato; el resto de la
+        // ficha técnica (bitrate, BPM, tonalidad) se despliega al tocarlo.
         song?.codec?.let { codec ->
             Spacer(Modifier.height(8.dp))
-            val parts = buildList {
-                add(codec)
+            val detail = buildList {
                 song?.bitrateKbps?.let { add("$it kbps") }
                 song?.sampleRateHz?.let {
                     val khz = it / 1000f
@@ -410,15 +429,21 @@ fun PlayerScreen(app: PrivateMusicApp, onBack: () -> Unit, onOpenQueue: () -> Un
                 song?.camelot?.let { add(it) }
             }
             AssistChip(
-                onClick = {},
-                label = { Text(parts.joinToString(" · "), style = MaterialTheme.typography.labelMedium) },
+                onClick = { qualityExpanded = !qualityExpanded },
+                label = {
+                    Text(
+                        if (qualityExpanded && detail.isNotEmpty()) (listOf(codec) + detail).joinToString(" · ")
+                        else codec,
+                        style = MaterialTheme.typography.labelMedium,
+                    )
+                },
             )
         }
 
         Spacer(Modifier.height(6.dp))
         OutputIndicator(onClick = { castDialogOpen = true })
 
-        Spacer(Modifier.height(10.dp))
+        Spacer(Modifier.weight(1f))
 
         val durationMs = np.durationMs.coerceAtLeast(1)
         Slider(
@@ -432,13 +457,52 @@ fun PlayerScreen(app: PrivateMusicApp, onBack: () -> Unit, onOpenQueue: () -> Un
                 dragging = false
             },
             valueRange = 0f..durationMs.toFloat(),
+            colors = androidx.compose.material3.SliderDefaults.colors(
+                thumbColor = accent,
+                activeTrackColor = accent,
+            ),
         )
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text(formatDuration((sliderPosition / 1000).toInt()), style = MaterialTheme.typography.labelMedium)
             Text(formatDuration((durationMs / 1000).toInt()), style = MaterialTheme.typography.labelMedium)
         }
 
-        Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.height(12.dp))
+
+        // Acciones secundarias, al alcance del pulgar y no en el borde de arriba.
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.Center,
+        ) {
+            PlayerActionChip(
+                icon = if (song?.isFavorite == true) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
+                label = "Favorita",
+                active = song?.isFavorite == true,
+                accent = accent,
+                onClick = {
+                    song?.let { s -> scope.launch { app.repository.setFavorite(s.id, !s.isFavorite) } }
+                },
+            )
+            Spacer(Modifier.width(8.dp))
+            PlayerActionChip(
+                icon = Icons.Filled.Lyrics,
+                label = "Letra",
+                active = showLyrics,
+                accent = accent,
+                enabled = lyrics != null,
+                onClick = { showLyrics = !showLyrics },
+            )
+            Spacer(Modifier.width(8.dp))
+            PlayerActionChip(
+                icon = Icons.AutoMirrored.Filled.QueueMusic,
+                label = "Cola",
+                active = false,
+                accent = accent,
+                onClick = onOpenQueue,
+            )
+        }
+
+        Spacer(Modifier.height(12.dp))
 
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -449,8 +513,7 @@ fun PlayerScreen(app: PrivateMusicApp, onBack: () -> Unit, onOpenQueue: () -> Un
                 Icon(
                     Icons.Filled.Shuffle,
                     contentDescription = "Aleatorio",
-                    tint = if (shuffle) MaterialTheme.colorScheme.primary
-                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                    tint = if (shuffle) accent else MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
             IconButton(onClick = { controller.previous() }) {
@@ -459,6 +522,10 @@ fun PlayerScreen(app: PrivateMusicApp, onBack: () -> Unit, onOpenQueue: () -> Un
             FilledIconButton(
                 onClick = { controller.togglePlayPause() },
                 modifier = Modifier.size(72.dp),
+                colors = androidx.compose.material3.IconButtonDefaults.filledIconButtonColors(
+                    containerColor = accent,
+                    contentColor = if (accent.luminance() > 0.5f) Color.Black else Color.White,
+                ),
             ) {
                 Icon(
                     if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
@@ -473,11 +540,12 @@ fun PlayerScreen(app: PrivateMusicApp, onBack: () -> Unit, onOpenQueue: () -> Un
                 Icon(
                     if (repeatMode == Player.REPEAT_MODE_ONE) Icons.Filled.RepeatOne else Icons.Filled.Repeat,
                     contentDescription = "Repetir",
-                    tint = if (repeatMode != Player.REPEAT_MODE_OFF) MaterialTheme.colorScheme.primary
+                    tint = if (repeatMode != Player.REPEAT_MODE_OFF) accent
                     else MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         }
+        Spacer(Modifier.height(8.dp))
     }
 
     if (sleepDialogOpen) {
@@ -627,4 +695,51 @@ private fun OutputIndicator(onClick: () -> Unit) {
         Spacer(Modifier.width(6.dp))
         Text(label, style = MaterialTheme.typography.labelMedium, color = tint)
     }
+}
+
+/**
+ * Sube el color de la carátula hasta que se lea sobre [background].
+ *
+ * El color vivo de una portada puede ser un azul marino casi negro: bonito en
+ * el disco, ilegible en un slider sobre fondo oscuro. Se aclara (o se oscurece,
+ * en tema claro) hasta pasar el 4,5:1 de la norma, o se deja de intentar.
+ */
+private fun readable(color: Color, background: Color): Color {
+    fun contrast(a: Color, b: Color): Double {
+        val la = a.luminance() + 0.05
+        val lb = b.luminance() + 0.05
+        return if (la > lb) la / lb else lb / la
+    }
+    val towards = if (background.luminance() < 0.5f) Color.White else Color.Black
+    var result = color
+    var mix = 0f
+    while (contrast(result, background) < 4.5 && mix < 0.9f) {
+        mix += 0.1f
+        result = androidx.compose.ui.graphics.lerp(color, towards, mix)
+    }
+    return result
+}
+
+/** Acción secundaria del reproductor: se tiñe con el color de la carátula al estar activa. */
+@Composable
+private fun PlayerActionChip(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    active: Boolean,
+    accent: Color,
+    onClick: () -> Unit,
+    enabled: Boolean = true,
+) {
+    androidx.compose.material3.FilterChip(
+        selected = active,
+        enabled = enabled,
+        onClick = onClick,
+        label = { Text(label, style = MaterialTheme.typography.labelMedium) },
+        leadingIcon = { Icon(icon, contentDescription = null, modifier = Modifier.size(18.dp)) },
+        colors = androidx.compose.material3.FilterChipDefaults.filterChipColors(
+            selectedContainerColor = accent.copy(alpha = 0.22f),
+            selectedLabelColor = accent,
+            selectedLeadingIconColor = accent,
+        ),
+    )
 }
