@@ -3,10 +3,14 @@ package com.aar.privatemusic.ui.screens
 import android.net.Uri
 import android.os.Message
 import android.util.Log
+import android.webkit.ConsoleMessage
 import android.webkit.CookieManager
 import android.webkit.WebChromeClient
+import android.webkit.WebResourceError
+import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.widget.FrameLayout
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -22,6 +26,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -47,14 +52,30 @@ import kotlinx.coroutines.withContext
  * Google/Apple; al detectar la cookie de sesión `arl` la validamos, guardamos
  * el plan (FLAC/HQ) y cerramos. El usuario nunca ve ni maneja el ARL.
  *
- * Para que el login con Google funcione hacen falta dos cosas: (1) un
+ * Para que el login con Google funcione hacen falta tres cosas: (1) un
  * User-Agent de navegador normal (sin el token "wv", que Google bloquea en
- * WebViews), y (2) manejar la ventana emergente que abre el botón de Google
+ * WebViews), (2) manejar la ventana emergente que abre el botón de Google
  * (`window.open`) como un WebView hijo por encima, conservando `window.opener`
- * para que el OAuth pueda devolver el resultado a la ventana principal.
+ * para que el OAuth pueda devolver el resultado a la ventana principal, y (3)
+ * adjuntar ese hijo a la jerarquía de vistas ANTES de `sendToTarget()`: si no,
+ * Chromium entrega la navegación a una vista sin ventana y la emergente se
+ * queda en blanco. Por eso el WebView vive en un FrameLayout y no en un
+ * AndroidView creado al recomponer.
  */
 private const val BROWSER_UA =
     "Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
+
+private fun WebView.applyLoginSettings() {
+    val cookies = CookieManager.getInstance()
+    cookies.setAcceptCookie(true)
+    cookies.setAcceptThirdPartyCookies(this, true)
+    settings.javaScriptEnabled = true
+    settings.domStorageEnabled = true
+    settings.userAgentString = BROWSER_UA
+    // El botón de Google abre una ventana emergente.
+    settings.setSupportMultipleWindows(true)
+    settings.javaScriptCanOpenWindowsAutomatically = true
+}
 
 @Composable
 fun DeezerLoginDialog(app: PrivateMusicApp, onClose: () -> Unit) {
@@ -116,15 +137,110 @@ fun DeezerLoginDialog(app: PrivateMusicApp, onClose: () -> Unit) {
         }
     }
 
-    val pageWatcher = object : WebViewClient() {
-        override fun onPageFinished(view: WebView, url: String) {
-            Log.d("DeezerLogin", "page: ${Uri.parse(url).host}")
+    val pageWatcher = remember {
+        object : WebViewClient() {
+            override fun onPageFinished(view: WebView, url: String) {
+                Log.d("DeezerLogin", "page: ${Uri.parse(url).host}")
+                scope.launch { tryCaptureArl() }
+            }
+
+            /** Cambios de ruta de la SPA (pushState), que no disparan onPageFinished. */
+            override fun doUpdateVisitedHistory(view: WebView, url: String, isReload: Boolean) {
+                scope.launch { tryCaptureArl() }
+            }
+
+            override fun onReceivedError(
+                view: WebView,
+                request: WebResourceRequest,
+                error: WebResourceError,
+            ) {
+                if (request.isForMainFrame) {
+                    Log.w("DeezerLogin", "error ${error.errorCode} en ${request.url.host}: ${error.description}")
+                }
+            }
+        }
+    }
+
+    // El WebView principal vive aquí; la emergente se añade encima, ya adjunta.
+    val container = remember { FrameLayout(context) }
+
+    fun dismissPopup(child: WebView) {
+        container.removeView(child)
+        child.destroy()
+        popup = null
+    }
+
+    /** Chrome client de la emergente: Google la cierra sola al terminar el OAuth. */
+    fun popupChrome() = object : WebChromeClient() {
+        override fun onCloseWindow(window: WebView) {
+            dismissPopup(window)
             scope.launch { tryCaptureArl() }
         }
 
-        /** Cambios de ruta de la SPA (pushState), que no disparan onPageFinished. */
-        override fun doUpdateVisitedHistory(view: WebView, url: String, isReload: Boolean) {
-            scope.launch { tryCaptureArl() }
+        override fun onConsoleMessage(msg: ConsoleMessage): Boolean {
+            if (msg.messageLevel() == ConsoleMessage.MessageLevel.ERROR) {
+                Log.w("DeezerLogin", "popup js: ${msg.message()}")
+            }
+            return true
+        }
+    }
+
+    val mainChrome = remember {
+        object : WebChromeClient() {
+            override fun onCreateWindow(
+                view: WebView,
+                isDialog: Boolean,
+                isUserGesture: Boolean,
+                resultMsg: Message,
+            ): Boolean {
+                val child = WebView(context).apply {
+                    applyLoginSettings()
+                    webViewClient = pageWatcher
+                    webChromeClient = popupChrome()
+                }
+                // Adjuntar ANTES de sendToTarget: si no, la emergente no pinta.
+                container.addView(
+                    child,
+                    FrameLayout.LayoutParams(
+                        FrameLayout.LayoutParams.MATCH_PARENT,
+                        FrameLayout.LayoutParams.MATCH_PARENT,
+                    ),
+                )
+                popup = child
+                (resultMsg.obj as WebView.WebViewTransport).webView = child
+                resultMsg.sendToTarget()
+                return true
+            }
+
+            override fun onCloseWindow(window: WebView) {
+                // Por si el cierre llega al padre en vez de a la emergente.
+                popup?.let { dismissPopup(it) }
+                scope.launch { tryCaptureArl() }
+            }
+        }
+    }
+
+    val webView = remember {
+        WebView(context).apply {
+            applyLoginSettings()
+            webViewClient = pageWatcher
+            webChromeClient = mainChrome
+            loadUrl("https://www.deezer.com/login")
+        }
+    }
+
+    DisposableEffect(Unit) {
+        container.addView(
+            webView,
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT,
+            ),
+        )
+        onDispose {
+            popup?.let { runCatching { dismissPopup(it) } }
+            container.removeAllViews()
+            webView.destroy()
         }
     }
 
@@ -139,86 +255,16 @@ fun DeezerLoginDialog(app: PrivateMusicApp, onClose: () -> Unit) {
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        "Iniciar sesión en Deezer",
+                        if (popup != null) "Continuar" else "Iniciar sesión en Deezer",
                         style = MaterialTheme.typography.titleMedium,
                         modifier = Modifier.weight(1f),
                     )
-                    IconButton(onClick = onClose) {
+                    IconButton(onClick = { popup?.let { dismissPopup(it) } ?: onClose() }) {
                         Icon(Icons.Filled.Close, contentDescription = "Cerrar")
                     }
                 }
                 Box(Modifier.weight(1f).fillMaxWidth()) {
-                    AndroidView(
-                        modifier = Modifier.fillMaxSize(),
-                        factory = { ctx ->
-                            val cookies = CookieManager.getInstance()
-                            cookies.setAcceptCookie(true)
-                            WebView(ctx).apply {
-                                cookies.setAcceptThirdPartyCookies(this, true)
-                                settings.javaScriptEnabled = true
-                                settings.domStorageEnabled = true
-                                settings.userAgentString = BROWSER_UA
-                                // El botón de Google abre una ventana emergente.
-                                settings.setSupportMultipleWindows(true)
-                                settings.javaScriptCanOpenWindowsAutomatically = true
-                                webViewClient = pageWatcher
-                                webChromeClient = object : WebChromeClient() {
-                                    override fun onCreateWindow(
-                                        view: WebView,
-                                        isDialog: Boolean,
-                                        isUserGesture: Boolean,
-                                        resultMsg: Message,
-                                    ): Boolean {
-                                        val child = WebView(ctx).apply {
-                                            cookies.setAcceptThirdPartyCookies(this, true)
-                                            settings.javaScriptEnabled = true
-                                            settings.domStorageEnabled = true
-                                            settings.userAgentString = BROWSER_UA
-                                            settings.setSupportMultipleWindows(true)
-                                            settings.javaScriptCanOpenWindowsAutomatically = true
-                                            webViewClient = pageWatcher
-                                        }
-                                        popup = child
-                                        (resultMsg.obj as WebView.WebViewTransport).webView = child
-                                        resultMsg.sendToTarget()
-                                        return true
-                                    }
-
-                                    override fun onCloseWindow(window: WebView) {
-                                        // El OAuth cerró la emergente: recoge la sesión ya establecida.
-                                        popup = null
-                                        scope.launch { tryCaptureArl() }
-                                    }
-                                }
-                                loadUrl("https://www.deezer.com/login")
-                            }
-                        },
-                    )
-
-                    // Emergente de OAuth (Google/Apple) por encima, con opción de cerrar.
-                    popup?.let { child ->
-                        Surface(Modifier.fillMaxSize()) {
-                            Column(Modifier.fillMaxSize()) {
-                                Row(
-                                    Modifier.fillMaxWidth().padding(start = 16.dp, top = 8.dp, end = 8.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    Text(
-                                        "Continuar",
-                                        style = MaterialTheme.typography.titleSmall,
-                                        modifier = Modifier.weight(1f),
-                                    )
-                                    IconButton(onClick = { popup = null }) {
-                                        Icon(Icons.Filled.Close, contentDescription = "Cerrar")
-                                    }
-                                }
-                                AndroidView(
-                                    modifier = Modifier.weight(1f).fillMaxWidth(),
-                                    factory = { child },
-                                )
-                            }
-                        }
-                    }
+                    AndroidView(modifier = Modifier.fillMaxSize(), factory = { container })
 
                     if (validating) {
                         // Opaco a propósito: la web-app de Deezer queda detrás y en
