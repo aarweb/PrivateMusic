@@ -779,17 +779,29 @@ private fun SourceBadge(source: SearchSource, size: Dp = 28.dp) {
 
 @Composable
 private fun SourceCard(source: SearchSource, onClick: () -> Unit) {
-    Card(
-        onClick = onClick,
-        shape = RoundedCornerShape(16.dp),
-    ) {
-        Column(Modifier.fillMaxWidth().padding(20.dp)) {
-            SourceBadge(source, size = 44.dp)
+    // "1337x · Torrents música" cabía en dos líneas y descuadraba la rejilla.
+    // El nombre manda; lo de después del punto medio es una aclaración.
+    val name = source.name.substringBefore(" · ")
+    val hint = source.name.substringAfter(" · ", "")
+    Card(onClick = onClick, shape = MaterialTheme.shapes.medium) {
+        Column(Modifier.fillMaxWidth().padding(14.dp)) {
+            SourceBadge(source, size = 36.dp)
             Text(
-                source.name,
-                style = MaterialTheme.typography.titleMedium,
-                modifier = Modifier.padding(top = 12.dp),
+                name,
+                style = MaterialTheme.typography.titleSmall,
+                maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                modifier = Modifier.padding(top = 10.dp),
             )
+            if (hint.isNotEmpty()) {
+                Text(
+                    hint,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                )
+            }
         }
     }
 }

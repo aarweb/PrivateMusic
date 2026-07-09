@@ -11,6 +11,24 @@ import java.io.File
  * a descargarse, así que fiarse del nombre sin comprobar el disco deja la
  * carátula apuntando a un fichero que no existe.
  */
+/**
+ * Los torrents se llaman "Artista - Álbum - [FLAC]-[TFM] (2019) [WEB]": etiquetas
+ * de la scene que no le dicen nada a quien sólo quiere escuchar el disco. Esto
+ * las quita para que la playlist nazca con un nombre legible; el usuario siempre
+ * puede renombrarla después.
+ */
+fun prettyReleaseName(raw: String): String {
+    val cleaned = raw
+        .replace(Regex("""[\[(][^\[\]()]*[\])]"""), " ") // [FLAC], (2019), [WEB]
+        .replace(Regex("""\b(FLAC|MP3|WEB|CD|VINYL|24BIT|16BIT|V0|320|REMASTERED)\b""", RegexOption.IGNORE_CASE), " ")
+        .replace('_', ' ')
+        .replace(Regex("""\s{2,}"""), " ")
+        .trim()
+        .trim('-', '.', '·', ' ')
+    // Si limpiando no queda nada reconocible, mejor el nombre crudo que uno vacío.
+    return cleaned.ifBlank { raw.trim() }
+}
+
 object CoverFinder {
     private val imageExts = setOf("jpg", "jpeg", "png", "webp")
     private val preferred = setOf("cover", "folder", "front", "albumart", "album", "artwork")

@@ -2,6 +2,7 @@ package com.aar.privatemusic.ui.components
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -14,6 +15,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.background
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Pause
@@ -34,6 +37,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -120,6 +124,25 @@ fun PlaylistCover(
     }
 }
 
+/**
+ * Una frase tranquila en el centro, igual en todas las pantallas. Antes cada una
+ * escribía su propio hueco con su propio estilo.
+ */
+@Composable
+fun EmptyState(text: String, modifier: Modifier = Modifier) {
+    androidx.compose.foundation.layout.Box(
+        modifier.fillMaxWidth().padding(32.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+        )
+    }
+}
+
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun SongRow(
@@ -189,7 +212,12 @@ fun SongRow(
 }
 
 @Composable
-fun MiniPlayer(controller: PlayerController, onOpenPlayer: () -> Unit) {
+fun MiniPlayer(
+    controller: PlayerController,
+    onOpenPlayer: () -> Unit,
+    isFavorite: Boolean = false,
+    onToggleFavorite: (() -> Unit)? = null,
+) {
     val nowPlaying by controller.nowPlaying.collectAsState()
     val isPlaying by controller.isPlaying.collectAsState()
     val np = nowPlaying ?: return
@@ -211,10 +239,24 @@ fun MiniPlayer(controller: PlayerController, onOpenPlayer: () -> Unit) {
                 modifier = Modifier.fillMaxWidth().height(2.dp),
                 trackColor = MaterialTheme.colorScheme.surfaceVariant,
             )
+            // Deslizar sobre la fila cambia de pista, como en cualquier
+            // reproductor: el umbral evita que un desplazamiento vertical
+            // torcido salte de canción sin querer.
+            var dragged by androidx.compose.runtime.remember { androidx.compose.runtime.mutableFloatStateOf(0f) }
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clickable(onClick = onOpenPlayer)
+                    .pointerInput(np.songId) {
+                        detectHorizontalDragGestures(
+                            onDragEnd = {
+                                if (dragged <= -80f) controller.next()
+                                else if (dragged >= 80f) controller.previous()
+                                dragged = 0f
+                            },
+                            onDragCancel = { dragged = 0f },
+                        ) { _, amount -> dragged += amount }
+                    }
                     .padding(horizontal = 12.dp, vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -232,6 +274,16 @@ fun MiniPlayer(controller: PlayerController, onOpenPlayer: () -> Unit) {
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                }
+                if (onToggleFavorite != null) {
+                    IconButton(onClick = onToggleFavorite) {
+                        Icon(
+                            if (isFavorite) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
+                            contentDescription = if (isFavorite) "Quitar de favoritas" else "Marcar como favorita",
+                            tint = if (isFavorite) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
                 IconButton(onClick = { controller.togglePlayPause() }) {
                     Icon(if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow, contentDescription = "Play/Pausa")

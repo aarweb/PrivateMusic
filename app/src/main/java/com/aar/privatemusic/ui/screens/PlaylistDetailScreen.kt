@@ -52,7 +52,7 @@ import com.aar.privatemusic.PrivateMusicApp
 import com.aar.privatemusic.ui.components.AddToPlaylistDialog
 import com.aar.privatemusic.ui.components.ArtImage
 import com.aar.privatemusic.ui.components.PlaylistCover
-import com.aar.privatemusic.ui.components.formatDuration
+import com.aar.privatemusic.ui.components.SongRow
 import kotlinx.coroutines.launch
 import sh.calvin.reorderable.ReorderableItem
 import sh.calvin.reorderable.rememberReorderableLazyListState
@@ -76,7 +76,10 @@ private enum class PlaylistSort(val label: String) {
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun PlaylistDetailScreen(app: PrivateMusicApp, playlistId: Long) {
-    val allSongs by app.repository.observePlaylistSongs(playlistId).collectAsState(initial = emptyList())
+    // `null` = todavía no ha llegado la primera emisión. Con emptyList() la
+    // pantalla parpadeaba "Playlist vacía" antes de pintar las canciones.
+    val loadedSongs by app.repository.observePlaylistSongs(playlistId).collectAsState(initial = null)
+    val allSongs = loadedSongs ?: emptyList()
     val playlists by app.repository.observePlaylists().collectAsState(initial = emptyList())
     val playlist = playlists.firstOrNull { it.id == playlistId }
     val nowPlaying by app.playerController.nowPlaying.collectAsState()
@@ -146,11 +149,11 @@ fun PlaylistDetailScreen(app: PrivateMusicApp, playlistId: Long) {
         }
     }
 
+    if (loadedSongs == null) return // cargando: nada mejor que el hueco de un instante
     if (allSongs.isEmpty()) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text(
+            com.aar.privatemusic.ui.components.EmptyState(
                 "Playlist vacía.\nAñade canciones desde la Biblioteca.",
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
         return
@@ -310,97 +313,58 @@ fun PlaylistDetailScreen(app: PrivateMusicApp, playlistId: Long) {
         itemsIndexed(songs, key = { _, s -> s.id }, contentType = { _, _ -> "song" }) { index, song ->
             ReorderableItem(reorderableState, key = song.id) { isDragging ->
                 var menuOpen by remember { mutableStateOf(false) }
-                val isCurrent = song.id == nowPlaying?.songId
-                val isSelected = song.id in selectedIds
+                // La misma SongRow que la Biblioteca: el asa de arrastre entra
+                // por `trailing`, que se compone dentro del ámbito reordenable.
                 Surface(tonalElevation = if (isDragging) 4.dp else 0.dp) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .combinedClickable(
-                                onClick = {
-                                    if (selectionMode) toggleSelect(song.id)
-                                    else app.playerController.playQueue(songs, index)
-                                },
-                                onLongClick = { startSelection(song.id) },
-                            )
-                            .background(
-                                when {
-                                    isSelected -> MaterialTheme.colorScheme.primary.copy(alpha = 0.18f)
-                                    isCurrent -> MaterialTheme.colorScheme.primary.copy(alpha = 0.10f)
-                                    else -> androidx.compose.ui.graphics.Color.Transparent
+                    SongRow(
+                        song = song,
+                        isCurrent = song.id == nowPlaying?.songId,
+                        selectionMode = selectionMode,
+                        selected = song.id in selectedIds,
+                        onClick = {
+                            if (selectionMode) toggleSelect(song.id)
+                            else app.playerController.playQueue(songs, index)
+                        },
+                        onLongClick = { startSelection(song.id) },
+                        trailing = {
+                            Box {
+                                IconButton(onClick = { menuOpen = true }) {
+                                    Icon(Icons.Filled.MoreVert, contentDescription = "Opciones")
                                 }
-                            )
-                            .padding(horizontal = 16.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        if (selectionMode) {
-                            Checkbox(
-                                checked = isSelected,
-                                onCheckedChange = null,
-                                modifier = Modifier.padding(end = 8.dp),
-                            )
-                        }
-                        ArtImage(song.artPath?.let { File(it) } ?: song.thumbnailUrl, 48.dp)
-                        Column(
-                            modifier = Modifier
-                                .weight(1f)
-                                .padding(horizontal = 12.dp),
-                        ) {
-                            Text(
-                                song.title,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                style = MaterialTheme.typography.bodyLarge,
-                                color = if (isCurrent) MaterialTheme.colorScheme.primary
-                                else MaterialTheme.colorScheme.onSurface,
-                            )
-                            Text(
-                                "${song.artist} · ${formatDuration(song.durationSec)}",
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        if (!selectionMode) {
-                        Box {
-                            IconButton(onClick = { menuOpen = true }) {
-                                Icon(Icons.Filled.MoreVert, contentDescription = "Opciones")
+                                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                                    DropdownMenuItem(
+                                        text = { Text("Reproducir a continuación") },
+                                        onClick = {
+                                            menuOpen = false
+                                            app.playerController.playNext(song)
+                                            com.aar.privatemusic.util.Feedback.show("Sonará a continuación")
+                                        },
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("Añadir a la cola") },
+                                        onClick = {
+                                            menuOpen = false
+                                            app.playerController.addToQueue(song)
+                                            com.aar.privatemusic.util.Feedback.show("Añadida a la cola")
+                                        },
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("Quitar de la playlist") },
+                                        onClick = {
+                                            menuOpen = false
+                                            scope.launch { app.repository.removeFromPlaylist(playlistId, song.id) }
+                                            com.aar.privatemusic.util.Feedback.show("Quitada de la playlist")
+                                        },
+                                    )
+                                }
                             }
-                            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                                DropdownMenuItem(
-                                    text = { Text("Reproducir a continuación") },
-                                    onClick = {
-                                        menuOpen = false
-                                        app.playerController.playNext(song)
-                                        com.aar.privatemusic.util.Feedback.show("Sonará a continuación")
-                                    },
-                                )
-                                DropdownMenuItem(
-                                    text = { Text("Añadir a la cola") },
-                                    onClick = {
-                                        menuOpen = false
-                                        app.playerController.addToQueue(song)
-                                        com.aar.privatemusic.util.Feedback.show("Añadida a la cola")
-                                    },
-                                )
-                                DropdownMenuItem(
-                                    text = { Text("Quitar de la playlist") },
-                                    onClick = {
-                                        menuOpen = false
-                                        scope.launch { app.repository.removeFromPlaylist(playlistId, song.id) }
-                                        com.aar.privatemusic.util.Feedback.show("Quitada de la playlist")
-                                    },
-                                )
+                            if (canReorder) {
+                                IconButton(onClick = {}, modifier = Modifier.draggableHandle()) {
+                                    Icon(Icons.Filled.DragHandle, contentDescription = "Reordenar")
+                                }
                             }
-                        }
-                        if (canReorder) {
-                            IconButton(onClick = {}, modifier = Modifier.draggableHandle()) {
-                                Icon(Icons.Filled.DragHandle, contentDescription = "Reordenar")
-                            }
-                        }
-                        }
-                    }
+                        },
+                    )
                 }
             }
         }

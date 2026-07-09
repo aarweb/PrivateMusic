@@ -7,8 +7,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.RowScope
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -36,13 +34,9 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.ui.layout.ContentScale
-import coil.compose.AsyncImage
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.aar.privatemusic.PrivateMusicApp
@@ -52,7 +46,7 @@ import kotlinx.coroutines.launch
 import java.io.File
 import java.util.Calendar
 
-/** Landing screen: greeting, daily mix hero, carousels and shortcuts. */
+/** Landing screen: greeting, play cards, carousels and shortcuts. */
 @Composable
 fun HomeScreen(
     app: PrivateMusicApp,
@@ -80,17 +74,12 @@ fun HomeScreen(
             .verticalScroll(rememberScrollState())
             .padding(bottom = 24.dp),
     ) {
+        // Un saludo, no una portada de revista: cada dp de cabecera es un dp
+        // menos de música visible, y aquí abajo sólo caben cinco filas.
         Text(
             greeting,
-            style = MaterialTheme.typography.headlineMedium,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier.padding(start = 20.dp, top = 24.dp),
-        )
-        Text(
-            "¿Qué escuchamos hoy?",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(start = 20.dp, top = 2.dp),
+            style = MaterialTheme.typography.headlineSmall,
+            modifier = Modifier.padding(start = 20.dp, top = 20.dp, bottom = 4.dp),
         )
 
         if (songs.isEmpty()) {
@@ -130,120 +119,37 @@ fun HomeScreen(
             return@Column
         }
 
-        // --- Mix de hoy (hero) ---
-        // Cuatro carátulas reales de la biblioteca dan al hero un aire propio,
-        // en vez de un gradiente plano. Si aún no hay 4, cae al círculo de play.
-        val mixArts = remember(recent, added, songs) {
-            (recent + added + songs).distinctBy { it.id }
-                .mapNotNull { it.artPath }.distinct().take(4)
-        }
-        Box(
-            Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 20.dp, vertical = 16.dp)
-                .clip(RoundedCornerShape(24.dp))
-                .background(
-                    Brush.linearGradient(
-                        listOf(
-                            MaterialTheme.colorScheme.primary,
-                            MaterialTheme.colorScheme.tertiary,
-                        )
-                    )
-                )
-                .clickable {
+        // --- Empezar a sonar ---
+        // El héroe "Mix de hoy" ocupaba 122 dp para no decir nada que su propia
+        // fila no diga: el mix sigue a un toque, y ahora entra contenido real
+        // sin desplazar. La otra puerta al mix está en la pestaña Playlists.
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            PlayCard(
+                title = "Aleatorio",
+                subtitle = "${songs.size} ${if (songs.size == 1) "canción" else "canciones"}",
+                icon = Icons.Filled.Shuffle,
+                container = MaterialTheme.colorScheme.secondaryContainer,
+                onContainer = MaterialTheme.colorScheme.onSecondaryContainer,
+                modifier = Modifier.weight(1f),
+                onClick = { app.playerController.playQueueShuffled(songs) },
+            )
+            PlayCard(
+                title = "Mix de hoy",
+                subtitle = "Se renueva a diario",
+                icon = Icons.Filled.PlayArrow,
+                container = MaterialTheme.colorScheme.primaryContainer,
+                onContainer = MaterialTheme.colorScheme.onPrimaryContainer,
+                modifier = Modifier.weight(1f),
+                onClick = {
                     scope.launch {
                         val mix = app.repository.buildDailyMix()
                         if (mix.isNotEmpty()) app.playerController.playQueue(mix, 0)
                     }
                 },
-        ) {
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .padding(24.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        "MIX DE HOY",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onPrimary,
-                    )
-                    Text(
-                        "Tu mezcla diaria",
-                        style = MaterialTheme.typography.headlineSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onPrimary,
-                    )
-                    Text(
-                        "Se renueva cada día con tu historial y favoritas",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.85f),
-                    )
-                }
-                Spacer(Modifier.width(16.dp))
-                Box(contentAlignment = Alignment.Center) {
-                    if (mixArts.size == 4) {
-                        Column(Modifier.size(96.dp).clip(RoundedCornerShape(16.dp))) {
-                            Row(Modifier.weight(1f)) {
-                                MosaicCell(mixArts[0]); MosaicCell(mixArts[1])
-                            }
-                            Row(Modifier.weight(1f)) {
-                                MosaicCell(mixArts[2]); MosaicCell(mixArts[3])
-                            }
-                        }
-                        // Velo oscuro para que el botón de play resalte sobre las portadas.
-                        Box(
-                            Modifier.size(96.dp).clip(RoundedCornerShape(16.dp))
-                                .background(androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.25f))
-                        )
-                    }
-                    Surface(
-                        shape = RoundedCornerShape(50),
-                        color = MaterialTheme.colorScheme.onPrimary,
-                        modifier = Modifier.size(56.dp),
-                    ) {
-                        Icon(
-                            Icons.Filled.PlayArrow,
-                            contentDescription = "Reproducir Mix de hoy",
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.padding(12.dp),
-                        )
-                    }
-                }
-            }
-        }
-
-        // --- Reproducir aleatorio (toda la biblioteca) ---
-        Surface(
-            onClick = { app.playerController.playQueueShuffled(songs) },
-            shape = RoundedCornerShape(16.dp),
-            color = MaterialTheme.colorScheme.secondaryContainer,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 20.dp),
-        ) {
-            Row(
-                Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Icon(
-                    Icons.Filled.Shuffle,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSecondaryContainer,
-                )
-                Text(
-                    "Reproducir aleatorio",
-                    style = MaterialTheme.typography.titleSmall,
-                    color = MaterialTheme.colorScheme.onSecondaryContainer,
-                    modifier = Modifier.weight(1f).padding(start = 12.dp),
-                )
-                Text(
-                    "${songs.size} canciones",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.7f),
-                )
-            }
+            )
         }
 
         // --- Seguir escuchando ---
@@ -267,7 +173,12 @@ fun HomeScreen(
         }
 
         // --- Añadidas recientemente ---
-        val freshest = added.take(12)
+        // Sin las que ya salen arriba: con una biblioteca pequeña, "recientes" y
+        // "añadidas" son casi la misma lista, y repetir carátulas parece relleno.
+        val freshest = remember(added, recent) {
+            val seen = recent.map { it.id }.toSet()
+            added.filterNot { it.id in seen }.take(12)
+        }
         if (freshest.isNotEmpty()) {
             HomeSection("Añadidas recientemente")
             LazyRow(
@@ -343,15 +254,42 @@ fun HomeScreen(
     }
 }
 
-/** Una celda cuadrada del mosaico del hero (la mitad de un lado 2×2). */
+/** Las dos puertas de entrada a la música: aleatorio y mix del día. */
 @Composable
-private fun RowScope.MosaicCell(artPath: String) {
-    AsyncImage(
-        model = File(artPath),
-        contentDescription = null,
-        contentScale = ContentScale.Crop,
-        modifier = Modifier.weight(1f).fillMaxHeight(),
-    )
+private fun PlayCard(
+    title: String,
+    subtitle: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    container: androidx.compose.ui.graphics.Color,
+    onContainer: androidx.compose.ui.graphics.Color,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
+    Surface(
+        onClick = onClick,
+        shape = MaterialTheme.shapes.medium,
+        color = container,
+        modifier = modifier,
+    ) {
+        Row(
+            Modifier.padding(horizontal = 14.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(icon, contentDescription = null, tint = onContainer)
+            Column(Modifier.padding(start = 10.dp)) {
+                Text(title, style = MaterialTheme.typography.titleSmall, color = onContainer)
+                // Sin alpha: el contador a 0.7 daba 3,8:1 sobre el contenedor,
+                // por debajo del mínimo legible.
+                Text(
+                    subtitle,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = onContainer,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+    }
 }
 
 @Composable
@@ -359,8 +297,7 @@ private fun HomeSection(title: String) {
     Text(
         title,
         style = MaterialTheme.typography.titleMedium,
-        fontWeight = FontWeight.SemiBold,
-        modifier = Modifier.padding(start = 20.dp, top = 20.dp, bottom = 10.dp),
+        modifier = Modifier.padding(start = 20.dp, top = 18.dp, bottom = 8.dp),
     )
 }
 

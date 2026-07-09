@@ -167,7 +167,10 @@ class TorrentDownloader(
         // Un torrent de varias pistas se agrupa en una playlist con su nombre.
         val playlistId: Long? = if (audios.size > 1) {
             dao.insertPlaylist(
-                Playlist(name = result.title.take(60), createdAt = System.currentTimeMillis())
+                Playlist(
+                    name = com.aar.privatemusic.util.prettyReleaseName(result.title).take(60),
+                    createdAt = System.currentTimeMillis(),
+                )
             )
         } else null
 

@@ -5,6 +5,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Spacer
@@ -66,11 +67,15 @@ import com.aar.privatemusic.ui.components.SongRow
 import kotlinx.coroutines.launch
 import java.io.File
 
-private enum class SortMode(val label: String) {
-    RECENT("Añadidas recientemente"),
-    TITLE("Título"),
-    ARTIST("Artista"),
-    DURATION("Duración"),
+/**
+ * [chip] es el nombre corto: "Añadidas recientemente" no cabe en el chip y se
+ * partía en tres líneas. En el menú sí hay sitio para el nombre largo.
+ */
+private enum class SortMode(val label: String, val chip: String) {
+    RECENT("Añadidas recientemente", "Recientes"),
+    TITLE("Título", "Título"),
+    ARTIST("Artista", "Artista"),
+    DURATION("Duración", "Duración"),
 }
 
 @Composable
@@ -195,6 +200,9 @@ fun LibraryScreen(app: PrivateMusicApp, onOpenArtist: (String) -> Unit = {}) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
+                // Los chips se desplazan en vez de envolver: un chip partido en
+                // tres líneas deforma toda la fila.
+                .horizontalScroll(rememberScrollState())
                 .padding(horizontal = 16.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -218,7 +226,7 @@ fun LibraryScreen(app: PrivateMusicApp, onOpenArtist: (String) -> Unit = {}) {
                 FilterChip(
                     selected = false,
                     onClick = { sortMenuOpen = true },
-                    label = { Text(sortMode.label) },
+                    label = { Text(sortMode.chip, maxLines = 1, softWrap = false) },
                     leadingIcon = { Icon(Icons.Filled.Sort, contentDescription = "Ordenar") },
                 )
                 DropdownMenu(expanded = sortMenuOpen, onDismissRequest = { sortMenuOpen = false }) {

@@ -137,10 +137,20 @@ private fun MainScaffold(app: PrivateMusicApp) {
         bottomBar = {
             if (currentRoute != "player") {
                 Column {
-                    if (nowPlaying != null) {
+                    nowPlaying?.let { np ->
+                        val song by app.repository.observeSong(np.songId)
+                            .collectAsState(initial = null)
+                        val scope = androidx.compose.runtime.rememberCoroutineScope()
                         MiniPlayer(
                             controller = app.playerController,
                             onOpenPlayer = { navController.navigate("player") },
+                            isFavorite = song?.isFavorite == true,
+                            onToggleFavorite = {
+                                val current = song ?: return@MiniPlayer
+                                scope.launch {
+                                    app.repository.setFavorite(current.id, !current.isFavorite)
+                                }
+                            },
                         )
                     }
                     NavigationBar {

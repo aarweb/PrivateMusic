@@ -131,7 +131,12 @@ fun PlaylistsScreen(
             }
         },
     ) { padding ->
-        LazyColumn(Modifier.fillMaxSize().padding(padding)) {
+        // El FAB flota sobre la lista: sin este hueco al final, tapaba el menú
+        // de la última playlist y no había forma de abrirlo.
+        LazyColumn(
+            modifier = Modifier.fillMaxSize().padding(padding),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 88.dp),
+        ) {
             item(key = "auto-header") {
                 Text(
                     "Automáticas",
