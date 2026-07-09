@@ -1,0 +1,160 @@
+package com.aar.privatemusic.desktop.sync
+
+import com.aar.privatemusic.data.db.MusicDao
+import com.aar.privatemusic.data.db.Playlist
+import com.aar.privatemusic.data.db.PlaylistSongCrossRef
+import com.aar.privatemusic.data.db.Song
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import org.json.JSONObject
+import java.io.File
+import java.net.HttpURLConnection
+import java.net.URL
+
+data class SyncResult(val songsAdded: Int, val filesDownloaded: Int, val playlists: Int, val bytes: Long)
+
+/**
+ * Se trae del móvil lo que le falta al PC.
+ *
+ * El móvil manda ids; el PC decide dónde guarda cada fichero y escribe su
+ * propia ruta absoluta en su propia base de datos. Ninguna ruta cruza la red:
+ * `/storage/emulated/0/...` no significa nada aquí.
+ *
+ * Es aditivo: trae lo nuevo y no borra nada. Que el PC olvide canciones
+ * borradas en el móvil es asunto de la sincronización de estado, que llega
+ * después.
+ */
+class SyncClient(
+    private val dao: MusicDao,
+    private val musicDir: File,
+    private val artDir: File,
+) {
+
+    suspend fun sync(phone: Phone, onProgress: (String) -> Unit): SyncResult = withContext(Dispatchers.IO) {
+        onProgress("Pidiendo la biblioteca a ${phone.name}…")
+        val root = JSONObject(httpGet("${phone.baseUrl}/library"))
+
+        val songs = root.getJSONArray("songs")
+        var downloaded = 0
+        var bytes = 0L
+
+        for (i in 0 until songs.length()) {
+            val s = songs.getJSONObject(i)
+            val id = s.getString("id")
+            val title = s.getString("title")
+            onProgress("[${i + 1}/${songs.length()}] $title")
+
+            val ext = s.optString("ext").ifBlank { "mp3" }
+            val expected = s.optLong("sizeBytes", 0L)
+            val audio = File(musicDir, "$id.$ext")
+            // Un fichero a medias tiene el tamaño equivocado; se vuelve a bajar.
+            if (!audio.exists() || (expected > 0 && audio.length() != expected)) {
+                download("${phone.baseUrl}/song/$id", audio)
+                downloaded++
+                bytes += audio.length()
+            }
+
+            // Sin carátula se puede vivir: si falla, la canción entra igual.
+            val art: File? = if (!s.optBoolean("hasArt")) null else {
+                val target = File(artDir, "$id.jpg")
+                if (target.exists()) target
+                else runCatching { download("${phone.baseUrl}/art/$id", target); target }.getOrNull()
+            }
+
+            dao.insertSong(
+                Song(
+                    id = id,
+                    title = title,
+                    artist = s.getString("artist"),
+                    durationSec = s.getInt("durationSec"),
+                    filePath = audio.absolutePath,
+                    artPath = art?.takeIf { it.exists() }?.absolutePath,
+                    thumbnailUrl = null,
+                    addedAt = s.getLong("addedAt"),
+                    isFavorite = s.optBoolean("isFavorite"),
+                    codec = s.optStringOrNull("codec"),
+                    bitrateKbps = s.optIntOrNull("bitrateKbps"),
+                    sampleRateHz = s.optIntOrNull("sampleRateHz"),
+                    loudnessDb = s.optFloatOrNull("loudnessDb"),
+                    bpm = s.optFloatOrNull("bpm"),
+                    camelot = s.optStringOrNull("camelot"),
+                    album = s.optStringOrNull("album"),
+                    albumArtist = s.optStringOrNull("albumArtist"),
+                    year = s.optIntOrNull("year"),
+                    trackNumber = s.optIntOrNull("trackNumber"),
+                    mbid = s.optStringOrNull("mbid"),
+                    isrc = s.optStringOrNull("isrc"),
+                    metadataResolved = s.optBoolean("metadataResolved"),
+                ),
+            )
+        }
+
+        val playlists = root.getJSONArray("playlists")
+        val existing = dao.playlistsOnce().associateBy { it.id }
+        for (i in 0 until playlists.length()) {
+            val p = playlists.getJSONObject(i)
+            val id = p.getLong("id")
+            val name = p.getString("name")
+            val description = p.optStringOrNull("description")
+
+            if (existing.containsKey(id)) {
+                dao.renamePlaylist(id, name, description)
+                dao.clearPlaylist(id)
+            } else {
+                // El id viaja desde el móvil: Room respeta el que le des cuando no es 0.
+                dao.insertPlaylist(
+                    Playlist(
+                        id = id,
+                        name = name,
+                        createdAt = p.getLong("createdAt"),
+                        description = description,
+                        isPinned = p.optBoolean("isPinned"),
+                    ),
+                )
+            }
+            val songIds = p.getJSONArray("songIds")
+            for (j in 0 until songIds.length()) {
+                dao.addToPlaylist(PlaylistSongCrossRef(id, songIds.getString(j), j))
+            }
+        }
+
+        onProgress("Listo")
+        SyncResult(songs.length(), downloaded, playlists.length(), bytes)
+    }
+
+    private fun httpGet(spec: String): String {
+        val conn = URL(spec).openConnection() as HttpURLConnection
+        conn.connectTimeout = 8_000
+        conn.readTimeout = 20_000
+        try {
+            require(conn.responseCode in 200..299) { "HTTP ${conn.responseCode} en $spec" }
+            return conn.inputStream.bufferedReader().readText()
+        } finally {
+            conn.disconnect()
+        }
+    }
+
+    /** Baja a un temporal y renombra: una descarga cortada nunca parece completa. */
+    private fun download(spec: String, target: File) {
+        val tmp = File(target.parentFile, "${target.name}.part")
+        val conn = URL(spec).openConnection() as HttpURLConnection
+        conn.connectTimeout = 8_000
+        conn.readTimeout = 60_000
+        try {
+            require(conn.responseCode in 200..299) { "HTTP ${conn.responseCode} en $spec" }
+            conn.inputStream.use { input -> tmp.outputStream().use { input.copyTo(it, 64 * 1024) } }
+        } finally {
+            conn.disconnect()
+        }
+        if (target.exists()) target.delete()
+        check(tmp.renameTo(target)) { "no se pudo renombrar ${tmp.name}" }
+    }
+}
+
+private fun JSONObject.optStringOrNull(key: String): String? =
+    if (isNull(key)) null else optString(key).takeIf { it.isNotBlank() }
+
+private fun JSONObject.optIntOrNull(key: String): Int? = if (has(key) && !isNull(key)) getInt(key) else null
+
+private fun JSONObject.optFloatOrNull(key: String): Float? =
+    if (has(key) && !isNull(key)) getDouble(key).toFloat() else null

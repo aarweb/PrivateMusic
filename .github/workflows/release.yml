@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 jobs:
-  build-and-release:
+  android:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -52,9 +52,99 @@ jobs:
       - name: Renombrar APK con la versión
         run: cp app/build/outputs/apk/debug/app-debug.apk "privatemusic-${GITHUB_REF_NAME#v}.apk"
 
-      - name: Publicar release con el APK
-        if: startsWith(github.ref, 'refs/tags/')
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android
+          path: privatemusic-*.apk
+
+  # El esquema compartido es el mismo fichero para el móvil y el PC: si una
+  # migración se rompe, se entera aquí antes de publicar nada.
+  test-core:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - run: ./gradlew :core:jvmTest --no-daemon
+
+  desktop-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Versión desde la etiqueta
+        run: |
+          V="${GITHUB_REF_NAME#v}"
+          case "$V" in ''|*[!0-9.]*) V=1.0.0 ;; esac
+          echo "PM_VERSION=$V" >> "$GITHUB_ENV"
+
+      # Imagen portable con su propia JVM: es lo único que sirve fuera de
+      # Debian/Ubuntu (Arch, Fedora, …), y es lo que sabe auto-actualizarse.
+      - name: Imagen portable
+        run: |
+          ./gradlew :desktop:createDistributable -PdesktopVersion="$PM_VERSION" --no-daemon
+          tar -czf "privatemusic-desktop-$PM_VERSION-linux-x64.tar.gz" \
+            -C desktop/build/compose/binaries/main/app PrivateMusic
+
+      - name: Paquete .deb
+        run: |
+          ./gradlew :desktop:packageDeb -PdesktopVersion="$PM_VERSION" --no-daemon
+          cp desktop/build/compose/binaries/main/deb/*.deb "privatemusic-desktop-$PM_VERSION.deb"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-linux
+          path: |
+            privatemusic-desktop-*-linux-x64.tar.gz
+            privatemusic-desktop-*.deb
+
+  desktop-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Versión desde la etiqueta
+        shell: bash
+        run: |
+          V="${GITHUB_REF_NAME#v}"
+          case "$V" in ''|*[!0-9.]*) V=1.0.0 ;; esac
+          echo "PM_VERSION=$V" >> "$GITHUB_ENV"
+
+      # No hay compilación cruzada: el .msi sólo sale de un runner de Windows.
+      - name: Instalador .msi
+        shell: bash
+        run: |
+          ./gradlew :desktop:packageMsi -PdesktopVersion="$PM_VERSION" --no-daemon
+          cp desktop/build/compose/binaries/main/msi/*.msi "privatemusic-desktop-$PM_VERSION.msi"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-windows
+          path: privatemusic-desktop-*.msi
+
+  publicar:
+    needs: [android, test-core, desktop-linux, desktop-windows]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+
+      - name: Publicar release
         uses: softprops/action-gh-release@v2
         with:
-          files: privatemusic-*.apk
+          files: |
+            privatemusic-*.apk
+            privatemusic-desktop-*
           generate_release_notes: true

@@ -16,3 +16,7 @@ dependencyResolutionManagement {
 
 rootProject.name = "PrivateMusic"
 include(":app")
+// Esquema y consultas compartidos entre el móvil y el escritorio (Room KMP).
+include(":core")
+// Reproductor de escritorio (Windows y Linux).
+include(":desktop")

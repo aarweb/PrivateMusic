@@ -45,6 +45,10 @@ class AppSettings(context: Context) {
     private val _autoMix = MutableStateFlow(prefs.getBoolean(KEY_AUTOMIX, false))
     val autoMix: StateFlow<Boolean> = _autoMix
 
+    /** Publicar la biblioteca en la red local para que el PC la lea. */
+    private val _shareWithPc = MutableStateFlow(prefs.getBoolean(KEY_SHARE_PC, false))
+    val shareWithPc: StateFlow<Boolean> = _shareWithPc
+
     private val _listenBrainzToken = MutableStateFlow(prefs.getString(KEY_LISTENBRAINZ, "") ?: "")
     val listenBrainzToken: StateFlow<String> = _listenBrainzToken
 
@@ -78,6 +82,11 @@ class AppSettings(context: Context) {
     fun setAutoMix(value: Boolean) {
         prefs.edit().putBoolean(KEY_AUTOMIX, value).apply()
         _autoMix.value = value
+    }
+
+    fun setShareWithPc(value: Boolean) {
+        prefs.edit().putBoolean(KEY_SHARE_PC, value).apply()
+        _shareWithPc.value = value
     }
 
     fun setListenBrainzToken(value: String) {
@@ -118,6 +127,7 @@ class AppSettings(context: Context) {
         private const val KEY_SPONSORBLOCK = "sponsorblock"
         private const val KEY_LISTENBRAINZ = "listenbrainz_token"
         private const val KEY_AUTOMIX = "automix"
+        private const val KEY_SHARE_PC = "share_with_pc"
         private const val KEY_DZ_ARL = "deezer_arl"
         private const val KEY_DZ_USER = "deezer_user"
         private const val KEY_DZ_QUALITY = "deezer_quality"

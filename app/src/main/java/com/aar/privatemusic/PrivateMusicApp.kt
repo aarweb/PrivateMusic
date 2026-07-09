@@ -45,6 +45,8 @@ class PrivateMusicApp : Application() {
         private set
     lateinit var metadataService: com.aar.privatemusic.metadata.MetadataService
         private set
+    lateinit var libraryShare: com.aar.privatemusic.sync.LibraryShare
+        private set
 
     override fun onCreate() {
         super.onCreate()
@@ -62,6 +64,13 @@ class PrivateMusicApp : Application() {
         archive = InternetArchiveDownloader(this, dao, appScope)
         repository = MusicRepository(dao, downloader)
         metadataService = com.aar.privatemusic.metadata.MetadataService(this, dao, downloader.musicDir)
+        libraryShare = com.aar.privatemusic.sync.LibraryShare(this, dao)
+        // El interruptor de Ajustes es la única verdad: sobrevive a reinicios.
+        appScope.launch {
+            settings.shareWithPc.collect { enabled ->
+                if (enabled) libraryShare.start() else libraryShare.stop()
+            }
+        }
         // Auto-resolve canonical metadata (name/artist/album/cover/lyrics) after
         // each YouTube download, applying only when the match is confident.
         downloader.onDownloadComplete = { id ->

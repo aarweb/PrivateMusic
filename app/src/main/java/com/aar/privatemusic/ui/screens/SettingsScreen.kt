@@ -47,6 +47,8 @@ fun SettingsScreen(app: PrivateMusicApp, onOpenStats: () -> Unit, onOpenEq: () -
     val crossfade by app.settings.crossfadeSec.collectAsState()
     val normalize by app.settings.normalizeVolume.collectAsState()
     val autoMix by app.settings.autoMix.collectAsState()
+    val shareWithPc by app.settings.shareWithPc.collectAsState()
+    val shareAddress by app.libraryShare.address.collectAsState()
     val prefs = androidx.compose.ui.platform.LocalContext.current
         .getSharedPreferences("settings", android.content.Context.MODE_PRIVATE)
     var btAutoplay by remember { mutableStateOf(prefs.getBoolean("bt_autoplay", false)) }
@@ -207,6 +209,24 @@ fun SettingsScreen(app: PrivateMusicApp, onOpenStats: () -> Unit, onOpenEq: () -
                 )
             }
             Switch(checked = normalize, onCheckedChange = { app.settings.setNormalizeVolume(it) })
+        }
+
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text("Compartir con el PC", style = MaterialTheme.typography.bodyLarge)
+                Text(
+                    shareAddress?.let { "Escuchando en $it" }
+                        ?: "Publica la biblioteca en la red local para el reproductor de escritorio",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Switch(checked = shareWithPc, onCheckedChange = { app.settings.setShareWithPc(it) })
         }
 
         Row(
