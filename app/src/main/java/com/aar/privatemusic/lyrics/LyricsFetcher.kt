@@ -22,12 +22,20 @@ object LyricsFetcher {
 
     private const val UA = "PrivateMusic (https://github.com/aarweb/PrivateMusic)"
 
+    /**
+     * Canciones que ya se buscaron y no tienen letra. Sin esto, cada vez que
+     * suena una instrumental se piden tres URLs a LRCLIB. Vive en memoria, no en
+     * disco: si mañana alguien sube la letra, basta reabrir la app.
+     */
+    private val misses = java.util.Collections.synchronizedSet(mutableSetOf<String>())
+
     suspend fun getOrFetch(song: Song, dir: File): Lyrics? = withContext(Dispatchers.IO) {
         val lrc = File(dir, "${song.id}.lrc")
         val txt = File(dir, "${song.id}.txt")
         when {
             lrc.exists() -> parseLrc(lrc.readText())
             txt.exists() -> plain(txt.readText())
+            song.id in misses -> null
             else -> fetch(song)?.let { (synced, plainText) ->
                 when {
                     !synced.isNullOrBlank() -> {
@@ -40,7 +48,7 @@ object LyricsFetcher {
                     }
                     else -> null
                 }
-            }
+            }.also { if (it == null) misses.add(song.id) }
         }
     }
 

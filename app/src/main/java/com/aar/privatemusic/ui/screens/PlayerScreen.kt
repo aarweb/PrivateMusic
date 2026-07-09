@@ -151,6 +151,11 @@ fun PlayerScreen(
     val playbackSpeed by controller.playbackSpeed.collectAsState()
 
     val lyrics by produceState<com.aar.privatemusic.lyrics.Lyrics?>(initialValue = null, song?.id) {
+        // produceState recuerda su valor SIN clave: al cambiar de canción sólo
+        // relanza el productor. Sin este borrado, la letra de la canción
+        // anterior se seguía viendo -- sincronizada contra la nueva-- durante
+        // toda la búsqueda, y para siempre si la nueva no tenía letra.
+        value = null
         value = song?.let { s ->
             withContext(Dispatchers.IO) { runCatching { app.repository.getLyrics(s) }.getOrNull() }
         }
@@ -515,7 +520,10 @@ fun PlayerScreen(
             PlayerActionChip(
                 icon = Icons.Filled.Lyrics,
                 label = "Letra",
-                active = showLyrics,
+                // Marcado sólo si de verdad se está viendo la letra: con una
+                // canción sin letra se muestra la carátula, y el chip encendido
+                // prometía algo que no estaba en pantalla.
+                active = showLyrics && lyrics != null,
                 accent = accent,
                 enabled = lyrics != null,
                 onClick = { showLyrics = !showLyrics },
