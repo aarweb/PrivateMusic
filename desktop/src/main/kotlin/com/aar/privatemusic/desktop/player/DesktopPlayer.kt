@@ -20,6 +20,8 @@ import java.io.File
  * propósito: el día que la cola se sincronice entre los dos aparatos, hablarán
  * el mismo idioma.
  */
+enum class RepeatMode { OFF, ALL, ONE }
+
 class DesktopPlayer(private val engine: AudioEngine, private val dao: MusicDao) {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -36,12 +38,28 @@ class DesktopPlayer(private val engine: AudioEngine, private val dao: MusicDao) 
     private val _shuffle = MutableStateFlow(false)
     val shuffle: StateFlow<Boolean> = _shuffle.asStateFlow()
 
+    private val _repeat = MutableStateFlow(RepeatMode.OFF)
+    val repeat: StateFlow<RepeatMode> = _repeat.asStateFlow()
+
+    private val _volume = MutableStateFlow(100)
+    val volume: StateFlow<Int> = _volume.asStateFlow()
+
     val isPlaying: StateFlow<Boolean> get() = engine.isPlaying
     val positionMs: StateFlow<Long> get() = engine.positionMs
     val durationMs: StateFlow<Long> get() = engine.durationMs
 
     init {
-        engine.onFinished = { next() }
+        // Terminar sola una canción y pulsar "siguiente" no son lo mismo: sólo
+        // lo primero repite o vuelve al principio de la cola.
+        engine.onFinished = { advanceAutomatically() }
+    }
+
+    private fun advanceAutomatically() {
+        when (_repeat.value) {
+            RepeatMode.ONE -> playAt(_index.value)
+            RepeatMode.ALL -> playAt(if (_index.value + 1 in _queue.value.indices) _index.value + 1 else 0)
+            RepeatMode.OFF -> next()
+        }
     }
 
     fun playQueue(songs: List<Song>, startIndex: Int = 0) {
@@ -99,8 +117,27 @@ class DesktopPlayer(private val engine: AudioEngine, private val dao: MusicDao) 
 
     fun seekTo(ms: Long) = engine.seekTo(ms)
 
-    fun setShuffle(value: Boolean) {
-        _shuffle.value = value
+    /** Baraja lo que queda por sonar; lo ya escuchado no se toca. */
+    fun toggleShuffle() {
+        _shuffle.value = !_shuffle.value
+        if (!_shuffle.value || _index.value < 0) return
+        val played = _queue.value.take(_index.value + 1)
+        val upcoming = _queue.value.drop(_index.value + 1).shuffled()
+        _queue.value = played + upcoming
+    }
+
+    fun cycleRepeat() {
+        _repeat.value = when (_repeat.value) {
+            RepeatMode.OFF -> RepeatMode.ALL
+            RepeatMode.ALL -> RepeatMode.ONE
+            RepeatMode.ONE -> RepeatMode.OFF
+        }
+    }
+
+    fun setVolume(percent: Int) {
+        val clamped = percent.coerceIn(0, 100)
+        _volume.value = clamped
+        engine.setVolume(clamped)
     }
 
     fun toggleFavorite() {

@@ -17,24 +17,14 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Favorite
-import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.MusicNote
-import androidx.compose.material.icons.filled.Pause
-import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.SkipNext
-import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -155,66 +145,6 @@ fun EmptyState(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         action?.let { Spacer(Modifier.height(20.dp)); it() }
-    }
-}
-
-@Composable
-fun MiniPlayer(
-    song: Song,
-    isPlaying: Boolean,
-    progress: Float,
-    onOpen: () -> Unit,
-    onToggle: () -> Unit,
-    onNext: () -> Unit,
-    onPrevious: () -> Unit,
-    onToggleFavorite: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Surface(modifier, tonalElevation = 3.dp) {
-        Column {
-            LinearProgressIndicator(
-                progress = { progress },
-                modifier = Modifier.fillMaxWidth().height(2.dp),
-                trackColor = Color.Transparent,
-            )
-            Row(
-                Modifier.fillMaxWidth().clickable(onClick = onOpen).padding(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Cover(song.artPath, 44.dp)
-                Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
-                    Text(
-                        song.title,
-                        style = MaterialTheme.typography.bodyMedium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    Text(
-                        song.artist,
-                        style = MaterialTheme.typography.bodySmall,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                IconButton(onToggleFavorite) {
-                    Icon(
-                        if (song.isFavorite) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
-                        "Favorita",
-                        tint = if (song.isFavorite) MaterialTheme.colorScheme.primary
-                        else MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                IconButton(onPrevious) { Icon(Icons.Filled.SkipPrevious, "Anterior") }
-                IconButton(onToggle) {
-                    Icon(
-                        if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
-                        if (isPlaying) "Pausa" else "Reproducir",
-                    )
-                }
-                IconButton(onNext) { Icon(Icons.Filled.SkipNext, "Siguiente") }
-            }
-        }
     }
 }
 

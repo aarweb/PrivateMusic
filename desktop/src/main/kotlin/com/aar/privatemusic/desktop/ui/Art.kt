@@ -24,7 +24,14 @@ fun rememberArt(path: String?): ImageBitmap? {
     if (path == null) return null
     var image by remember(path) { mutableStateOf(cache[path]) }
     LaunchedEffect(path) {
-        if (cache.containsKey(path)) return@LaunchedEffect
+        // Si ya está cargada, hay que ADOPTARLA, no sólo saltarse la carga.
+        // La misma carátula la piden a la vez la fila, la barra y el panel: el
+        // que llegaba segundo veía la clave puesta, se iba, y se quedaba sin
+        // imagen para siempre — una nota gris junto a una carátula buena.
+        if (cache.containsKey(path)) {
+            image = cache[path]
+            return@LaunchedEffect
+        }
         val loaded = withContext(Dispatchers.IO) {
             runCatching { File(path).inputStream().use(::loadImageBitmap) }.getOrNull()
         }
