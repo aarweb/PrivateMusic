@@ -142,6 +142,12 @@ fun App(shortcuts: KeyShortcuts) {
         if (back.isNotEmpty()) view = back.removeAt(back.lastIndex)
     }
 
+    val actions = SongActions(
+        onAddToQueue = player::addToQueue,
+        onGoToArtist = { go(View.ArtistView(it.artist.trim().ifBlank { "Desconocido" })) },
+        onGoToAlbum = { song -> song.album?.let { go(View.AlbumView(it.trim())) } },
+    )
+
     var panelOpen by remember { mutableStateOf(false) }
     var syncing by remember { mutableStateOf(false) }
     var syncStatus by remember { mutableStateOf<String?>(null) }
@@ -232,13 +238,14 @@ fun App(shortcuts: KeyShortcuts) {
                                     songs = songs,
                                     onMessage = { scope.launch { snackbar.showSnackbar(it) } },
                                 )
-                                Destination.BIBLIOTECA -> LibraryScreen(songs, player, current?.id, density)
+                                Destination.BIBLIOTECA -> LibraryScreen(songs, player, current?.id, density, actions)
                                 Destination.ARTISTAS -> ArtistsScreen(songs) { go(View.ArtistView(it)) }
                                 Destination.ALBUMES -> AlbumsScreen(songs) { go(View.AlbumView(it)) }
                                 Destination.FAVORITAS -> FavoritesScreen(
                                     songs, density, current?.id,
                                     onPlay = player::playQueue,
                                     onToggleFavorite = player::toggleFavoriteOf,
+                                    actions = actions,
                                 )
                                 Destination.AJUSTES -> SettingsScreen(
                                     songs = songs,
@@ -273,6 +280,7 @@ fun App(shortcuts: KeyShortcuts) {
                                     onPlay = player::playQueue,
                                     onShuffle = player::playShuffled,
                                     onToggleFavorite = player::toggleFavoriteOf,
+                                    actions = actions,
                                 )
                             }
 
@@ -286,11 +294,12 @@ fun App(shortcuts: KeyShortcuts) {
                                     onPlay = player::playQueue,
                                     onShuffle = player::playShuffled,
                                     onToggleFavorite = player::toggleFavoriteOf,
+                                    actions = actions,
                                 )
                             }
 
                             is View.PlaylistView ->
-                                PlaylistDetail(v.playlist, dao, player, current?.id, density)
+                                PlaylistDetail(v.playlist, dao, player, current?.id, density, actions)
                         }
                     }
                 }
@@ -300,9 +309,11 @@ fun App(shortcuts: KeyShortcuts) {
                     enter = slideInHorizontally { it },
                     exit = slideOutHorizontally { it },
                 ) {
-                    current?.let { NowPlayingPanel(it, onClose = { panelOpen = false }) }
+                    current?.let { NowPlayingPanel(it, player, onClose = { panelOpen = false }) }
                 }
             }
+
+            StatusBar(songs, current)
 
             // También cuando lo que suena es una preescucha: si hay audio, hay barra.
             if (current != null || preview != null) {

@@ -1,5 +1,7 @@
 package com.aar.privatemusic.desktop.ui
 
+import androidx.compose.foundation.ContextMenuArea
+import androidx.compose.foundation.ContextMenuItem
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
@@ -47,14 +49,21 @@ enum class SortKey { NUMERO, TITULO, ARTISTA, ALBUM, DURACION }
 
 data class SortState(val key: SortKey, val ascending: Boolean)
 
+/** Lo que el menú del clic derecho puede hacer con una canción. */
+data class SongActions(
+    val onAddToQueue: (Song) -> Unit,
+    val onGoToArtist: ((Song) -> Unit)? = null,
+    val onGoToAlbum: ((Song) -> Unit)? = null,
+)
+
 /**
  * La lista de canciones como una tabla, no como una lista de móvil: cabecera
  * fija, columnas que ordenan al pulsarlas, y densidad ajustable. Es la diferencia
  * entre ver 12 canciones y ver 30.
  *
- * La columna Álbum se muestra sólo si alguna canción tiene álbum: en una
- * biblioteca bajada de YouTube casi ninguna lo tiene, y una columna de guiones
- * es peor que ninguna columna.
+ * La columna Álbum se muestra sólo si un cuarto de las canciones tienen álbum:
+ * en una biblioteca bajada de YouTube casi ninguna lo tiene, y una columna de
+ * huecos es peor que ninguna columna.
  */
 @Composable
 fun SongTable(
@@ -64,6 +73,7 @@ fun SongTable(
     onPlay: (List<Song>, Int) -> Unit,
     onToggleFavorite: (Song) -> Unit,
     modifier: Modifier = Modifier,
+    actions: SongActions? = null,
     /** En un álbum el orden natural es el del disco, no el alfabético. */
     initialSort: SortState = SortState(SortKey.NUMERO, ascending = true),
 ) {
@@ -112,18 +122,50 @@ fun SongTable(
 
         LazyColumn(Modifier.fillMaxSize()) {
             itemsIndexed(sorted, key = { _, song -> song.id }) { index, song ->
-                SongTableRow(
-                    song = song,
-                    position = index + 1,
-                    density = density,
-                    showAlbum = showAlbum,
-                    playing = song.id == currentId,
-                    onClick = { onPlay(sorted, index) },
-                    onToggleFavorite = { onToggleFavorite(song) },
-                )
+                val row = @Composable {
+                    SongTableRow(
+                        song = song,
+                        position = index + 1,
+                        density = density,
+                        showAlbum = showAlbum,
+                        playing = song.id == currentId,
+                        onClick = { onPlay(sorted, index) },
+                        onToggleFavorite = { onToggleFavorite(song) },
+                    )
+                }
+                if (actions == null) row() else {
+                    ContextMenuArea(items = { menuFor(song, sorted, index, onPlay, onToggleFavorite, actions) }) {
+                        row()
+                    }
+                }
             }
         }
     }
+}
+
+/**
+ * El menú del clic derecho. "Ir al álbum" sólo aparece si la canción tiene
+ * álbum: una entrada que no lleva a ninguna parte enseña a no usar el menú.
+ */
+private fun menuFor(
+    song: Song,
+    sorted: List<Song>,
+    index: Int,
+    onPlay: (List<Song>, Int) -> Unit,
+    onToggleFavorite: (Song) -> Unit,
+    actions: SongActions,
+): List<ContextMenuItem> = buildList {
+    add(ContextMenuItem("Reproducir") { onPlay(sorted, index) })
+    add(ContextMenuItem("Añadir a la cola") { actions.onAddToQueue(song) })
+    actions.onGoToArtist?.let { add(ContextMenuItem("Ir al artista") { it(song) }) }
+    if (!song.album.isNullOrBlank()) {
+        actions.onGoToAlbum?.let { add(ContextMenuItem("Ir al álbum") { it(song) }) }
+    }
+    add(
+        ContextMenuItem(if (song.isFavorite) "Quitar de favoritas" else "Marcar como favorita") {
+            onToggleFavorite(song)
+        },
+    )
 }
 
 @Composable

@@ -143,6 +143,7 @@ fun LibraryScreen(
     player: DesktopPlayer,
     currentId: String?,
     density: RowDensity,
+    actions: SongActions,
 ) {
     var query by remember { mutableStateOf("") }
     val filtered = remember(songs, query) {
@@ -183,6 +184,7 @@ fun LibraryScreen(
             currentId = currentId,
             onPlay = { list, index -> player.playQueue(list, index) },
             onToggleFavorite = player::toggleFavoriteOf,
+            actions = actions,
         )
     }
 }
@@ -196,6 +198,7 @@ fun PlaylistDetail(
     player: DesktopPlayer,
     currentId: String?,
     density: RowDensity,
+    actions: SongActions,
 ) {
     val songs by dao.observePlaylistSongsOrdered(playlist.id).collectAsState(emptyList())
     val artPaths by dao.observePlaylistArt(playlist.id).collectAsState(emptyList())
@@ -239,6 +242,7 @@ fun PlaylistDetail(
             currentId = currentId,
             onPlay = { list, index -> player.playQueue(list, index) },
             onToggleFavorite = player::toggleFavoriteOf,
+            actions = actions,
         )
     }
 }

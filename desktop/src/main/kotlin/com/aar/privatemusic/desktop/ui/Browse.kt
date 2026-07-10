@@ -139,6 +139,7 @@ fun GroupingDetail(
     onPlay: (List<Song>, Int) -> Unit,
     onShuffle: (List<Song>) -> Unit,
     onToggleFavorite: (Song) -> Unit,
+    actions: SongActions,
 ) {
     Column(Modifier.fillMaxSize()) {
         Row(
@@ -183,6 +184,7 @@ fun GroupingDetail(
             currentId = currentId,
             onPlay = onPlay,
             onToggleFavorite = onToggleFavorite,
+            actions = actions,
         )
     }
 }
@@ -196,6 +198,7 @@ fun FavoritesScreen(
     currentId: String?,
     onPlay: (List<Song>, Int) -> Unit,
     onToggleFavorite: (Song) -> Unit,
+    actions: SongActions,
 ) {
     val favorites = remember(songs) { songs.filter { it.isFavorite } }
     if (favorites.isEmpty()) {
@@ -208,7 +211,7 @@ fun FavoritesScreen(
             Modifier.padding(start = 24.dp, top = 24.dp, bottom = 12.dp),
             style = MaterialTheme.typography.headlineSmall,
         )
-        SongTable(favorites, density, currentId, onPlay, onToggleFavorite)
+        SongTable(favorites, density, currentId, onPlay, onToggleFavorite, actions = actions)
     }
 }
 

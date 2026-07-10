@@ -182,6 +182,59 @@ class DesktopPlayer(
         if (_index.value < 0) playAt(0)
     }
 
+    /**
+     * Quitar de la cola no debe cortar la música. Si se quita algo anterior a lo
+     * que suena, el índice se corre para seguir apuntando a la misma canción; si
+     * se quita lo que suena, se pasa a la siguiente (que ocupa ese mismo hueco).
+     *
+     * Quitar la última cuando era la que sonaba **termina**, no retrocede a la
+     * anterior: es lo que hace ExoPlayer en el móvil, y que se ponga a sonar sola
+     * una canción que no habías pedido es de las cosas que más asustan.
+     */
+    fun removeFromQueue(position: Int) {
+        val queue = _queue.value
+        if (position !in queue.indices) return
+        val playing = _index.value
+        _queue.value = queue.toMutableList().apply { removeAt(position) }
+
+        if (position < playing) { _index.value = playing - 1; return }
+        if (position != playing) return // se quitó algo posterior: nada que hacer
+
+        // Durante una preescucha no suena nada de la cola: sólo hay que dejar el
+        // índice donde toca, sin arrancar música que nadie ha pedido.
+        if (_preview.value != null) {
+            _index.value = position.coerceAtMost(_queue.value.lastIndex)
+            return
+        }
+        if (_queue.value.getOrNull(position) != null) playAt(position) else stopPlayback()
+    }
+
+    /** Se acabó: ni cola, ni canción, ni sonido. */
+    private fun stopPlayback() {
+        engine.pause()
+        _current.value = null
+        _index.value = -1
+    }
+
+    /** Mueve una canción dentro de la cola sin tocar la que está sonando. */
+    fun moveInQueue(from: Int, to: Int) {
+        val queue = _queue.value
+        if (from !in queue.indices || to !in queue.indices || from == to) return
+        _queue.value = queue.toMutableList().apply { add(to, removeAt(from)) }
+
+        val playing = _index.value
+        if (playing < 0) return
+        // Nada de buscar la canción por su id: la misma puede estar dos veces en
+        // la cola y ganaría la copia equivocada, y durante una preescucha no hay
+        // canción que buscar. Estas cuatro reglas son exactas.
+        _index.value = when {
+            playing == from -> to
+            from < playing && to >= playing -> playing - 1
+            from > playing && to <= playing -> playing + 1
+            else -> playing
+        }
+    }
+
     fun playAt(position: Int) {
         val song = _queue.value.getOrNull(position) ?: return
         val file = File(song.filePath)
