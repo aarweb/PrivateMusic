@@ -17,6 +17,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Home
@@ -72,6 +73,7 @@ fun Sidebar(
     smartPlaylists: List<SmartPlaylist>,
     openSmartId: Long?,
     onOpenSmart: (SmartPlaylist) -> Unit,
+    onNewPlaylist: () -> Unit,
 ) {
     Surface(
         Modifier.width(if (expanded) 260.dp else 84.dp).fillMaxHeight(),
@@ -109,17 +111,17 @@ fun Sidebar(
                 )
             }
 
-            if (!expanded || (playlists.isEmpty() && smartPlaylists.isEmpty())) return@Column
+            if (!expanded) return@Column
 
             // Las dos secciones comparten una sola lista: dos `LazyColumn` en una
             // `Column` se pelean por la altura y la segunda no se ve.
             LazyColumn(Modifier.fillMaxWidth()) {
-                if (playlists.isNotEmpty()) {
-                    item { SidebarSection("TUS PLAYLISTS") }
-                    // Ancladas primero: el orden de `observePlaylists` no las distingue.
-                    items(playlists.sortedByDescending { it.isPinned }, key = { "p${it.id}" }) { playlist ->
-                        PlaylistItem(playlist, playlist.id == openPlaylistId) { onOpenPlaylist(playlist) }
-                    }
+                // La cabecera se enseña siempre, aunque no haya ninguna: es donde
+                // vive el botón de crear la primera.
+                item { SidebarSection("TUS PLAYLISTS", onAction = onNewPlaylist) }
+                // Ancladas primero: el orden de `observePlaylists` no las distingue.
+                items(playlists.sortedByDescending { it.isPinned }, key = { "p${it.id}" }) { playlist ->
+                    PlaylistItem(playlist, playlist.id == openPlaylistId) { onOpenPlaylist(playlist) }
                 }
                 if (smartPlaylists.isNotEmpty()) {
                     item { SidebarSection("INTELIGENTES") }
@@ -133,13 +135,31 @@ fun Sidebar(
 }
 
 @Composable
-private fun SidebarSection(label: String) {
-    Text(
-        label,
-        Modifier.padding(start = 20.dp, top = 20.dp, bottom = 6.dp),
-        style = MaterialTheme.typography.labelSmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
+private fun SidebarSection(label: String, onAction: (() -> Unit)? = null) {
+    Row(
+        Modifier.fillMaxWidth().padding(start = 20.dp, end = 12.dp, top = 20.dp, bottom = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            label,
+            Modifier.weight(1f),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        onAction?.let {
+            Box(
+                Modifier.size(22.dp).clip(RoundedCornerShape(6.dp)).clickable(onClick = it),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    Icons.Filled.Add,
+                    "Nueva playlist",
+                    Modifier.size(16.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
 }
 
 /** Se distingue de una playlist normal por el icono: sus canciones las elige una regla. */

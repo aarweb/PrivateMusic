@@ -54,6 +54,9 @@ data class SongActions(
     val onAddToQueue: (Song) -> Unit,
     val onGoToArtist: ((Song) -> Unit)? = null,
     val onGoToAlbum: ((Song) -> Unit)? = null,
+    val onAddToPlaylist: ((Song) -> Unit)? = null,
+    /** Sólo dentro de una playlist: fuera de ella la entrada no significa nada. */
+    val onRemoveFromPlaylist: ((Song) -> Unit)? = null,
 )
 
 /**
@@ -157,6 +160,8 @@ private fun menuFor(
 ): List<ContextMenuItem> = buildList {
     add(ContextMenuItem("Reproducir") { onPlay(sorted, index) })
     add(ContextMenuItem("Añadir a la cola") { actions.onAddToQueue(song) })
+    actions.onAddToPlaylist?.let { add(ContextMenuItem("Añadir a playlist…") { it(song) }) }
+    actions.onRemoveFromPlaylist?.let { add(ContextMenuItem("Quitar de esta playlist") { it(song) }) }
     actions.onGoToArtist?.let { add(ContextMenuItem("Ir al artista") { it(song) }) }
     if (!song.album.isNullOrBlank()) {
         actions.onGoToAlbum?.let { add(ContextMenuItem("Ir al álbum") { it(song) }) }

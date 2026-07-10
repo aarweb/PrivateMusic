@@ -1,6 +1,8 @@
 package com.aar.privatemusic.cast
 
 import com.aar.privatemusic.data.db.MusicDao
+import com.aar.privatemusic.data.db.Playlist
+import com.aar.privatemusic.data.db.PlaylistSongCrossRef
 import com.aar.privatemusic.data.db.Song
 import fi.iki.elonen.NanoHTTPD
 import kotlinx.coroutines.runBlocking
@@ -22,6 +24,7 @@ class MediaHttpServer(
     override fun serve(session: IHTTPSession): Response {
         val path = session.uri ?: return notFound()
         if (path == "/library") return serveLibrary()
+        if (path == "/playlists" && session.method == Method.POST) return receivePlaylists(session)
         if (path.startsWith("/art/")) return serveArt(path.removePrefix("/art/").substringBefore('.'))
         if (!path.startsWith("/song/")) return notFound()
         val songId = path.removePrefix("/song/").substringBefore('.')
@@ -81,7 +84,11 @@ class MediaHttpServer(
     private fun serveLibrary(): Response {
         val (songs, playlists) = runBlocking {
             runCatching {
-                val ps = dao.playlistsOnce().map { it to dao.playlistSongsOnce(it.id).map { s -> s.id } }
+                // Las borradas también viajan: si no, el PC nunca se entera de
+                // que una playlist dejó de existir y la manda de vuelta.
+                val ps = dao.allPlaylistsForSync().map {
+                    it to if (it.deletedAt == null) dao.playlistSongsOnce(it.id).map { s -> s.id } else emptyList()
+                }
                 dao.songsOnce() to ps
             }.getOrNull() ?: return@runBlocking emptyList<Song>() to emptyList()
         }
@@ -133,6 +140,8 @@ class MediaHttpServer(
                     put("name", playlist.name)
                     putOpt("description", playlist.description)
                     put("createdAt", playlist.createdAt)
+                    put("updatedAt", playlist.updatedAt)
+                    playlist.deletedAt?.let { put("deletedAt", it) }
                     put("isPinned", playlist.isPinned)
                     put("songIds", JSONArray(songIds))
                 },
@@ -170,6 +179,64 @@ class MediaHttpServer(
         return newFixedLengthResponse(Response.Status.OK, "application/json", root.toString())
     }
 
+    /**
+     * El PC devuelve las playlists que ha creado o cambiado. Gana la más
+     * reciente, playlist por playlist.
+     *
+     * La comparación se repite aquí aunque el PC ya la hiciera: entre que pidió
+     * `/library` y manda esto, el móvil ha podido cambiar la misma playlist, y
+     * quien decide sobre una fila es quien la tiene.
+     */
+    private fun receivePlaylists(session: IHTTPSession): Response {
+        val body = HashMap<String, String>()
+        runCatching { session.parseBody(body) }.onFailure { return badRequest() }
+        val json = body["postData"] ?: return badRequest()
+
+        var applied = 0
+        runBlocking {
+            runCatching {
+                val incoming = JSONArray(json)
+                val mine = dao.allPlaylistsForSync().associateBy { it.id }
+                for (i in 0 until incoming.length()) {
+                    val p = incoming.getJSONObject(i)
+                    val id = p.getLong("id")
+                    val updatedAt = p.getLong("updatedAt")
+                    val current = mine[id]
+                    if (current != null && current.updatedAt >= updatedAt) continue
+
+                    val deletedAt = if (p.has("deletedAt")) p.getLong("deletedAt") else null
+                    dao.upsertPlaylist(
+                        Playlist(
+                            id = id,
+                            name = p.getString("name"),
+                            createdAt = p.getLong("createdAt"),
+                            description = p.optString("description").ifBlank { null },
+                            coverPath = current?.coverPath,
+                            isPinned = p.optBoolean("isPinned"),
+                            folderId = current?.folderId,
+                            updatedAt = updatedAt,
+                            deletedAt = deletedAt,
+                        ),
+                    )
+                    dao.clearPlaylist(id)
+                    if (deletedAt == null) {
+                        val songIds = p.getJSONArray("songIds")
+                        for (j in 0 until songIds.length()) {
+                            dao.addToPlaylist(PlaylistSongCrossRef(id, songIds.getString(j), j))
+                        }
+                    }
+                    applied++
+                }
+            }.onFailure { return@runBlocking }
+        }
+        return newFixedLengthResponse(
+            Response.Status.OK, "application/json", JSONObject().put("applied", applied).toString(),
+        )
+    }
+
+    private fun badRequest(): Response =
+        newFixedLengthResponse(Response.Status.BAD_REQUEST, "text/plain", "bad request")
+
     /** Album art for the receiver's now-playing screen. */
     private fun serveArt(songId: String): Response {
         val song = runBlocking { runCatching { dao.getSong(songId) }.getOrNull() }
@@ -193,7 +260,7 @@ class MediaHttpServer(
         const val SHARE_PORT = 8966
 
         /** Sube cuando el JSON de /library cambie de forma. */
-        const val LIBRARY_VERSION = 2
+        const val LIBRARY_VERSION = 3
 
         /**
          * Tope de escuchas que viajan al PC. Con las 20 000 más recientes las

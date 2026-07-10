@@ -57,14 +57,24 @@ class MusicRepository(
     /** Las carátulas de las cuatro primeras canciones, para el mosaico de portada. */
     fun observePlaylistArt(id: Long): Flow<List<String>> = dao.observePlaylistArt(id)
 
-    suspend fun createPlaylist(name: String): Long =
-        dao.insertPlaylist(Playlist(name = name, createdAt = System.currentTimeMillis()))
+    suspend fun createPlaylist(name: String): Long {
+        val now = System.currentTimeMillis()
+        return dao.insertPlaylist(Playlist(name = name, createdAt = now, updatedAt = now))
+    }
 
     suspend fun renamePlaylist(id: Long, name: String, description: String?) {
         val clean = name.trim()
         if (clean.isEmpty()) return
         dao.renamePlaylist(id, clean, description?.trim()?.ifBlank { null })
+        touch(id)
     }
+
+    /**
+     * Marca la playlist como cambiada. Cualquier cosa que el PC deba ver pasa por
+     * aquí: si se olvida, la sincronización creerá que su copia vieja es la buena.
+     */
+    private suspend fun touch(playlistId: Long) =
+        dao.touchPlaylist(playlistId, System.currentTimeMillis())
 
     /**
      * Copia la playlist con su orden. Las canciones se comparten, no se duplican
@@ -78,11 +88,14 @@ class MusicRepository(
         var n = 2
         while (name in existing) name = "${playlist.name} (copia $n)".also { n++ }
 
+        val now = System.currentTimeMillis()
         val newId = dao.insertPlaylist(
             playlist.copy(
                 id = 0,
                 name = name,
-                createdAt = System.currentTimeMillis(),
+                createdAt = now,
+                updatedAt = now,
+                deletedAt = null,
                 coverPath = null,
                 isPinned = false,
             )
@@ -103,10 +116,14 @@ class MusicRepository(
         return newId
     }
 
+    /**
+     * Borrado suave: la fila se queda marcada para poder contarle al PC que esta
+     * playlist ya no existe. Si se borrara de verdad, la siguiente sincronización
+     * la traería de vuelta desde el otro aparato.
+     */
     suspend fun deletePlaylist(playlist: Playlist) {
         playlist.coverPath?.let { java.io.File(it).delete() }
-        dao.clearPlaylist(playlist.id)
-        dao.deletePlaylist(playlist)
+        dao.softDeletePlaylist(playlist.id, System.currentTimeMillis())
     }
 
     // ---- Playlist folders ----
@@ -130,13 +147,18 @@ class MusicRepository(
     suspend fun addToPlaylist(playlistId: Long, songId: String) {
         val position = dao.playlistSize(playlistId)
         dao.addToPlaylist(PlaylistSongCrossRef(playlistId, songId, position))
+        touch(playlistId)
     }
 
-    suspend fun removeFromPlaylist(playlistId: Long, songId: String) =
+    suspend fun removeFromPlaylist(playlistId: Long, songId: String) {
         dao.removeFromPlaylist(playlistId, songId)
+        touch(playlistId)
+    }
 
-    suspend fun reorderPlaylist(playlistId: Long, orderedSongIds: List<String>) =
+    suspend fun reorderPlaylist(playlistId: Long, orderedSongIds: List<String>) {
         dao.reorderPlaylist(playlistId, orderedSongIds)
+        touch(playlistId)
+    }
 
     fun observeMostPlayed(): Flow<List<Song>> = dao.observeMostPlayed()
     fun observeForgotten(): Flow<List<Song>> =
@@ -453,6 +475,7 @@ class MusicRepository(
             ordered.add(next)
         }
         dao.reorderPlaylist(playlistId, ordered.map { it.id })
+        touch(playlistId)
         return true
     }
 
@@ -480,7 +503,10 @@ class MusicRepository(
 
     suspend fun unsnoozeSong(id: String) = dao.setSnooze(id, 0)
 
-    suspend fun setPlaylistPinned(id: Long, pinned: Boolean) = dao.setPlaylistPinned(id, pinned)
+    suspend fun setPlaylistPinned(id: Long, pinned: Boolean) {
+        dao.setPlaylistPinned(id, pinned)
+        touch(id)
+    }
 
     // ---- Smart playlists ----
 
@@ -515,7 +541,11 @@ class MusicRepository(
 
     suspend fun deleteSong(song: Song) {
         downloader.deleteSongFiles(song)
+        // Borrar una canción cambia todas las playlists que la tenían. Sin marcarlas,
+        // el PC creería que su copia (con la canción) es la buena y la devolvería.
+        val affected = dao.playlistIdsWithSong(song.id)
         dao.removeSongFromAllPlaylists(song.id)
+        affected.distinct().forEach { touch(it) }
         dao.deleteSong(song.id)
     }
 
@@ -533,6 +563,7 @@ class MusicRepository(
         val toAdd = songIds.filter { it !in existing }
         var position = dao.playlistSize(playlistId)
         toAdd.forEach { dao.addToPlaylist(PlaylistSongCrossRef(playlistId, it, position++)) }
+        if (toAdd.isNotEmpty()) touch(playlistId)
         return toAdd.size
     }
 

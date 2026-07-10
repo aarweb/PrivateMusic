@@ -12,10 +12,10 @@ import kotlin.test.assertTrue
 /**
  * Las doce migraciones, ejecutadas de verdad.
  *
- * Una base de datos nueva nace en la versión 13 y no migra nada: el camino que
+ * Una base de datos nueva nace en la versión 14 y no migra nada: el camino que
  * de verdad usa la gente —abrir una biblioteca vieja y subirla— no se prueba
  * solo. Aquí se escribe a mano el esquema de la v1, se mete música dentro, y se
- * comprueba que Room llega a la 13 sin perder una fila.
+ * comprueba que Room llega a la 14 sin perder una fila.
  *
  * Si Room aceptase la base pero el esquema resultante no coincidiera con las
  * entidades, la validación de Room al abrir la haría fallar. Esa validación
@@ -66,7 +66,7 @@ class MigrationTest {
     }
 
     @Test
-    fun `sube de la version 1 a la 13 sin perder datos`(): Unit = runBlocking {
+    fun `sube de la version 1 a la 14 sin perder datos`(): Unit = runBlocking {
         val dir = Files.createTempDirectory("pm-migration").toFile()
         createVersion1(dir)
 
@@ -91,6 +91,10 @@ class MigrationTest {
         assertEquals(1, playlists.size)
         assertEquals("Mi lista", playlists.single().name)
         assertEquals(null, playlists.single().description)
+        // La 13→14 no puede dejar `updatedAt` a cero: una playlist de antes de la
+        // sincronización bidireccional perdería siempre contra cualquier cambio.
+        assertEquals(2000L, playlists.single().updatedAt, "updatedAt hereda createdAt")
+        assertEquals(null, playlists.single().deletedAt)
         assertEquals(listOf("abc"), dao.playlistSongsOnce(playlists.single().id).map { it.id })
 
         // Tablas creadas por el camino: si no existen, estas consultas fallan.

@@ -10,7 +10,7 @@ import androidx.sqlite.execSQL
 
 @Database(
     entities = [Song::class, Playlist::class, PlaylistSongCrossRef::class, PlayEvent::class, SmartPlaylist::class, WatchedSource::class, PlaylistFolder::class, PendingDownload::class],
-    version = 13,
+    version = 14,
     exportSchema = false,
 )
 @ConstructedBy(MusicDatabaseConstructor::class)
@@ -159,6 +159,17 @@ internal val MUSIC_MIGRATIONS: Array<Migration> = arrayOf(
     object : Migration(12, 13) {
         override fun migrate(connection: SQLiteConnection) {
             connection.execSQL("ALTER TABLE playlists ADD COLUMN description TEXT")
+        }
+    },
+
+    // Sincronización bidireccional de playlists: gana la más reciente, y una
+    // borrada tiene que poder decir que lo está.
+    object : Migration(13, 14) {
+        override fun migrate(connection: SQLiteConnection) {
+            connection.execSQL("ALTER TABLE playlists ADD COLUMN updatedAt INTEGER NOT NULL DEFAULT 0")
+            connection.execSQL("ALTER TABLE playlists ADD COLUMN deletedAt INTEGER")
+            // Una playlist que nunca se ha tocado cambió por última vez al crearse.
+            connection.execSQL("UPDATE playlists SET updatedAt = createdAt")
         }
     },
 )

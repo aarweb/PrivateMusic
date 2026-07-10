@@ -8,6 +8,7 @@ import com.aar.privatemusic.data.db.SmartPlaylist
 import com.aar.privatemusic.data.db.Song
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.net.HttpURLConnection
@@ -20,6 +21,7 @@ data class SyncResult(
     val bytes: Long,
     val playEvents: Int = 0,
     val smartPlaylists: Int = 0,
+    val playlistsUploaded: Int = 0,
 )
 
 /**
@@ -99,33 +101,7 @@ class SyncClient(
         }
 
         val playlists = root.getJSONArray("playlists")
-        val existing = dao.playlistsOnce().associateBy { it.id }
-        for (i in 0 until playlists.length()) {
-            val p = playlists.getJSONObject(i)
-            val id = p.getLong("id")
-            val name = p.getString("name")
-            val description = p.optStringOrNull("description")
-
-            if (existing.containsKey(id)) {
-                dao.renamePlaylist(id, name, description)
-                dao.clearPlaylist(id)
-            } else {
-                // El id viaja desde el móvil: Room respeta el que le des cuando no es 0.
-                dao.insertPlaylist(
-                    Playlist(
-                        id = id,
-                        name = name,
-                        createdAt = p.getLong("createdAt"),
-                        description = description,
-                        isPinned = p.optBoolean("isPinned"),
-                    ),
-                )
-            }
-            val songIds = p.getJSONArray("songIds")
-            for (j in 0 until songIds.length()) {
-                dao.addToPlaylist(PlaylistSongCrossRef(id, songIds.getString(j), j))
-            }
-        }
+        val uploaded = syncPlaylists(root, phone, onProgress)
 
         // Un móvil con la 1.69 o anterior no manda ni el historial ni las
         // inteligentes: el PC se queda como estaba en vez de vaciarse.
@@ -133,7 +109,86 @@ class SyncClient(
         val smart = syncSmartPlaylists(root)
 
         onProgress("Listo")
-        SyncResult(songs.length(), downloaded, playlists.length(), bytes, events, smart)
+        SyncResult(songs.length(), downloaded, playlists.length(), bytes, events, smart, uploaded)
+    }
+
+    /**
+     * Fusiona las playlists en los dos sentidos: gana la más reciente, playlist
+     * por playlist. Devuelve cuántas se subieron al móvil.
+     *
+     * Un móvil con el protocolo 2 o anterior no manda `updatedAt` ni sabe recibir
+     * nada, así que con él se conserva el comportamiento de siempre: el móvil
+     * manda y el PC copia. Inventarse una fecha para poder "ganar" le borraría al
+     * usuario playlists que nunca tocó.
+     */
+    private suspend fun syncPlaylists(root: JSONObject, phone: Phone, onProgress: (String) -> Unit): Int {
+        val incoming = root.getJSONArray("playlists")
+        val bidirectional = root.optInt("version", 1) >= 3
+        val mine = dao.allPlaylistsForSync().associateBy { it.id }
+
+        for (i in 0 until incoming.length()) {
+            val p = incoming.getJSONObject(i)
+            val id = p.getLong("id")
+            val theirUpdatedAt = p.optLong("updatedAt", p.getLong("createdAt"))
+            val current = mine[id]
+            // Empate: no se toca nada. Reescribir por reescribir borra el orden.
+            if (bidirectional && current != null && current.updatedAt >= theirUpdatedAt) continue
+
+            val deletedAt = if (p.has("deletedAt")) p.getLong("deletedAt") else null
+            dao.upsertPlaylist(
+                Playlist(
+                    id = id,
+                    name = p.getString("name"),
+                    createdAt = p.getLong("createdAt"),
+                    description = p.optStringOrNull("description"),
+                    coverPath = current?.coverPath,
+                    isPinned = p.optBoolean("isPinned"),
+                    folderId = current?.folderId,
+                    updatedAt = theirUpdatedAt,
+                    deletedAt = deletedAt,
+                ),
+            )
+            dao.clearPlaylist(id)
+            if (deletedAt == null) {
+                val songIds = p.getJSONArray("songIds")
+                for (j in 0 until songIds.length()) {
+                    dao.addToPlaylist(PlaylistSongCrossRef(id, songIds.getString(j), j))
+                }
+            }
+        }
+
+        if (!bidirectional) return 0
+
+        // Lo que aquí es más nuevo, o que el móvil no conoce, sube.
+        val incomingDates = (0 until incoming.length()).associate {
+            val p = incoming.getJSONObject(it)
+            p.getLong("id") to p.optLong("updatedAt", p.getLong("createdAt"))
+        }
+        val toUpload = mine.values.filter { it.updatedAt > (incomingDates[it.id] ?: Long.MIN_VALUE) }
+        if (toUpload.isEmpty()) return 0
+
+        onProgress("Subiendo ${toUpload.size} playlists al móvil…")
+        val payload = JSONArray()
+        toUpload.forEach { playlist ->
+            payload.put(
+                JSONObject().apply {
+                    put("id", playlist.id)
+                    put("name", playlist.name)
+                    put("createdAt", playlist.createdAt)
+                    put("updatedAt", playlist.updatedAt)
+                    playlist.deletedAt?.let { put("deletedAt", it) }
+                    playlist.description?.let { put("description", it) }
+                    put("isPinned", playlist.isPinned)
+                    val ids = JSONArray()
+                    if (playlist.deletedAt == null) {
+                        dao.playlistSongsOnce(playlist.id).forEach { song -> ids.put(song.id) }
+                    }
+                    put("songIds", ids)
+                },
+            )
+        }
+        val response = httpPost("${phone.baseUrl}/playlists", payload.toString())
+        return runCatching { JSONObject(response).optInt("applied") }.getOrDefault(0)
     }
 
     /**
@@ -183,6 +238,22 @@ class SyncClient(
             )
         }
         return smart.length()
+    }
+
+    private fun httpPost(spec: String, body: String): String {
+        val conn = URL(spec).openConnection() as HttpURLConnection
+        conn.requestMethod = "POST"
+        conn.doOutput = true
+        conn.connectTimeout = 8_000
+        conn.readTimeout = 30_000
+        conn.setRequestProperty("Content-Type", "application/json")
+        try {
+            conn.outputStream.use { it.write(body.toByteArray()) }
+            require(conn.responseCode == 200) { "HTTP ${conn.responseCode}" }
+            return conn.inputStream.bufferedReader().readText()
+        } finally {
+            conn.disconnect()
+        }
     }
 
     private fun httpGet(spec: String): String {

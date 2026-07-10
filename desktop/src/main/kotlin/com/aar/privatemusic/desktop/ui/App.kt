@@ -34,6 +34,7 @@ import androidx.compose.ui.input.key.isCtrlPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.type
 import com.aar.privatemusic.data.db.Playlist
+import com.aar.privatemusic.data.db.Song
 import com.aar.privatemusic.data.db.SmartPlaylist
 import com.aar.privatemusic.data.db.openMusicDatabase
 import com.aar.privatemusic.desktop.DesktopSettings
@@ -46,6 +47,7 @@ import com.aar.privatemusic.desktop.downloader.DesktopFeedback
 import com.aar.privatemusic.desktop.downloader.YtDlpDownloader
 import com.aar.privatemusic.desktop.lyrics.LyricsManager
 import com.aar.privatemusic.desktop.player.DesktopPlayer
+import com.aar.privatemusic.desktop.player.DesktopPlaylists
 import com.aar.privatemusic.desktop.sync.Phone
 import com.aar.privatemusic.desktop.sync.SHARE_PORT
 import com.aar.privatemusic.desktop.sync.PhoneDiscovery
@@ -114,6 +116,7 @@ fun App(shortcuts: KeyShortcuts) {
     val archive = remember { InternetArchiveDownloader(downloaderEnv, dao, appScope) }
     // Busca la letra en cuanto cambia la canción, se esté mirando la pestaña o no.
     val lyricsManager = remember { LyricsManager(DesktopStorage.musicDir, player.current, appScope) }
+    val library = remember { DesktopPlaylists(dao) }
     DisposableEffect(Unit) { onDispose { appScope.cancel() } }
 
     val snackbar = remember { SnackbarHostState() }
@@ -155,10 +158,19 @@ fun App(shortcuts: KeyShortcuts) {
         if (back.isNotEmpty()) view = back.removeAt(back.lastIndex)
     }
 
+    // Diálogos de playlists. `pendingSong` recuerda a quién estábamos añadiendo
+    // cuando el usuario pulsa "Nueva playlist…" desde el diálogo de añadir.
+    var addTarget by remember { mutableStateOf<Song?>(null) }
+    var pendingSong by remember { mutableStateOf<Song?>(null) }
+    var creating by remember { mutableStateOf(false) }
+    var renaming by remember { mutableStateOf<Playlist?>(null) }
+    var deleting by remember { mutableStateOf<Playlist?>(null) }
+
     val actions = SongActions(
         onAddToQueue = player::addToQueue,
         onGoToArtist = { go(View.ArtistView(it.artist.trim().ifBlank { "Desconocido" })) },
         onGoToAlbum = { song -> song.album?.let { go(View.AlbumView(it.trim())) } },
+        onAddToPlaylist = { addTarget = it },
     )
 
     var panelOpen by remember { mutableStateOf(false) }
@@ -196,6 +208,7 @@ fun App(shortcuts: KeyShortcuts) {
         if (r.playlists > 0) add("${r.playlists} playlists")
         if (r.smartPlaylists > 0) add("${r.smartPlaylists} inteligentes")
         if (r.playEvents > 0) add("${r.playEvents} escuchas")
+        if (r.playlistsUploaded > 0) add("${r.playlistsUploaded} subidas al móvil")
     }.joinToString(" · ")
 
     /** Acepta "192.168.1.152" o "192.168.1.152:8966". Sin puerto, el que publica el móvil. */
@@ -263,6 +276,7 @@ fun App(shortcuts: KeyShortcuts) {
                     smartPlaylists = smartPlaylists,
                     openSmartId = (view as? View.SmartView)?.smart?.id,
                     onOpenSmart = { go(View.SmartView(it)) },
+                    onNewPlaylist = { pendingSong = null; creating = true },
                 )
 
                 Column(Modifier.weight(1f)) {
@@ -346,8 +360,30 @@ fun App(shortcuts: KeyShortcuts) {
                                 )
                             }
 
-                            is View.PlaylistView ->
-                                PlaylistDetail(v.playlist, dao, player, current?.id, density, actions)
+                            is View.PlaylistView -> {
+                                // El objeto del `View` es una foto vieja: tras renombrar
+                                // la cabecera enseñaría el nombre anterior.
+                                val live = playlists.firstOrNull { it.id == v.playlist.id }
+                                if (live == null) {
+                                    // La han borrado (aquí o en el móvil): no hay nada que ver.
+                                    LaunchedEffect(v.playlist.id) { go(View.Root(Destination.INICIO)) }
+                                } else {
+                                    PlaylistDetail(
+                                        playlist = live,
+                                        dao = dao,
+                                        player = player,
+                                        currentId = current?.id,
+                                        density = density,
+                                        actions = actions.copy(
+                                            onRemoveFromPlaylist = { song ->
+                                                appScope.launch { library.removeSong(live.id, song.id) }
+                                            },
+                                        ),
+                                        onRename = { renaming = live },
+                                        onDelete = { deleting = live },
+                                    )
+                                }
+                            }
 
                             is View.SmartView -> SmartPlaylistDetail(
                                 smart = v.smart,
@@ -384,5 +420,49 @@ fun App(shortcuts: KeyShortcuts) {
             }
         }
         SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).padding(bottom = 96.dp))
+
+        addTarget?.let { song ->
+            AddToPlaylistDialog(
+                song = song,
+                playlists = playlists,
+                onPick = { playlist -> appScope.launch { library.addSong(playlist.id, song.id) } },
+                onCreate = { pendingSong = song; creating = true },
+                onDismiss = { addTarget = null },
+            )
+        }
+        if (creating) {
+            val song = pendingSong
+            PlaylistNameDialog(
+                title = "Nueva playlist",
+                confirmLabel = "Crear",
+                onConfirm = { name ->
+                    appScope.launch {
+                        val id = library.create(name) ?: return@launch
+                        // Crear desde "Añadir a playlist" tiene que añadir la canción:
+                        // si no, el usuario cree que se perdió.
+                        song?.let { library.addSong(id, it.id) }
+                    }
+                },
+                onDismiss = { creating = false; pendingSong = null },
+            )
+        }
+        renaming?.let { playlist ->
+            PlaylistNameDialog(
+                title = "Renombrar playlist",
+                initial = playlist.name,
+                onConfirm = { name -> appScope.launch { library.rename(playlist.id, name) } },
+                onDismiss = { renaming = null },
+            )
+        }
+        deleting?.let { playlist ->
+            ConfirmDeletePlaylistDialog(
+                playlist = playlist,
+                onConfirm = {
+                    appScope.launch { library.delete(playlist.id) }
+                    go(View.Root(Destination.INICIO))
+                },
+                onDismiss = { deleting = null },
+            )
+        }
     }
 }

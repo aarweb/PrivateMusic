@@ -112,7 +112,7 @@ interface MusicDao {
     @Query("SELECT * FROM songs WHERE isFavorite = 1 ORDER BY addedAt DESC")
     suspend fun favoritesOnce(): List<Song>
 
-    @Query("SELECT * FROM playlists ORDER BY createdAt DESC")
+    @Query("SELECT * FROM playlists WHERE deletedAt IS NULL ORDER BY createdAt DESC")
     suspend fun playlistsOnce(): List<Playlist>
 
     @Query(
@@ -325,8 +325,12 @@ interface MusicDao {
 
     // ---- Playlists ----
 
-    @Query("SELECT * FROM playlists ORDER BY createdAt DESC")
+    @Query("SELECT * FROM playlists WHERE deletedAt IS NULL ORDER BY createdAt DESC")
     fun observePlaylists(): Flow<List<Playlist>>
+
+    /** Incluidas las borradas: la sincronización necesita saber que lo están. */
+    @Query("SELECT * FROM playlists")
+    suspend fun allPlaylistsForSync(): List<Playlist>
 
     @Transaction
     @Query("SELECT * FROM playlists WHERE id = :id")
@@ -361,6 +365,35 @@ interface MusicDao {
 
     @Query("UPDATE playlists SET name = :name, description = :description WHERE id = :id")
     suspend fun renamePlaylist(id: Long, name: String, description: String?)
+
+    /**
+     * Marca que la playlist cambió. Hay que llamarlo tras *cualquier* cambio que
+     * el otro aparato deba ver: nombre, canciones, orden o anclaje. Si se olvida,
+     * la sincronización creerá que la vieja es la buena y pisará el cambio.
+     */
+    @Query("UPDATE playlists SET updatedAt = :at WHERE id = :id")
+    suspend fun touchPlaylist(id: Long, at: Long)
+
+    /** Qué playlists contienen esta canción. Borrarla las cambia a todas. */
+    @Query("SELECT playlistId FROM playlist_songs WHERE songId = :songId")
+    suspend fun playlistIdsWithSong(songId: String): List<Long>
+
+    /**
+     * Borrado suave: la fila se queda para poder contarle al otro aparato que
+     * esta playlist ya no existe. Sus canciones se sueltan: no hacen falta y
+     * ocupan.
+     */
+    @Transaction
+    suspend fun softDeletePlaylist(id: Long, at: Long) {
+        clearPlaylist(id)
+        markPlaylistDeleted(id, at)
+    }
+
+    @Query("UPDATE playlists SET deletedAt = :at, updatedAt = :at WHERE id = :id")
+    suspend fun markPlaylistDeleted(id: Long, at: Long)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertPlaylist(playlist: Playlist)
 
     @Query("SELECT COUNT(*) FROM playlist_songs WHERE playlistId = :playlistId")
     suspend fun playlistSize(playlistId: Long): Int

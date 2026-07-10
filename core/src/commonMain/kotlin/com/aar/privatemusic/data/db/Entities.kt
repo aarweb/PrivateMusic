@@ -77,6 +77,17 @@ data class Playlist(
     val isPinned: Boolean = false,
     // Optional grouping folder; null = loose at the top level.
     val folderId: Long? = null,
+    /**
+     * Cuándo cambió por última vez (nombre, canciones, orden, anclada). Al
+     * sincronizar móvil↔PC gana la versión más reciente, playlist por playlist.
+     */
+    val updatedAt: Long = 0,
+    /**
+     * Borrado suave. Sin él, borrar una playlist en el PC no se lo puede contar
+     * al móvil, que la volvería a mandar en la siguiente sincronización: una
+     * playlist borrada resucitaría sola.
+     */
+    val deletedAt: Long? = null,
 )
 
 /** A folder that groups playlists in the library. */

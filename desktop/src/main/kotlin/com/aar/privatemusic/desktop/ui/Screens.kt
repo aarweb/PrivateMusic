@@ -17,7 +17,9 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.Sync
@@ -199,6 +201,8 @@ fun PlaylistDetail(
     currentId: String?,
     density: RowDensity,
     actions: SongActions,
+    onRename: () -> Unit,
+    onDelete: () -> Unit,
 ) {
     val songs by dao.observePlaylistSongsOrdered(playlist.id).collectAsState(emptyList())
     val artPaths by dao.observePlaylistArt(playlist.id).collectAsState(emptyList())
@@ -217,8 +221,8 @@ fun PlaylistDetail(
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                if (songs.isNotEmpty()) {
-                    Row(Modifier.padding(top = 16.dp)) {
+                Row(Modifier.padding(top = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                    if (songs.isNotEmpty()) {
                         Button(onClick = { player.playQueue(songs, 0) }) {
                             Icon(Icons.Filled.PlayArrow, null, Modifier.size(18.dp))
                             Text("  Reproducir")
@@ -228,12 +232,15 @@ fun PlaylistDetail(
                             Icon(Icons.Filled.Shuffle, null, Modifier.size(18.dp))
                             Text("  Aleatorio")
                         }
+                        Spacer(Modifier.width(12.dp))
                     }
+                    IconButton(onRename) { Icon(Icons.Filled.Edit, "Renombrar", Modifier.size(18.dp)) }
+                    IconButton(onDelete) { Icon(Icons.Filled.Delete, "Borrar la playlist", Modifier.size(18.dp)) }
                 }
             }
         }
         if (songs.isEmpty()) {
-            EmptyState("Playlist vacía", "No tiene canciones todavía")
+            EmptyState("Playlist vacía", "Clic derecho en cualquier canción › Añadir a playlist")
             return
         }
         SongTable(
