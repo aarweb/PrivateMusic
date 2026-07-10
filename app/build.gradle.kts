@@ -12,8 +12,8 @@ android {
         applicationId = "com.aar.privatemusic"
         minSdk = 26
         targetSdk = 35
-        versionCode = 72
-        versionName = "1.71"
+        versionCode = 73
+        versionName = "1.72"
 
         ndk {
             // arm64 only: every phone since ~2016. Halves the APK (yt-dlp/ffmpeg per ABI).
@@ -40,6 +40,11 @@ android {
         release {
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            // Se publica la release, no el debug: un APK `debuggable` corre con
+            // ART en modo depuración y la interfaz va a tirones. Va firmada con
+            // la MISMA clave de siempre, así que se instala encima de las
+            // versiones anteriores sin borrar la biblioteca.
+            signingConfig = signingConfigs.getByName("debug")
         }
     }
     compileOptions {
