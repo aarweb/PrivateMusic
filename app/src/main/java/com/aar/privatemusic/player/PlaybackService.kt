@@ -27,6 +27,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.guava.future
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -41,6 +42,9 @@ class PlaybackService : MediaLibraryService() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val mainScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
+    /** ¿Suena algo ahora mismo? Lo usa el bucle de volumen para dormirse. */
+    private val playing = kotlinx.coroutines.flow.MutableStateFlow(false)
+
     override fun onCreate() {
         super.onCreate()
         val player = ExoPlayer.Builder(this)
@@ -53,6 +57,11 @@ class PlaybackService : MediaLibraryService() {
             )
             .setHandleAudioBecomingNoisy(true)
             .build()
+        // Sin esto, la CPU puede entrar en reposo profundo con la pantalla apagada
+        // y la reproducción se corta. `WAKE_MODE_LOCAL` retiene sólo el wakelock de
+        // CPU, y sólo mientras suena algo: los ficheros son locales, así que no hace
+        // falta también el de Wi-Fi. ExoPlayer lo suelta al parar.
+        player.setWakeMode(C.WAKE_MODE_LOCAL)
         val dao = openMusicDatabase(this).musicDao()
         // Tapping the media notification opens the app.
         val sessionActivity = PendingIntent.getActivity(
@@ -95,6 +104,10 @@ class PlaybackService : MediaLibraryService() {
                     player.clearMediaItems()
                 }
                 android.util.Log.w("Playback", "player error", error)
+            }
+
+            override fun onIsPlayingChanged(isPlaying: Boolean) {
+                playing.value = isPlaying
             }
         })
         startVolumeLoop(player, dao)
@@ -295,6 +308,20 @@ class PlaybackService : MediaLibraryService() {
                 } else 1f
 
             while (isActive) {
+                // En pausa no hay volumen que gestionar, y el servicio sigue vivo
+                // mucho después de pausar. Sin esta guarda el bucle ticaba dos
+                // veces por segundo para siempre: medido en el Pixel, 0,75% de un
+                // núcleo con la pantalla apagada y la música parada.
+                //
+                // El tope de 5 s es una red: si alguna vez se perdiera el evento
+                // de "ha empezado a sonar", el bucle despierta solo en vez de
+                // quedarse dormido con la música puesta.
+                if (!player.isPlaying && xfEndsAt == 0L) {
+                    kotlinx.coroutines.withTimeoutOrNull(5_000) {
+                        playing.first { it }
+                    }
+                    continue
+                }
                 val tail = tailPlayer
                 val crossfadeMs = AppSettings.readCrossfadeSec(this@PlaybackService) * 1000L
                 val normalize = AppSettings.readNormalizeVolume(this@PlaybackService)

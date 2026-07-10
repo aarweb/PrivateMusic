@@ -68,6 +68,23 @@ class TorrentDownloader(
             session ?: SessionManager().also { it.start(); session = it }
         }
 
+    /**
+     * Apaga el motor cuando no queda nada que descargar.
+     *
+     * Un `SessionManager` arrancado abre un socket de escucha y mantiene viva la
+     * DHT: anuncios periódicos que despiertan la Wi-Fi cada pocos minutos, para
+     * siempre, aunque hace horas que terminó la última descarga. Volver a
+     * arrancarlo cuesta lo que cueste; las bibliotecas nativas ya están cargadas.
+     */
+    private fun stopSessionIfIdle() {
+        if (jobs.isNotEmpty() || handles.isNotEmpty()) return
+        synchronized(this) {
+            if (jobs.isNotEmpty() || handles.isNotEmpty()) return
+            session?.let { runCatching { it.stop() } }
+            session = null
+        }
+    }
+
     private val audioExtensions = setOf(
         "flac", "mp3", "m4a", "aac", "opus", "ogg", "wav", "aiff", "aif", "wma", "alac",
     )
@@ -89,7 +106,9 @@ class TorrentDownloader(
                     if (imported == 0) throw IllegalStateException("Sin audios en el torrent")
                     setState(id, DownloadState.Done)
                 } catch (e: kotlinx.coroutines.CancellationException) {
-                    runCatching { handles.remove(id)?.let { ensureSession().remove(it) } }
+                    // `session?`, no `ensureSession()`: arrancar el motor para
+                    // quitar un torrent de él sería encenderlo por nada.
+                    runCatching { handles.remove(id)?.let { h -> session?.remove(h) } }
                     _downloads.update { it - id }
                     throw e
                 } catch (e: Exception) {
@@ -98,6 +117,7 @@ class TorrentDownloader(
                 } finally {
                     jobs.remove(id)
                     handles.remove(id)
+                    stopSessionIfIdle()
                 }
             }
         }
@@ -107,8 +127,9 @@ class TorrentDownloader(
     /** Cancels a torrent download: stops the transfer and forgets it. */
     fun cancel(id: String) {
         jobs.remove(id)?.cancel()
-        runCatching { handles.remove(id)?.let { ensureSession().remove(it) } }
+        runCatching { handles.remove(id)?.let { h -> session?.remove(h) } }
         _downloads.update { it - id }
+        stopSessionIfIdle()
     }
 
     /** Descarga el torrent y devuelve cuántas pistas de audio se importaron. */
