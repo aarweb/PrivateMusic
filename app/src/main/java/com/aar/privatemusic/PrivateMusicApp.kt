@@ -92,10 +92,19 @@ class PrivateMusicApp : Application() {
         // Restore the last session's queue (paused) after a cold start.
         appScope.launch {
             playerController.savedQueue()?.let { saved ->
-                val songs = saved.ids.mapNotNull { dao.getSong(it) }
+                // Una canción borrada desde la última sesión desaparece de la
+                // lista, y con ella se corren todos los índices siguientes: con
+                // el índice guardado a secas, al arrancar sonaría otra canción.
+                val found = saved.ids.map { dao.getSong(it) }
+                val songs = found.filterNotNull()
                 if (songs.isNotEmpty()) {
+                    val present = found.map { it != null }
+                    val index = com.aar.privatemusic.player.QueueLogic
+                        .restoreIndex(present, saved.index)
+                    val position = com.aar.privatemusic.player.QueueLogic
+                        .restorePositionMs(present, saved.index, saved.positionMs)
                     kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-                        playerController.restoreQueue(songs, saved.index, saved.positionMs)
+                        playerController.restoreQueue(songs, index, position)
                     }
                 }
             }

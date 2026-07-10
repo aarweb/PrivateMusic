@@ -54,7 +54,7 @@ class PlayerController(
 
     companion object {
         /** Tracks longer than this remember their playback position. */
-        const val RESUME_MIN_DURATION_SEC = 15 * 60
+        const val RESUME_MIN_DURATION_SEC = QueueLogic.RESUME_MIN_DURATION_SEC
     }
 
     private val _nowPlaying = MutableStateFlow<NowPlaying?>(null)
@@ -189,10 +189,9 @@ class PlayerController(
         val c = controller ?: return
         // Long tracks (mixes, sets) resume where the user left off.
         val start = songs.getOrNull(startIndex)
-        val resumeMs = if (start != null && start.durationSec > RESUME_MIN_DURATION_SEC) {
-            val saved = resumePrefs.getLong(start.id, 0L)
-            if (saved > 30_000L && saved < (start.durationSec - 10) * 1000L) saved else 0L
-        } else 0L
+        val resumeMs = start?.let {
+            QueueLogic.resumeStartMs(it.durationSec, resumePrefs.getLong(it.id, 0L))
+        } ?: 0L
         c.setMediaItems(songs.map { it.toMediaItem() }, startIndex, resumeMs)
         c.prepare()
         c.play()
@@ -223,9 +222,24 @@ class PlayerController(
         c.play()
     }
 
+    /**
+     * Mientras suena una preescucha, el reproductor no tiene la cola del usuario:
+     * la tiene [savedQueue], en memoria, y volverá cuando la preescucha acabe. Si
+     * encolásemos sobre el reproductor, la canción se metería en la cola de la
+     * preescucha y se perdería al restaurar — o peor, se pondría a sonar sola.
+     */
+    private val previewing: Boolean
+        get() = controller?.currentMediaItem?.mediaId?.startsWith("preview:") == true
+
     /** Inserts the song right after the current one. Starts playback if idle. */
     fun playNext(song: Song) {
         val c = controller ?: return
+        if (previewing) {
+            savedQueue = savedQueue.toMutableList().apply {
+                add((savedIndex + 1).coerceIn(0, size), song.toMediaItem())
+            }
+            return
+        }
         if (c.mediaItemCount == 0) {
             playQueue(listOf(song), 0)
         } else {
@@ -236,6 +250,10 @@ class PlayerController(
     /** Appends the song at the end of the queue. Starts playback if idle. */
     fun addToQueue(song: Song) {
         val c = controller ?: return
+        if (previewing) {
+            savedQueue = savedQueue + song.toMediaItem()
+            return
+        }
         if (c.mediaItemCount == 0) {
             playQueue(listOf(song), 0)
         } else {
@@ -244,8 +262,12 @@ class PlayerController(
     }
 
     fun playQueueItem(index: Int) {
-        controller?.seekTo(index, 0L)
-        controller?.play()
+        val c = controller ?: return
+        // La lista de la pantalla puede ir un fotograma por detrás del
+        // reproductor: un `seekTo` fuera de rango lanza IllegalSeekPositionException.
+        if (index !in 0 until c.mediaItemCount) return
+        c.seekTo(index, 0L)
+        c.play()
     }
 
     fun removeQueueItem(index: Int) {
@@ -260,17 +282,22 @@ class PlayerController(
         }
     }
 
-    /** Re-shuffles everything after the current track (Spotify's Reshuffle). */
+    /**
+     * Re-shuffles everything after the current track (Spotify's Reshuffle).
+     *
+     * Antes se hacía con un bucle de `moveMediaItem(i, j)` con `j` al azar. Mover
+     * un elemento corre a todos los demás, así que después del primer movimiento
+     * el bucle ya no sabe qué hay en `i`: barajaba, pero con un sesgo que no
+     * pretendía nadie. Se quita la cola y se vuelve a poner ya barajada.
+     */
     fun reshuffleUpcoming() {
         val c = controller ?: return
         val n = c.mediaItemCount
         val start = c.currentMediaItemIndex + 1
         if (n - start < 2) return
-        val rng = java.util.Random()
-        for (i in start until n) {
-            val j = start + rng.nextInt(n - start)
-            if (i != j) c.moveMediaItem(i, j)
-        }
+        val upcoming = (start until n).map { c.getMediaItemAt(it) }.shuffled()
+        c.removeMediaItems(start, n)
+        c.addMediaItems(start, upcoming)
     }
 
     fun togglePlayPause() {
