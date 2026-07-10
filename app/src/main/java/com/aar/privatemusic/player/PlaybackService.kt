@@ -550,6 +550,23 @@ class PlaybackService : MediaLibraryService() {
                             delay(100)
                             continue
                         }
+                        // Si el usuario ha saltado de pista o ha buscado (siguiente /
+                        // anterior / seek) mientras el tail calentaba, el principal ya
+                        // no está en A. Seguir aquí fundiría el volumen de la pista
+                        // equivocada y, peor, el seekToNextMediaItem de abajo avanzaría
+                        // OTRA vez: un solo "siguiente" se comería una canción. Cortamos
+                        // el fundido y dejamos que mande la navegación del usuario.
+                        if (player.currentMediaItem?.mediaId != curId) {
+                            tail.stop()
+                            tail.clearMediaItems()
+                            tail.setPlaybackSpeed(1f)
+                            armedForId = null
+                            player.volume = gainFactor
+                            touchedVolume = true
+                            android.util.Log.d("Crossfade", "fire cancelado: el usuario navegó fuera de A")
+                            delay(100)
+                            continue
+                        }
                         // Hand the OUTGOING track over from the main player to the
                         // tail player. BOTH are playing the SAME audio A here, so
                         // this sub-fade must be LINEAR-complementary (main down,
@@ -558,10 +575,27 @@ class PlaybackService : MediaLibraryService() {
                         // (~+5 dB) and clipped the mixer — that was the "pop".
                         delay(80)
                         for (step in 0..5) {
+                            // El salto puede caer en estos ~120ms: si el principal
+                            // deja de ser A, paramos de tocar SU volumen en el acto.
+                            if (player.currentMediaItem?.mediaId != curId) break
                             val s = step / 5f
                             tail.volume = xfGainA * s
                             player.volume = gainFactor * (1f - s)
                             delay(20)
+                        }
+                        // Última comprobación antes de avanzar nosotros: si navegó
+                        // durante el fundido, NO hacemos seekToNextMediaItem (saltaría
+                        // una pista); restauramos el volumen y que siga su navegación.
+                        if (player.currentMediaItem?.mediaId != curId) {
+                            tail.stop()
+                            tail.clearMediaItems()
+                            tail.setPlaybackSpeed(1f)
+                            armedForId = null
+                            player.volume = gainFactor
+                            touchedVolume = true
+                            android.util.Log.d("Crossfade", "fire cancelado durante el fundido: el usuario navegó fuera de A")
+                            delay(100)
+                            continue
                         }
                         tail.volume = xfGainA
                         player.volume = 0f
