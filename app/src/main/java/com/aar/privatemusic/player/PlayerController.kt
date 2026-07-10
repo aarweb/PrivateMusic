@@ -97,7 +97,8 @@ class PlayerController(
             c.addListener(object : Player.Listener {
                 override fun onEvents(player: Player, events: Player.Events) {
                     _isPlaying.value = player.isPlaying
-                    _shuffle.value = player.shuffleModeEnabled
+                    // `_shuffle` NO se deriva del reproductor: barajamos nosotros
+                    // la propia cola y `shuffleModeEnabled` se queda en false.
                     _repeatMode.value = player.repeatMode
                     val item = player.currentMediaItem
                     _nowPlaying.value = item?.let {
@@ -192,32 +193,47 @@ class PlayerController(
         val resumeMs = start?.let {
             QueueLogic.resumeStartMs(it.durationSec, resumePrefs.getLong(it.id, 0L))
         } ?: 0L
-        c.setMediaItems(songs.map { it.toMediaItem() }, startIndex, resumeMs)
-        c.prepare()
-        c.play()
+        startFresh(c, songs.map { it.toMediaItem() }, startIndex, resumeMs, shuffled = false)
     }
 
     /** Plays the whole list in shuffle mode starting from a random song. */
     fun playQueueShuffled(songs: List<Song>) {
         val c = controller ?: return
         if (songs.isEmpty()) return
-        c.shuffleModeEnabled = true
-        c.setMediaItems(songs.map { it.toMediaItem() }, songs.indices.random(), 0L)
-        c.prepare()
-        c.play()
+        val original = songs.map { it.toMediaItem() }
+        startFresh(c, original.shuffled(), 0, 0L, shuffled = true, original = original)
     }
 
     /**
-     * Reproduce la lista EXACTAMENTE en el orden dado, apagando el aleatorio del
-     * reproductor. Para colas ya barajadas por nosotros (ver
-     * `MusicRepository.shuffleFewerRepeats`): si dejáramos `shuffleModeEnabled`,
-     * ExoPlayer rebarajaría por encima y tiraría los pesos.
+     * Reproduce la lista EXACTAMENTE en el orden dado. Para colas ya barajadas
+     * por nosotros (ver `MusicRepository.shuffleFewerRepeats`), que traen pesos
+     * que un rebarajado tiraría.
      */
     fun playQueueInOrder(songs: List<Song>) {
         val c = controller ?: return
         if (songs.isEmpty()) return
+        startFresh(c, songs.map { it.toMediaItem() }, 0, 0L, shuffled = false)
+    }
+
+    /**
+     * Toda cola nueva empieza sin herencias: el aleatorio de antes no se pega a
+     * lo siguiente que pongas, y la copia del orden original se tira.
+     */
+    private fun startFresh(
+        c: Player,
+        items: List<MediaItem>,
+        startIndex: Int,
+        startPositionMs: Long,
+        shuffled: Boolean,
+        original: List<MediaItem>? = null,
+    ) {
+        // Nunca se enciende el aleatorio de ExoPlayer: si estuviera puesto,
+        // barajaría por encima de nuestro orden y la cola de la pantalla dejaría
+        // de ser la que suena.
         c.shuffleModeEnabled = false
-        c.setMediaItems(songs.map { it.toMediaItem() }, 0, 0L)
+        orderBeforeShuffle = if (shuffled) original else null
+        _shuffle.value = shuffled
+        c.setMediaItems(items, startIndex, startPositionMs)
         c.prepare()
         c.play()
     }
@@ -309,8 +325,53 @@ class PlayerController(
     fun previous() = controller?.seekToPreviousMediaItem() ?: Unit
     fun seekTo(positionMs: Long) = controller?.seekTo(positionMs) ?: Unit
 
+    /**
+     * El orden que tenía la cola antes de barajarla, para poder devolverlo. Sólo
+     * existe mientras el aleatorio está puesto.
+     */
+    private var orderBeforeShuffle: List<MediaItem>? = null
+
+    /**
+     * Barajamos la cola de verdad, en vez de encender `shuffleModeEnabled`.
+     *
+     * ExoPlayer, con su aleatorio puesto, deja el timeline como está y recorre
+     * un orden barajado interno que **no se puede consultar desde el
+     * `MediaController`**. La pantalla de cola lee el timeline, así que enseñaba
+     * un orden y sonaba otro; arrastrar una canción no cambiaba nada y el dado
+     * tampoco. Reordenando la cola, lo que ves es lo que suena.
+     *
+     * Sólo se toca lo que queda por sonar: la canción actual no se interrumpe.
+     */
     fun toggleShuffle() {
-        controller?.let { it.shuffleModeEnabled = !it.shuffleModeEnabled }
+        val c = controller ?: return
+        val n = c.mediaItemCount
+        if (n == 0) return
+        val current = c.currentMediaItemIndex
+
+        if (!_shuffle.value) {
+            orderBeforeShuffle = (0 until n).map { c.getMediaItemAt(it) }
+            _shuffle.value = true
+            if (n - current > 1) {
+                val upcoming = ((current + 1) until n).map { c.getMediaItemAt(it) }.shuffled()
+                c.removeMediaItems(current + 1, n)
+                c.addMediaItems(current + 1, upcoming)
+            }
+            return
+        }
+
+        _shuffle.value = false
+        val original = orderBeforeShuffle ?: return
+        orderBeforeShuffle = null
+        // La canción actual puede haber avanzado mientras estaba barajado, así
+        // que se busca en el orden original y se restaura lo que iba detrás. Con
+        // la misma canción repetida se coge la primera copia: son la misma
+        // canción, y cuál de las dos "es" ésta no lo sabe ni el usuario.
+        val playingId = c.currentMediaItem?.mediaId ?: return
+        val at = original.indexOfFirst { it.mediaId == playingId }
+        if (at < 0) return
+        if (n > current + 1) c.removeMediaItems(current + 1, n)
+        val rest = original.drop(at + 1)
+        if (rest.isNotEmpty()) c.addMediaItems(rest)
     }
 
     // User-facing playback speed (pitch preserved by the Sonic processor).
