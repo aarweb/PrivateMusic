@@ -52,4 +52,28 @@ object QueueLogic {
      */
     fun restorePositionMs(present: List<Boolean>, savedIndex: Int, savedPositionMs: Long): Long =
         if (present.getOrNull(savedIndex) == true) savedPositionMs else 0L
+
+    // ---- Aleatorio ----
+    //
+    // Mientras el aleatorio está puesto guardamos aparte el orden original, para
+    // devolverlo al apagarlo. Esa copia tiene que enterarse de lo que pasa en la
+    // cola mientras tanto: si encolas una canción y luego apagas el aleatorio, y
+    // la copia no la conoce, la canción desaparece.
+
+    /**
+     * Dónde entra, dentro del orden original, una canción encolada "a
+     * continuación". Detrás de la que suena; al final si no la encontramos
+     * (durante una preescucha, por ejemplo, que no está en la cola).
+     */
+    fun insertAfterPlaying(originalIds: List<String>, playingId: String?): Int {
+        val at = originalIds.indexOf(playingId)
+        return if (at < 0) originalIds.size else at + 1
+    }
+
+    /**
+     * Qué copia sacar del orden original al quitar una canción de la cola, o -1
+     * si no está. Con la misma canción repetida da igual cuál: son idénticas.
+     */
+    fun removalIndex(originalIds: List<String>, removedId: String): Int =
+        originalIds.indexOf(removedId)
 }

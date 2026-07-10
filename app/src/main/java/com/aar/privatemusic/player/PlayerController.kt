@@ -250,30 +250,36 @@ class PlayerController(
     /** Inserts the song right after the current one. Starts playback if idle. */
     fun playNext(song: Song) {
         val c = controller ?: return
+        val item = song.toMediaItem()
         if (previewing) {
             savedQueue = savedQueue.toMutableList().apply {
-                add((savedIndex + 1).coerceIn(0, size), song.toMediaItem())
+                add((savedIndex + 1).coerceIn(0, size), item)
             }
+            rememberAppend(item)
             return
         }
         if (c.mediaItemCount == 0) {
             playQueue(listOf(song), 0)
         } else {
-            c.addMediaItem(c.currentMediaItemIndex + 1, song.toMediaItem())
+            c.addMediaItem(c.currentMediaItemIndex + 1, item)
+            rememberInsertNext(item)
         }
     }
 
     /** Appends the song at the end of the queue. Starts playback if idle. */
     fun addToQueue(song: Song) {
         val c = controller ?: return
+        val item = song.toMediaItem()
         if (previewing) {
-            savedQueue = savedQueue + song.toMediaItem()
+            savedQueue = savedQueue + item
+            rememberAppend(item)
             return
         }
         if (c.mediaItemCount == 0) {
             playQueue(listOf(song), 0)
         } else {
-            c.addMediaItem(song.toMediaItem())
+            c.addMediaItem(item)
+            rememberAppend(item)
         }
     }
 
@@ -288,7 +294,10 @@ class PlayerController(
 
     fun removeQueueItem(index: Int) {
         val c = controller ?: return
-        if (index in 0 until c.mediaItemCount) c.removeMediaItem(index)
+        if (index !in 0 until c.mediaItemCount) return
+        val removedId = c.getMediaItemAt(index).mediaId
+        c.removeMediaItem(index)
+        rememberRemoval(removedId)
     }
 
     fun moveQueueItem(from: Int, to: Int) {
@@ -362,16 +371,49 @@ class PlayerController(
         _shuffle.value = false
         val original = orderBeforeShuffle ?: return
         orderBeforeShuffle = null
-        // La canción actual puede haber avanzado mientras estaba barajado, así
-        // que se busca en el orden original y se restaura lo que iba detrás. Con
-        // la misma canción repetida se coge la primera copia: son la misma
-        // canción, y cuál de las dos "es" ésta no lo sabe ni el usuario.
+        // Se reconstruye la cola ENTERA, no sólo lo que va detrás de la canción
+        // actual. Barajar mueve canciones a los dos lados: restaurando sólo la
+        // cola de atrás, las que habían saltado hacia delante se quedaban
+        // duplicadas y las que habían saltado hacia atrás desaparecían.
+        //
+        // Con la misma canción repetida se coge la primera copia: son idénticas,
+        // y cuál de las dos "es" ésta no lo sabe ni el usuario.
         val playingId = c.currentMediaItem?.mediaId ?: return
         val at = original.indexOfFirst { it.mediaId == playingId }
         if (at < 0) return
+        // La que suena no se toca, así que el audio no se corta.
         if (n > current + 1) c.removeMediaItems(current + 1, n)
-        val rest = original.drop(at + 1)
-        if (rest.isNotEmpty()) c.addMediaItems(rest)
+        if (current > 0) c.removeMediaItems(0, current)
+        val before = original.take(at)
+        val after = original.drop(at + 1)
+        if (before.isNotEmpty()) c.addMediaItems(0, before)
+        if (after.isNotEmpty()) c.addMediaItems(after)
+    }
+
+    /**
+     * La copia del orden original tiene que enterarse de lo que le pasa a la
+     * cola mientras el aleatorio está puesto. Si no, al apagarlo se restaura una
+     * cola de otro momento: lo que encolaste se pierde y lo que quitaste vuelve.
+     *
+     * Reordenar a mano no cuenta: eso cambia el orden barajado, no el original.
+     */
+    private fun rememberInsertNext(item: MediaItem) {
+        val snapshot = orderBeforeShuffle ?: return
+        val at = QueueLogic.insertAfterPlaying(
+            snapshot.map { it.mediaId },
+            controller?.currentMediaItem?.mediaId,
+        )
+        orderBeforeShuffle = snapshot.toMutableList().apply { add(at, item) }
+    }
+
+    private fun rememberAppend(item: MediaItem) {
+        orderBeforeShuffle = orderBeforeShuffle?.plus(item)
+    }
+
+    private fun rememberRemoval(mediaId: String) {
+        val snapshot = orderBeforeShuffle ?: return
+        val at = QueueLogic.removalIndex(snapshot.map { it.mediaId }, mediaId)
+        if (at >= 0) orderBeforeShuffle = snapshot.toMutableList().apply { removeAt(at) }
     }
 
     // User-facing playback speed (pitch preserved by the Sonic processor).

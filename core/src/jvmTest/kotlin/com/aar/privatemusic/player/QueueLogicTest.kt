@@ -86,6 +86,58 @@ class QueueLogicTest {
         assertEquals(1, QueueLogic.restoreIndex(present, savedIndex = 2))
     }
 
+    // ---- Aleatorio: mantener al día la copia del orden original ----
+
+    @Test
+    fun `encolar a continuacion entra detras de la que suena`() {
+        assertEquals(2, QueueLogic.insertAfterPlaying(listOf("a", "b", "c"), playingId = "b"))
+    }
+
+    @Test
+    fun `encolar sin saber que suena va al final`() {
+        // Durante una preescucha, la que suena no está en la cola.
+        assertEquals(3, QueueLogic.insertAfterPlaying(listOf("a", "b", "c"), playingId = "preview:x"))
+        assertEquals(3, QueueLogic.insertAfterPlaying(listOf("a", "b", "c"), playingId = null))
+    }
+
+    @Test
+    fun `quitar una cancion repetida saca una sola copia`() {
+        val ids = listOf("a", "b", "a", "c")
+        val at = QueueLogic.removalIndex(ids, "a")
+        assertEquals(0, at)
+        assertEquals(listOf("b", "a", "c"), ids.toMutableList().apply { removeAt(at) })
+    }
+
+    @Test
+    fun `quitar una cancion que no esta no toca nada`() {
+        assertEquals(-1, QueueLogic.removalIndex(listOf("a", "b"), "z"))
+    }
+
+    /**
+     * Lo que de verdad importa del aleatorio: encolar mientras está puesto y
+     * apagarlo después no puede perder la canción. Se simula la copia del orden
+     * original tal y como la mantiene `PlayerController`.
+     */
+    @Test
+    fun `apagar el aleatorio conserva lo que encolaste mientras estaba puesto`() {
+        var original = mutableListOf("a", "b", "c", "d")
+        val playing = "b"
+
+        // "Reproducir a continuación" de X mientras suena b.
+        original.add(QueueLogic.insertAfterPlaying(original, playing), "x")
+        assertEquals(listOf("a", "b", "x", "c", "d"), original)
+
+        // "Añadir a la cola" de y.
+        original.add("y")
+
+        // Quitar c de la cola.
+        val at = QueueLogic.removalIndex(original, "c")
+        original.removeAt(at)
+
+        // Al apagar el aleatorio se restaura esta lista: x e y siguen ahí, c no.
+        assertEquals(listOf("a", "b", "x", "d", "y"), original)
+    }
+
     /**
      * El invariante que importa: el índice devuelto siempre cae dentro de la
      * lista filtrada, y si la pista sobrevive apunta exactamente a ella.
