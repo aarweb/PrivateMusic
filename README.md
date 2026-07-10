@@ -66,6 +66,15 @@ Las releases se publican automáticamente con GitHub Actions al subir un tag `v*
 
 Kotlin · Jetpack Compose (Material 3) · Media3/ExoPlayer (`MediaLibraryService`) · Room · [youtubedl-android](https://github.com/yausername/youtubedl-android) (yt-dlp + ffmpeg) · Coil · WorkManager · DSP propio para análisis de audio (FFT, cromagrama, autocorrelación).
 
+## Licencia
+
+**GPLv3** (ver [LICENSE](LICENSE)).
+
+No es una preferencia: la app de escritorio reproduce con [VLCJ](https://github.com/caprica/vlcj),
+que es GPLv3, y los instaladores que se publican lo empaquetan. Distribuir un binario
+enlazado con VLCJ bajo cualquier otra licencia no sería posible. Si algún día el motor
+de audio pasa a FFmpeg vía bytedeco (Apache-2.0), la licencia se puede revisar.
+
 ## Nota legal
 
 Descargar contenido de YouTube puede infringir sus condiciones de servicio. Esta app está pensada para **uso personal y privado**, bajo tu responsabilidad. El audio de Spotify nunca se descarga (tiene DRM): solo se leen metadatos públicos de playlists.
