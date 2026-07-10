@@ -138,6 +138,27 @@ class QueueLogicTest {
         assertEquals(listOf("a", "b", "x", "d", "y"), original)
     }
 
+    // ---- Encolar a mano ----
+
+    @Test
+    fun `la primera encolada va justo detras de la que suena`() {
+        assertEquals(3, QueueLogic.manualQueueIndex(currentIndex = 2, queuedAfterCurrent = 0, size = 27))
+    }
+
+    @Test
+    fun `las siguientes encoladas van detras de las que ya esperaban`() {
+        // Encolar A, B, C seguidas debe reproducirlas A, B, C, no C, B, A.
+        assertEquals(3, QueueLogic.manualQueueIndex(2, 0, 27))
+        assertEquals(4, QueueLogic.manualQueueIndex(2, 1, 28))
+        assertEquals(5, QueueLogic.manualQueueIndex(2, 2, 29))
+    }
+
+    @Test
+    fun `encolar desde la ultima cancion no se sale de la lista`() {
+        assertEquals(27, QueueLogic.manualQueueIndex(currentIndex = 26, queuedAfterCurrent = 0, size = 27))
+        assertEquals(3, QueueLogic.manualQueueIndex(currentIndex = 2, queuedAfterCurrent = 99, size = 3))
+    }
+
     /**
      * El invariante que importa: el índice devuelto siempre cae dentro de la
      * lista filtrada, y si la pista sobrevive apunta exactamente a ella.

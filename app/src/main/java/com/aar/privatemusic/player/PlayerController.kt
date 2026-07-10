@@ -166,6 +166,16 @@ class PlayerController(
                         _stopAfterTrack.value = false
                         controller?.pause()
                     }
+                    // El bloque de canciones encoladas a mano cuelga de la que
+                    // suena. Si empieza la primera del bloque, sale de él; si
+                    // empieza cualquier otra, has saltado a otro sitio y el
+                    // bloque deja de tener dueño. Vale igual para los botones de
+                    // la notificación y del coche, que no pasan por aquí.
+                    val id = item?.mediaId
+                    if (queuedIds.isNotEmpty()) {
+                        if (id != null && id == queuedIds.first()) queuedIds.removeFirst()
+                        else queuedIds.clear()
+                    }
                 }
 
                 override fun onPlaybackStateChanged(state: Int) {
@@ -232,6 +242,7 @@ class PlayerController(
         // de ser la que suena.
         c.shuffleModeEnabled = false
         orderBeforeShuffle = if (shuffled) original else null
+        queuedIds.clear()
         _shuffle.value = shuffled
         c.setMediaItems(items, startIndex, startPositionMs)
         c.prepare()
@@ -262,11 +273,31 @@ class PlayerController(
             playQueue(listOf(song), 0)
         } else {
             c.addMediaItem(c.currentMediaItemIndex + 1, item)
-            rememberInsertNext(item)
+            queuedIds.addFirst(item.mediaId)
+            rememberInsertAt(item, 0)
         }
     }
 
-    /** Appends the song at the end of the queue. Starts playback if idle. */
+    /**
+     * Las canciones que encolaste a mano y siguen esperando, en orden, justo
+     * detrás de la que suena.
+     *
+     * Se guardan los ids, no una cuenta: con una cuenta habría que adivinar en
+     * cada salto si el bloque sigue siendo del que suena. Así se comprueba: si
+     * la canción que empieza es la primera del bloque, sale de él; si es
+     * cualquier otra, es que has saltado a otro sitio y el bloque se deshace.
+     */
+    private val queuedIds = ArrayDeque<String>()
+
+    /**
+     * Encola la canción detrás de la que suena, no al final de la cola.
+     *
+     * Antes se añadía al final. Con una playlist de veintisiete canciones,
+     * encolar una y saltar la actual reproducía la segunda de la playlist, y la
+     * encolada no sonaba hasta media hora después: parecía que el gesto no hacía
+     * nada. Detrás van las que encolaste antes y siguen esperando, para que tres
+     * canciones encoladas suenen en el orden en que las encolaste.
+     */
     fun addToQueue(song: Song) {
         val c = controller ?: return
         val item = song.toMediaItem()
@@ -277,10 +308,13 @@ class PlayerController(
         }
         if (c.mediaItemCount == 0) {
             playQueue(listOf(song), 0)
-        } else {
-            c.addMediaItem(item)
-            rememberAppend(item)
+            return
         }
+        val offset = queuedIds.size
+        val at = QueueLogic.manualQueueIndex(c.currentMediaItemIndex, offset, c.mediaItemCount)
+        c.addMediaItem(at, item)
+        queuedIds.addLast(item.mediaId)
+        rememberInsertAt(item, offset)
     }
 
     fun playQueueItem(index: Int) {
@@ -295,7 +329,12 @@ class PlayerController(
     fun removeQueueItem(index: Int) {
         val c = controller ?: return
         if (index !in 0 until c.mediaItemCount) return
+        val current = c.currentMediaItemIndex
         val removedId = c.getMediaItemAt(index).mediaId
+        // Quitar una del bloque la saca del bloque, no de otro sitio.
+        if (index in (current + 1)..(current + queuedIds.size)) {
+            queuedIds.removeAt(index - current - 1)
+        }
         c.removeMediaItem(index)
         rememberRemoval(removedId)
     }
@@ -397,13 +436,14 @@ class PlayerController(
      *
      * Reordenar a mano no cuenta: eso cambia el orden barajado, no el original.
      */
-    private fun rememberInsertNext(item: MediaItem) {
+    private fun rememberInsertAt(item: MediaItem, offsetAfterPlaying: Int) {
         val snapshot = orderBeforeShuffle ?: return
         val at = QueueLogic.insertAfterPlaying(
             snapshot.map { it.mediaId },
             controller?.currentMediaItem?.mediaId,
-        )
-        orderBeforeShuffle = snapshot.toMutableList().apply { add(at, item) }
+        ) + offsetAfterPlaying
+        orderBeforeShuffle = snapshot.toMutableList()
+            .apply { add(at.coerceIn(0, size), item) }
     }
 
     private fun rememberAppend(item: MediaItem) {

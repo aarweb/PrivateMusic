@@ -76,4 +76,18 @@ object QueueLogic {
      */
     fun removalIndex(originalIds: List<String>, removedId: String): Int =
         originalIds.indexOf(removedId)
+
+    // ---- Encolar a mano ----
+
+    /**
+     * Dónde entra una canción que encolas a mano.
+     *
+     * Detrás de la que suena, pero **detrás también de las que encolaste antes y
+     * aún no han sonado**: si cada nueva se metiera pegada a la actual, encolar
+     * tres canciones las reproduciría del revés.
+     *
+     * [queuedAfterCurrent] es cuántas esperan ya en ese bloque.
+     */
+    fun manualQueueIndex(currentIndex: Int, queuedAfterCurrent: Int, size: Int): Int =
+        (currentIndex + 1 + queuedAfterCurrent).coerceIn(0, size)
 }
