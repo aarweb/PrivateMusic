@@ -34,6 +34,7 @@ import androidx.compose.ui.input.key.isCtrlPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.type
 import com.aar.privatemusic.data.db.Playlist
+import com.aar.privatemusic.data.db.SmartPlaylist
 import com.aar.privatemusic.data.db.openMusicDatabase
 import com.aar.privatemusic.desktop.DesktopSettings
 import com.aar.privatemusic.desktop.DesktopStorage
@@ -49,6 +50,7 @@ import com.aar.privatemusic.desktop.sync.Phone
 import com.aar.privatemusic.desktop.sync.SHARE_PORT
 import com.aar.privatemusic.desktop.sync.PhoneDiscovery
 import com.aar.privatemusic.desktop.sync.SyncClient
+import com.aar.privatemusic.desktop.sync.SyncResult
 import com.aar.privatemusic.desktop.update.DesktopUpdater
 import com.aar.privatemusic.downloader.DeezerDownloader
 import com.aar.privatemusic.downloader.InternetArchiveDownloader
@@ -68,6 +70,7 @@ private sealed interface View {
     data class ArtistView(val name: String) : View
     data class AlbumView(val name: String) : View
     data class PlaylistView(val playlist: Playlist) : View
+    data class SmartView(val smart: SmartPlaylist) : View
 }
 
 @Composable
@@ -130,6 +133,11 @@ fun App(shortcuts: KeyShortcuts) {
     val back = remember { mutableStateListOf<View>() }
     var sidebarExpanded by remember { mutableStateOf(true) }
     val playlists by dao.observePlaylists().collectAsState(emptyList())
+    // Las inteligentes no guardan canciones: guardan una regla que se evalúa aquí,
+    // y necesita saber cuántas veces y cuándo se escuchó cada canción.
+    val smartPlaylists by dao.observeSmartPlaylists().collectAsState(emptyList())
+    val playCounts by dao.observePlayCounts().collectAsState(emptyList())
+    val lastPlayed by dao.observeLastPlayed().collectAsState(emptyList())
     val densityName by settings.rowDensity.collectAsState()
     val density = remember(densityName) {
         runCatching { RowDensity.valueOf(densityName) }.getOrDefault(RowDensity.NORMAL)
@@ -159,6 +167,16 @@ fun App(shortcuts: KeyShortcuts) {
 
     LaunchedEffect(Unit) { update = DesktopUpdater.check() }
 
+
+    /** Lo que ha llegado, en una línea. Callar el historial sería esconderlo. */
+    fun summaryOf(r: SyncResult): String = buildList {
+        add("${r.songsAdded} canciones")
+        if (r.filesDownloaded > 0) add("${r.filesDownloaded} ficheros nuevos")
+        if (r.playlists > 0) add("${r.playlists} playlists")
+        if (r.smartPlaylists > 0) add("${r.smartPlaylists} inteligentes")
+        if (r.playEvents > 0) add("${r.playEvents} escuchas")
+    }.joinToString(" · ")
+
     /** Acepta "192.168.1.152" o "192.168.1.152:8966". Sin puerto, el que publica el móvil. */
     fun runSyncAddress(input: String) {
         if (syncing || input.isBlank()) return
@@ -168,6 +186,7 @@ fun App(shortcuts: KeyShortcuts) {
             syncing = true
             syncStatus = "Conectando con $host:$port…"
             runCatching { sync.sync(Phone(host, host, port)) { syncStatus = it } }
+                .onSuccess { syncStatus = summaryOf(it) }
                 .onFailure { syncStatus = "Falló: ${it.message}" }
             syncing = false
         }
@@ -184,6 +203,7 @@ fun App(shortcuts: KeyShortcuts) {
                     "escribe su dirección a mano."
             } else {
                 runCatching { sync.sync(phone) { syncStatus = it } }
+                    .onSuccess { syncStatus = summaryOf(it) }
                     .onFailure { syncStatus = "Falló: ${it.message}" }
             }
             syncing = false
@@ -219,6 +239,9 @@ fun App(shortcuts: KeyShortcuts) {
                     playlists = playlists,
                     openPlaylistId = (view as? View.PlaylistView)?.playlist?.id,
                     onOpenPlaylist = { go(View.PlaylistView(it)) },
+                    smartPlaylists = smartPlaylists,
+                    openSmartId = (view as? View.SmartView)?.smart?.id,
+                    onOpenSmart = { go(View.SmartView(it)) },
                 )
 
                 Column(Modifier.weight(1f)) {
@@ -304,6 +327,19 @@ fun App(shortcuts: KeyShortcuts) {
 
                             is View.PlaylistView ->
                                 PlaylistDetail(v.playlist, dao, player, current?.id, density, actions)
+
+                            is View.SmartView -> SmartPlaylistDetail(
+                                smart = v.smart,
+                                songs = songs,
+                                playCounts = playCounts,
+                                lastPlayed = lastPlayed,
+                                density = density,
+                                currentId = current?.id,
+                                onPlay = player::playQueue,
+                                onShuffle = player::playShuffled,
+                                onToggleFavorite = player::toggleFavoriteOf,
+                                actions = actions,
+                            )
                         }
                     }
                 }

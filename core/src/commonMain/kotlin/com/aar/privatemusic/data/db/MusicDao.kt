@@ -50,6 +50,21 @@ interface MusicDao {
     @Insert
     suspend fun insertPlayEvent(event: PlayEvent)
 
+    @Insert
+    suspend fun insertPlayEvents(events: List<PlayEvent>)
+
+    /** Lo más reciente primero: si hay que recortar, se recorta lo viejo. */
+    @Query("SELECT * FROM play_history ORDER BY playedAt DESC LIMIT :limit")
+    suspend fun recentPlayEvents(limit: Int): List<PlayEvent>
+
+    /**
+     * `songId@playedAt` de cada escucha. `play_history.id` lo pone cada aparato
+     * por su cuenta, así que no sirve para saber si una escucha ya está: lo que
+     * la identifica es qué canción y cuándo.
+     */
+    @Query("SELECT songId || '@' || playedAt FROM play_history")
+    suspend fun playEventKeys(): List<String>
+
     @Query(
         """
         SELECT s.* FROM songs s
@@ -264,6 +279,10 @@ interface MusicDao {
 
     @Delete
     suspend fun deleteSmartPlaylist(sp: SmartPlaylist)
+
+    /** En el PC las inteligentes son un espejo del móvil: se borran y se rehacen. */
+    @Query("DELETE FROM smart_playlists")
+    suspend fun clearSmartPlaylists()
 
     // ---- Watched sources ----
 

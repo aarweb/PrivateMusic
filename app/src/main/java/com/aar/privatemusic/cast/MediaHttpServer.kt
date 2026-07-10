@@ -66,12 +66,17 @@ class MediaHttpServer(
     }
 
     /**
-     * Catálogo completo para el PC: canciones y playlists.
+     * Catálogo completo para el PC: canciones, playlists, playlists inteligentes
+     * y el historial de escuchas.
      *
      * Ni una ruta sale de aquí. `filePath` y `artPath` son absolutos y del
      * móvil ("/storage/emulated/0/..."), y en el escritorio no existen. Viaja
      * el `id`; cada aparato resuelve dónde guarda el fichero. Sí viaja `ext`,
      * porque el PC necesita saber cómo llamar al suyo.
+     *
+     * El historial viaja porque sin él las playlists inteligentes mienten: una
+     * regla de "reproducida más de 5 veces" evaluada contra el historial del PC
+     * (que empieza vacío) no devuelve nada.
      */
     private fun serveLibrary(): Response {
         val (songs, playlists) = runBlocking {
@@ -80,6 +85,10 @@ class MediaHttpServer(
                 dao.songsOnce() to ps
             }.getOrNull() ?: return@runBlocking emptyList<Song>() to emptyList()
         }
+        val smartPlaylists = runBlocking { runCatching { dao.smartPlaylistsOnce() }.getOrNull() }.orEmpty()
+        val history = runBlocking {
+            runCatching { dao.recentPlayEvents(HISTORY_LIMIT) }.getOrNull()
+        }.orEmpty()
 
         val root = JSONObject()
         root.put("version", LIBRARY_VERSION)
@@ -131,6 +140,33 @@ class MediaHttpServer(
         }
         root.put("playlists", playlistsJson)
 
+        val smartJson = JSONArray()
+        smartPlaylists.forEach { sp ->
+            smartJson.put(
+                JSONObject().apply {
+                    put("id", sp.id)
+                    put("name", sp.name)
+                    put("createdAt", sp.createdAt)
+                    // Las cuatro columnas viejas viajan igual: hay playlists
+                    // anteriores al motor de reglas que no tienen JSON.
+                    putOpt("artistContains", sp.artistContains)
+                    put("onlyFavorites", sp.onlyFavorites)
+                    put("minPlays", sp.minPlays)
+                    put("addedWithinDays", sp.addedWithinDays)
+                    putOpt("rulesJson", sp.rulesJson)
+                },
+            )
+        }
+        root.put("smartPlaylists", smartJson)
+
+        // Claves cortas: son decenas de miles de objetos y "songId"/"playedAt"
+        // repetidos 20 000 veces pesan más que las escuchas.
+        val historyJson = JSONArray()
+        history.forEach { event ->
+            historyJson.put(JSONObject().apply { put("s", event.songId); put("t", event.playedAt) })
+        }
+        root.put("playHistory", historyJson)
+
         return newFixedLengthResponse(Response.Status.OK, "application/json", root.toString())
     }
 
@@ -157,7 +193,14 @@ class MediaHttpServer(
         const val SHARE_PORT = 8966
 
         /** Sube cuando el JSON de /library cambie de forma. */
-        const val LIBRARY_VERSION = 1
+        const val LIBRARY_VERSION = 2
+
+        /**
+         * Tope de escuchas que viajan al PC. Con las 20 000 más recientes las
+         * reglas de "veces reproducida" y "escuchada por última vez" salen bien
+         * en cualquier biblioteca real, y el JSON no pasa de un megabyte.
+         */
+        const val HISTORY_LIMIT = 20_000
 
         /** LAN address of this device (Wi-Fi), or null when unavailable. */
         fun localIp(): String? =

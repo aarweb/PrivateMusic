@@ -17,6 +17,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.LibraryMusic
@@ -38,6 +39,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.aar.privatemusic.data.db.SmartPlaylist
 import com.aar.privatemusic.data.db.Playlist
 
 /** Los destinos fijos de la barra lateral. Las playlists van aparte, debajo. */
@@ -67,6 +69,9 @@ fun Sidebar(
     playlists: List<Playlist>,
     openPlaylistId: Long?,
     onOpenPlaylist: (Playlist) -> Unit,
+    smartPlaylists: List<SmartPlaylist>,
+    openSmartId: Long?,
+    onOpenSmart: (SmartPlaylist) -> Unit,
 ) {
     Surface(
         Modifier.width(if (expanded) 260.dp else 84.dp).fillMaxHeight(),
@@ -104,22 +109,68 @@ fun Sidebar(
                 )
             }
 
-            if (!expanded || playlists.isEmpty()) return@Column
+            if (!expanded || (playlists.isEmpty() && smartPlaylists.isEmpty())) return@Column
 
-            Text(
-                "TUS PLAYLISTS",
-                Modifier.padding(start = 20.dp, top = 20.dp, bottom = 6.dp),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            // Ancladas primero: el orden de `observePlaylists` no las distingue.
-            val ordered = playlists.sortedByDescending { it.isPinned }
+            // Las dos secciones comparten una sola lista: dos `LazyColumn` en una
+            // `Column` se pelean por la altura y la segunda no se ve.
             LazyColumn(Modifier.fillMaxWidth()) {
-                items(ordered, key = { it.id }) { playlist ->
-                    PlaylistItem(playlist, playlist.id == openPlaylistId) { onOpenPlaylist(playlist) }
+                if (playlists.isNotEmpty()) {
+                    item { SidebarSection("TUS PLAYLISTS") }
+                    // Ancladas primero: el orden de `observePlaylists` no las distingue.
+                    items(playlists.sortedByDescending { it.isPinned }, key = { "p${it.id}" }) { playlist ->
+                        PlaylistItem(playlist, playlist.id == openPlaylistId) { onOpenPlaylist(playlist) }
+                    }
+                }
+                if (smartPlaylists.isNotEmpty()) {
+                    item { SidebarSection("INTELIGENTES") }
+                    items(smartPlaylists, key = { "s${it.id}" }) { smart ->
+                        SmartPlaylistItem(smart, smart.id == openSmartId) { onOpenSmart(smart) }
+                    }
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun SidebarSection(label: String) {
+    Text(
+        label,
+        Modifier.padding(start = 20.dp, top = 20.dp, bottom = 6.dp),
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+}
+
+/** Se distingue de una playlist normal por el icono: sus canciones las elige una regla. */
+@Composable
+private fun SmartPlaylistItem(smart: SmartPlaylist, selected: Boolean, onClick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth()
+            .padding(horizontal = 8.dp, vertical = 1.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(
+                if (selected) MaterialTheme.colorScheme.surfaceContainerHigh else Color.Transparent,
+            )
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            Icons.Filled.AutoAwesome,
+            null,
+            Modifier.size(16.dp),
+            tint = if (selected) MaterialTheme.colorScheme.primary
+            else MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(
+            smart.name,
+            Modifier.padding(start = 12.dp),
+            style = MaterialTheme.typography.bodySmall,
+            color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 

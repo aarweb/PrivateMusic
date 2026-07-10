@@ -1,8 +1,10 @@
 package com.aar.privatemusic.desktop.sync
 
 import com.aar.privatemusic.data.db.MusicDao
+import com.aar.privatemusic.data.db.PlayEvent
 import com.aar.privatemusic.data.db.Playlist
 import com.aar.privatemusic.data.db.PlaylistSongCrossRef
+import com.aar.privatemusic.data.db.SmartPlaylist
 import com.aar.privatemusic.data.db.Song
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -11,7 +13,14 @@ import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 
-data class SyncResult(val songsAdded: Int, val filesDownloaded: Int, val playlists: Int, val bytes: Long)
+data class SyncResult(
+    val songsAdded: Int,
+    val filesDownloaded: Int,
+    val playlists: Int,
+    val bytes: Long,
+    val playEvents: Int = 0,
+    val smartPlaylists: Int = 0,
+)
 
 /**
  * Se trae del móvil lo que le falta al PC.
@@ -118,8 +127,62 @@ class SyncClient(
             }
         }
 
+        // Un móvil con la 1.69 o anterior no manda ni el historial ni las
+        // inteligentes: el PC se queda como estaba en vez de vaciarse.
+        val events = syncHistory(root, onProgress)
+        val smart = syncSmartPlaylists(root)
+
         onProgress("Listo")
-        SyncResult(songs.length(), downloaded, playlists.length(), bytes)
+        SyncResult(songs.length(), downloaded, playlists.length(), bytes, events, smart)
+    }
+
+    /**
+     * Trae las escuchas que aquí no estén. La identidad de una escucha es
+     * `canción@instante`: el `id` de `play_history` lo pone cada aparato por su
+     * cuenta, así que sincronizar dos veces duplicaría todo si nos fiáramos de
+     * él. Las escuchas propias del PC no se tocan.
+     */
+    private suspend fun syncHistory(root: JSONObject, onProgress: (String) -> Unit): Int {
+        val history = root.optJSONArray("playHistory") ?: return 0
+        if (history.length() == 0) return 0
+        onProgress("Trayendo el historial…")
+        val known = dao.playEventKeys().toHashSet()
+        val fresh = ArrayList<PlayEvent>()
+        for (i in 0 until history.length()) {
+            val e = history.getJSONObject(i)
+            val songId = e.getString("s")
+            val playedAt = e.getLong("t")
+            if (known.add("$songId@$playedAt")) fresh += PlayEvent(songId = songId, playedAt = playedAt)
+        }
+        // De mil en mil: SQLite tiene un tope de variables por sentencia.
+        fresh.chunked(1_000).forEach { dao.insertPlayEvents(it) }
+        return fresh.size
+    }
+
+    /**
+     * Las inteligentes son un espejo: en el PC no se pueden crear ni editar, así
+     * que borrarlas y rehacerlas es lo único que las mantiene iguales al móvil
+     * cuando allí se borra una.
+     */
+    private suspend fun syncSmartPlaylists(root: JSONObject): Int {
+        val smart = root.optJSONArray("smartPlaylists") ?: return 0
+        dao.clearSmartPlaylists()
+        for (i in 0 until smart.length()) {
+            val s = smart.getJSONObject(i)
+            dao.insertSmartPlaylist(
+                SmartPlaylist(
+                    id = s.getLong("id"),
+                    name = s.getString("name"),
+                    artistContains = s.optStringOrNull("artistContains"),
+                    onlyFavorites = s.optBoolean("onlyFavorites"),
+                    minPlays = s.optInt("minPlays"),
+                    addedWithinDays = s.optInt("addedWithinDays"),
+                    createdAt = s.getLong("createdAt"),
+                    rulesJson = s.optStringOrNull("rulesJson"),
+                ),
+            )
+        }
+        return smart.length()
     }
 
     private fun httpGet(spec: String): String {
