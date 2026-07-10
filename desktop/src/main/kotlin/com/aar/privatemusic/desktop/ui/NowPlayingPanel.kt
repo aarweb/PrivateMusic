@@ -43,10 +43,13 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.aar.privatemusic.data.db.Song
+import com.aar.privatemusic.desktop.lyrics.LyricsState
 import com.aar.privatemusic.desktop.player.DesktopPlayer
 import java.io.File
 
-private enum class PanelTab(val label: String) { SONANDO("Sonando"), COLA("Cola"), INFO("Info") }
+private enum class PanelTab(val label: String) {
+    SONANDO("Sonando"), LETRA("Letra"), COLA("Cola"), INFO("Info")
+}
 
 /**
  * Lo que suena, en un panel a la derecha. No es una pantalla: la barra de
@@ -57,7 +60,7 @@ private enum class PanelTab(val label: String) { SONANDO("Sonando"), COLA("Cola"
  * hay que navegar y de la que hay que volver.
  */
 @Composable
-fun NowPlayingPanel(song: Song, player: DesktopPlayer, onClose: () -> Unit) {
+fun NowPlayingPanel(song: Song, player: DesktopPlayer, lyrics: LyricsState, onClose: () -> Unit) {
     var tab by remember { mutableStateOf(PanelTab.SONANDO) }
 
     Surface(Modifier.width(340.dp).fillMaxHeight(), tonalElevation = 2.dp) {
@@ -85,13 +88,14 @@ fun NowPlayingPanel(song: Song, player: DesktopPlayer, onClose: () -> Unit) {
                         Tab(
                             selected = tab == entry,
                             onClick = { tab = entry },
-                            text = { Text(entry.label, style = MaterialTheme.typography.labelMedium) },
+                            text = { Text(entry.label, style = MaterialTheme.typography.labelSmall) },
                         )
                     }
                 }
 
                 when (tab) {
                     PanelTab.SONANDO -> NowPlayingTab(song)
+                    PanelTab.LETRA -> LyricsPane(lyrics, player.positionMs)
                     PanelTab.COLA -> QueueTab(player)
                     PanelTab.INFO -> InfoTab(song)
                 }

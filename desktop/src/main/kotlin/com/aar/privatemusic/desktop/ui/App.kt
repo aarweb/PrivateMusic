@@ -43,6 +43,7 @@ import com.aar.privatemusic.desktop.downloader.DesktopDeezerAccount
 import com.aar.privatemusic.desktop.downloader.DesktopDownloaderEnv
 import com.aar.privatemusic.desktop.downloader.DesktopFeedback
 import com.aar.privatemusic.desktop.downloader.YtDlpDownloader
+import com.aar.privatemusic.desktop.lyrics.LyricsManager
 import com.aar.privatemusic.desktop.player.DesktopPlayer
 import com.aar.privatemusic.desktop.sync.Phone
 import com.aar.privatemusic.desktop.sync.SHARE_PORT
@@ -107,6 +108,8 @@ fun App(shortcuts: KeyShortcuts) {
         DeezerDownloader(downloaderEnv, DesktopDeezerAccount(settings), dao, appScope)
     }
     val archive = remember { InternetArchiveDownloader(downloaderEnv, dao, appScope) }
+    // Busca la letra en cuanto cambia la canción, se esté mirando la pestaña o no.
+    val lyricsManager = remember { LyricsManager(DesktopStorage.musicDir, player.current, appScope) }
     DisposableEffect(Unit) { onDispose { appScope.cancel() } }
 
     val snackbar = remember { SnackbarHostState() }
@@ -117,6 +120,7 @@ fun App(shortcuts: KeyShortcuts) {
     val songs by dao.observeSongs().collectAsState(emptyList())
     val current by player.current.collectAsState()
     val preview by player.preview.collectAsState()
+    val lyricsState by lyricsManager.state.collectAsState()
 
     // La canción que suena viene de una consulta vieja: cuando cambia en la
     // base (marcarla favorita), hay que refrescar la copia del reproductor.
@@ -309,7 +313,9 @@ fun App(shortcuts: KeyShortcuts) {
                     enter = slideInHorizontally { it },
                     exit = slideOutHorizontally { it },
                 ) {
-                    current?.let { NowPlayingPanel(it, player, onClose = { panelOpen = false }) }
+                    current?.let {
+                        NowPlayingPanel(it, player, lyricsState, onClose = { panelOpen = false })
+                    }
                 }
             }
 
