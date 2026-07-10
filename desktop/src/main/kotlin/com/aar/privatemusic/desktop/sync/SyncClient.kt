@@ -151,8 +151,13 @@ class SyncClient(
             dao.clearPlaylist(id)
             if (deletedAt == null) {
                 val songIds = p.getJSONArray("songIds")
-                for (j in 0 until songIds.length()) {
-                    dao.addToPlaylist(PlaylistSongCrossRef(id, songIds.getString(j), j))
+                val wanted = (0 until songIds.length()).map { songIds.getString(it) }
+                // Una canción cuya descarga falló no debe quedar como referencia
+                // fantasma: la playlist diría que la tiene y no la enseñaría.
+                val known = dao.existingSongIds(wanted).toSet()
+                var position = 0
+                wanted.filter { it in known }.forEach {
+                    dao.addToPlaylist(PlaylistSongCrossRef(id, it, position++))
                 }
             }
         }

@@ -221,8 +221,15 @@ class MediaHttpServer(
                     dao.clearPlaylist(id)
                     if (deletedAt == null) {
                         val songIds = p.getJSONArray("songIds")
-                        for (j in 0 until songIds.length()) {
-                            dao.addToPlaylist(PlaylistSongCrossRef(id, songIds.getString(j), j))
+                        val wanted = (0 until songIds.length()).map { songIds.getString(it) }
+                        // Sólo las que existen aquí: el PC puede haber descargado
+                        // canciones que este móvil no tiene, y una referencia a una
+                        // canción ausente no falla, se queda invisible y descuadra
+                        // el número de canciones de la playlist.
+                        val known = dao.existingSongIds(wanted).toSet()
+                        var position = 0
+                        wanted.filter { it in known }.forEach {
+                            dao.addToPlaylist(PlaylistSongCrossRef(id, it, position++))
                         }
                     }
                     applied++

@@ -374,6 +374,15 @@ interface MusicDao {
     @Query("UPDATE playlists SET updatedAt = :at WHERE id = :id")
     suspend fun touchPlaylist(id: Long, at: Long)
 
+    /**
+     * De esos ids, los que existen aquí. Las canciones sólo viajan móvil→PC, así
+     * que una playlist creada en el PC puede traer canciones que el móvil no
+     * tiene; y `playlist_songs` no tiene clave foránea, así que la referencia
+     * entraría, no fallaría, y la playlist diría "3 canciones" enseñando una.
+     */
+    @Query("SELECT id FROM songs WHERE id IN (:ids)")
+    suspend fun existingSongIds(ids: List<String>): List<String>
+
     /** Qué playlists contienen esta canción. Borrarla las cambia a todas. */
     @Query("SELECT playlistId FROM playlist_songs WHERE songId = :songId")
     suspend fun playlistIdsWithSong(songId: String): List<Long>
