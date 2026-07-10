@@ -19,8 +19,6 @@ import com.aar.privatemusic.downloader.YtDownloader
 import com.aar.privatemusic.player.PlayerController
 import com.aar.privatemusic.scrobble.ListenBrainz
 import java.util.concurrent.TimeUnit
-import com.yausername.ffmpeg.FFmpeg
-import com.yausername.youtubedl_android.YoutubeDL
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -51,15 +49,13 @@ class PrivateMusicApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
-        try {
-            YoutubeDL.getInstance().init(this)
-            FFmpeg.getInstance().init(this)
-        } catch (e: Exception) {
-            Log.e("PrivateMusicApp", "yt-dlp init failed", e)
-        }
         val dao = openMusicDatabase(this).musicDao()
         settings = AppSettings(this)
         downloader = YtDownloader(this, dao, appScope)
+        // Desempaquetar yt-dlp y ffmpeg del APK es disco, y aquí estaríamos en el
+        // hilo principal retrasando el primer fotograma. Va en segundo plano; quien
+        // los use espera dentro de YtDownloader.
+        downloader.initEngine()
         torrents = TorrentDownloader(this, dao, appScope)
         val downloaderEnv = com.aar.privatemusic.downloader.AndroidDownloaderEnv(this)
         deezerDownloader = DeezerDownloader(
@@ -107,17 +103,7 @@ class PrivateMusicApp : Application() {
         appScope.launch {
             downloader.updateYtDlp() // YouTube breaks old extractors regularly
             downloader.resumePending() // finish downloads cut off by process death
-            repository.repairMissingArt() // carátulas que apuntan a ficheros que no existen
-            repository.backfillQuality()
-            repository.backfillLoudness()
-            repository.backfillAnalysis()
-            // v2: threshold went from -24dB to -18dB; recompute existing rows.
-            val prefs = getSharedPreferences("settings", MODE_PRIVATE)
-            if (prefs.getInt("tail_silence_v", 1) < 2) {
-                repository.resetTailSilence()
-                prefs.edit().putInt("tail_silence_v", 2).apply()
-            }
-            repository.backfillTailSilence()
+            maintenance()
         }
 
         // Check watched playlists/channels for new songs every 6 hours.
@@ -135,5 +121,46 @@ class PrivateMusicApp : Application() {
                 )
                 .build(),
         )
+    }
+
+    /**
+     * Tareas de mantenimiento de la biblioteca. Ninguna es urgente y todas
+     * compiten con el arranque: `AudioAnalyzer` decodifica con MediaCodec y
+     * satura los núcleos justo mientras la interfaz mide y dibuja la primera
+     * pantalla, que es donde se veían los saltos.
+     *
+     * Así que esperan a que la pantalla esté puesta, y en el caso normal —una
+     * biblioteca ya analizada— esto es una cuenta en SQLite y nada más.
+     */
+    private suspend fun maintenance() {
+        kotlinx.coroutines.delay(SETTLE_MS)
+        val prefs = getSharedPreferences("settings", MODE_PRIVATE)
+        val now = System.currentTimeMillis()
+
+        // Recorre la biblioteca entera comprobando ficheros: una vez al día basta.
+        // Las carátulas no desaparecen solas entre dos arranques.
+        if (now - prefs.getLong("art_repaired_at", 0L) > DAY_MS) {
+            runCatching { repository.repairMissingArt() }
+                .onSuccess { prefs.edit().putLong("art_repaired_at", now).apply() }
+                .onFailure { Log.w("PrivateMusicApp", "repairMissingArt failed", it) }
+        }
+
+        // v2: threshold went from -24dB to -18dB; recompute existing rows.
+        if (prefs.getInt("tail_silence_v", 1) < 2) {
+            repository.resetTailSilence()
+            prefs.edit().putInt("tail_silence_v", 2).apply()
+        }
+
+        if (repository.pendingBackfills() == 0) return
+        repository.backfillQuality()
+        repository.backfillLoudness()
+        repository.backfillAnalysis()
+        repository.backfillTailSilence()
+    }
+
+    private companion object {
+        /** Lo que tarda la primera pantalla en estar quieta. */
+        const val SETTLE_MS = 3_000L
+        const val DAY_MS = 24 * 60 * 60 * 1000L
     }
 }

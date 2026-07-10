@@ -46,6 +46,19 @@ fun QueueScreen(app: PrivateMusicApp, onBack: () -> Unit) {
     val reorderableState = rememberReorderableLazyListState(lazyListState) { from, to ->
         controller.moveQueueItem(from.index, to.index)
     }
+
+    // La clave llevaba la posición dentro ("id-3"). Al arrastrar una canción, la
+    // posición de todas las de en medio cambia, así que cambiaban todas las
+    // claves: la lista se creía nueva entera y la animación de arrastre saltaba.
+    // La posición no puede estar en la clave; lo que sí la necesita es distinguir
+    // la misma canción repetida en la cola, y para eso vale contar repeticiones.
+    val queueKeys = androidx.compose.runtime.remember(queue) {
+        val seen = HashMap<String, Int>()
+        queue.map { item ->
+            val n = seen.merge(item.mediaId, 1, Int::plus)!!
+            "${item.mediaId}#$n"
+        }
+    }
     // Open anchored on the playing track, not the top of a 50-song queue.
     androidx.compose.runtime.LaunchedEffect(Unit) {
         if (currentIndex > 0) lazyListState.scrollToItem(currentIndex)
@@ -116,8 +129,8 @@ fun QueueScreen(app: PrivateMusicApp, onBack: () -> Unit) {
         }
 
         LazyColumn(state = lazyListState, modifier = Modifier.fillMaxSize()) {
-            itemsIndexed(queue, key = { index, item -> "${item.mediaId}-$index" }) { index, item ->
-                ReorderableItem(reorderableState, key = "${item.mediaId}-$index") { isDragging ->
+            itemsIndexed(queue, key = { index, _ -> queueKeys[index] }) { index, item ->
+                ReorderableItem(reorderableState, key = queueKeys[index]) { isDragging ->
                     val isCurrent = index == currentIndex
                     Surface(tonalElevation = if (isDragging) 4.dp else 0.dp) {
                         Row(

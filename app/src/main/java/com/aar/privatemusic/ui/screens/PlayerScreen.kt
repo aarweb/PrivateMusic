@@ -5,7 +5,6 @@ import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
-import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.input.pointer.pointerInput
@@ -137,8 +136,11 @@ fun PlayerScreen(
     val dominant = cover.first
     val accent = cover.second
 
-    var sliderPosition by remember { mutableFloatStateOf(0f) }
-    var dragging by remember { mutableStateOf(false) }
+    // La posición se guarda como estado, no se lee aquí: si la leyera esta
+    // pantalla, el tic de medio segundo la recompondría entera, carátula incluida.
+    // Quien la lee es [PositionBar], y sólo se recompone él.
+    val sliderPosition = remember { mutableFloatStateOf(0f) }
+    val draggingState = remember { mutableStateOf(false) }
     var sleepDialogOpen by remember { mutableStateOf(false) }
     var showLyrics by remember { mutableStateOf(false) }
     var playerMenuOpen by remember { mutableStateOf(false) }
@@ -163,7 +165,7 @@ fun PlayerScreen(
 
     LaunchedEffect(isPlaying, np.songId) {
         while (true) {
-            if (!dragging) sliderPosition = controller.positionMs.toFloat()
+            if (!draggingState.value) sliderPosition.floatValue = controller.positionMs.toFloat()
             delay(500)
         }
     }
@@ -382,7 +384,7 @@ fun PlayerScreen(
         if (showLyrics && lyrics != null) {
             LyricsPanel(
                 lyrics = lyrics!!,
-                positionMs = sliderPosition.toLong(),
+                positionMs = { sliderPosition.floatValue.toLong() },
                 onSeek = { controller.seekTo(it) },
                 accent = accent,
                 onShareFrom = { lyricShareFrom = it },
@@ -392,7 +394,10 @@ fun PlayerScreen(
             )
         } else {
             // Encoge al pausar: el disco "respira" mientras suena.
-            val scale by animateFloatAsState(
+            // Sin `by`: `Modifier.scale` leía el valor durante la composición y el
+            // muelle recomponía la pantalla en cada fotograma. Leído dentro de
+            // `graphicsLayer`, la animación no pasa de la fase de dibujo.
+            val scale = animateFloatAsState(
                 targetValue = if (isPlaying) 1f else 0.92f,
                 animationSpec = spring(dampingRatio = Spring.DampingRatioLowBouncy),
                 label = "cover",
@@ -400,7 +405,10 @@ fun PlayerScreen(
             var dragged by remember { mutableFloatStateOf(0f) }
             Box(
                 coverModifier
-                    .scale(scale)
+                    .graphicsLayer {
+                        scaleX = scale.value
+                        scaleY = scale.value
+                    }
                     .pointerInput(np.songId) {
                         detectHorizontalDragGestures(
                             onDragEnd = {
@@ -460,45 +468,13 @@ fun PlayerScreen(
         Spacer(Modifier.weight(1f))
 
         val durationMs = np.durationMs.coerceAtLeast(1)
-        val sliderInteractions = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
-        // Al arrastrar, el pulgar crece: te dice que lo tienes cogido, y el dedo
-        // tapa menos de lo que estás buscando.
-        val thumbWidth by androidx.compose.animation.core.animateDpAsState(
-            targetValue = if (dragging) 8.dp else 4.dp,
-            label = "thumbWidth",
+        PositionBar(
+            position = sliderPosition,
+            dragging = draggingState,
+            durationMs = durationMs,
+            accent = accent,
+            onSeek = { controller.seekTo(it) },
         )
-        val thumbHeight by androidx.compose.animation.core.animateDpAsState(
-            targetValue = if (dragging) 36.dp else 24.dp,
-            label = "thumbHeight",
-        )
-        Slider(
-            value = sliderPosition.coerceIn(0f, durationMs.toFloat()),
-            onValueChange = {
-                dragging = true
-                sliderPosition = it
-            },
-            onValueChangeFinished = {
-                controller.seekTo(sliderPosition.toLong())
-                dragging = false
-            },
-            valueRange = 0f..durationMs.toFloat(),
-            interactionSource = sliderInteractions,
-            colors = androidx.compose.material3.SliderDefaults.colors(
-                thumbColor = accent,
-                activeTrackColor = accent,
-            ),
-            thumb = {
-                androidx.compose.material3.SliderDefaults.Thumb(
-                    interactionSource = sliderInteractions,
-                    colors = androidx.compose.material3.SliderDefaults.colors(thumbColor = accent),
-                    thumbSize = androidx.compose.ui.unit.DpSize(thumbWidth, thumbHeight),
-                )
-            },
-        )
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text(formatDuration((sliderPosition / 1000).toInt()), style = MaterialTheme.typography.labelMedium)
-            Text(formatDuration((durationMs / 1000).toInt()), style = MaterialTheme.typography.labelMedium)
-        }
 
         Spacer(Modifier.height(12.dp))
 
@@ -638,18 +614,77 @@ fun PlayerScreen(
     }
 }
 
+/**
+ * La barra de progreso y los dos tiempos, aparte.
+ *
+ * Es lo único de la pantalla que cambia dos veces por segundo. Aquí dentro, esa
+ * recomposición cuesta un `Slider` y dos `Text`; en la pantalla costaba la
+ * carátula, la letra y los controles.
+ */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+private fun PositionBar(
+    position: androidx.compose.runtime.MutableFloatState,
+    dragging: androidx.compose.runtime.MutableState<Boolean>,
+    durationMs: Long,
+    accent: Color,
+    onSeek: (Long) -> Unit,
+) {
+    val sliderInteractions = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+    // Al arrastrar, el pulgar crece: te dice que lo tienes cogido, y el dedo
+    // tapa menos de lo que estás buscando.
+    val thumbWidth by androidx.compose.animation.core.animateDpAsState(
+        targetValue = if (dragging.value) 8.dp else 4.dp,
+        label = "thumbWidth",
+    )
+    val thumbHeight by androidx.compose.animation.core.animateDpAsState(
+        targetValue = if (dragging.value) 36.dp else 24.dp,
+        label = "thumbHeight",
+    )
+    Slider(
+        value = position.floatValue.coerceIn(0f, durationMs.toFloat()),
+        onValueChange = {
+            dragging.value = true
+            position.floatValue = it
+        },
+        onValueChangeFinished = {
+            onSeek(position.floatValue.toLong())
+            dragging.value = false
+        },
+        valueRange = 0f..durationMs.toFloat(),
+        interactionSource = sliderInteractions,
+        colors = androidx.compose.material3.SliderDefaults.colors(
+            thumbColor = accent,
+            activeTrackColor = accent,
+        ),
+        thumb = {
+            androidx.compose.material3.SliderDefaults.Thumb(
+                interactionSource = sliderInteractions,
+                colors = androidx.compose.material3.SliderDefaults.colors(thumbColor = accent),
+                thumbSize = androidx.compose.ui.unit.DpSize(thumbWidth, thumbHeight),
+            )
+        },
+    )
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        Text(formatDuration((position.floatValue / 1000).toInt()), style = MaterialTheme.typography.labelMedium)
+        Text(formatDuration((durationMs / 1000).toInt()), style = MaterialTheme.typography.labelMedium)
+    }
+}
+
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun LyricsPanel(
     lyrics: com.aar.privatemusic.lyrics.Lyrics,
-    positionMs: Long,
+    positionMs: () -> Long,
     onSeek: (Long) -> Unit,
     accent: Color,
     onShareFrom: (Int) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val listState = rememberLazyListState()
-    val currentIdx = if (lyrics.synced) lyrics.lines.indexOfLast { it.timeMs <= positionMs } else -1
+    // La posición se lee aquí dentro, no en el llamante: así el tic de medio
+    // segundo recompone la letra y no la pantalla entera.
+    val currentIdx = if (lyrics.synced) lyrics.lines.indexOfLast { it.timeMs <= positionMs() } else -1
 
     // Mientras haya un dedo en la letra no se desplaza sola. Antes, cada vez que
     // cambiaba la línea activa la lista se movía bajo el dedo, y el toque acababa

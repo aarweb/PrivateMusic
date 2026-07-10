@@ -42,12 +42,20 @@ class MusicRepository(
     suspend fun recordPlay(songId: String) =
         dao.insertPlayEvent(PlayEvent(songId = songId, playedAt = System.currentTimeMillis()))
 
+    /** ¿Hay canciones sin calidad, sonoridad, análisis o cola de silencio? */
+    suspend fun pendingBackfills(): Int = dao.pendingBackfillCount()
+
     /** Backfill quality info for songs downloaded before the quality badge existed. */
     suspend fun backfillQuality() {
-        dao.songsMissingQuality().forEach { song ->
-            readAudioQuality(song.filePath, song.durationSec)?.let {
-                dao.updateQuality(song.id, it.codec, it.bitrateKbps, it.sampleRateHz)
+        dao.songsMissingQuality().chunked(BACKFILL_CHUNK).forEach { chunk ->
+            val rows = chunk.mapNotNull { song ->
+                readAudioQuality(song.filePath, song.durationSec)?.let {
+                    com.aar.privatemusic.data.db.QualityUpdate(
+                        song.id, it.codec, it.bitrateKbps, it.sampleRateHz,
+                    )
+                }
             }
+            if (rows.isNotEmpty()) dao.updateQualityBatch(rows)
         }
     }
     fun observePlaylists(): Flow<List<Playlist>> = dao.observePlaylists()
@@ -172,10 +180,13 @@ class MusicRepository(
 
     /** Measures RMS loudness of any song that lacks it (runs on app start). */
     suspend fun backfillLoudness() {
-        dao.songsMissingLoudness().forEach { song ->
-            LoudnessScanner.measureRmsDb(song.filePath)?.let {
-                dao.updateLoudness(song.id, it)
+        dao.songsMissingLoudness().chunked(BACKFILL_CHUNK).forEach { chunk ->
+            val rows = chunk.mapNotNull { song ->
+                LoudnessScanner.measureRmsDb(song.filePath)?.let {
+                    com.aar.privatemusic.data.db.LoudnessUpdate(song.id, it)
+                }
             }
+            if (rows.isNotEmpty()) dao.updateLoudnessBatch(rows)
         }
     }
 
@@ -344,10 +355,13 @@ class MusicRepository(
 
     /** Measures the silent tail of songs missing it (crossfade anchor). */
     suspend fun backfillTailSilence() {
-        dao.songsMissingTailSilence().forEach { song ->
-            val ms = com.aar.privatemusic.util.TailSilence
-                .measureTailSilenceMs(song.filePath, song.durationSec) ?: 0L
-            dao.updateTailSilence(song.id, ms)
+        dao.songsMissingTailSilence().chunked(BACKFILL_CHUNK).forEach { chunk ->
+            val rows = chunk.map { song ->
+                val ms = com.aar.privatemusic.util.TailSilence
+                    .measureTailSilenceMs(song.filePath, song.durationSec) ?: 0L
+                com.aar.privatemusic.data.db.TailSilenceUpdate(song.id, ms)
+            }
+            dao.updateTailSilenceBatch(rows)
         }
     }
 
@@ -388,10 +402,15 @@ class MusicRepository(
     }
 
     suspend fun backfillAnalysis() {
-        dao.songsMissingAnalysis().forEach { song ->
-            AudioAnalyzer.analyze(song.filePath, song.durationSec)?.let {
-                dao.updateAnalysis(song.id, it.bpm, it.camelot, it.featuresJson())
+        dao.songsMissingAnalysis().chunked(BACKFILL_CHUNK).forEach { chunk ->
+            val rows = chunk.mapNotNull { song ->
+                AudioAnalyzer.analyze(song.filePath, song.durationSec)?.let {
+                    com.aar.privatemusic.data.db.AnalysisUpdate(
+                        song.id, it.bpm, it.camelot, it.featuresJson(),
+                    )
+                }
             }
+            if (rows.isNotEmpty()) dao.updateAnalysisBatch(rows)
         }
     }
 
@@ -620,5 +639,14 @@ class MusicRepository(
             val weight = 0.05 + age.coerceAtMost(1.0)
             song to Math.random().pow(1.0 / weight)
         }.sortedByDescending { it.second }.map { it.first }
+    }
+
+    companion object {
+        /**
+         * Canciones por transacción al rellenar. Ni una (una invalidación por
+         * canción) ni todas (si el proceso muere a mitad, se pierde el análisis
+         * de una biblioteca entera y hay que rehacerlo).
+         */
+        private const val BACKFILL_CHUNK = 25
     }
 }

@@ -9,6 +9,7 @@ import com.aar.privatemusic.lyrics.LyricsFetcher
 import com.aar.privatemusic.util.AudioAnalyzer
 import com.aar.privatemusic.util.LoudnessScanner
 import com.aar.privatemusic.util.readAudioQuality
+import com.yausername.ffmpeg.FFmpeg
 import com.yausername.youtubedl_android.YoutubeDL
 import com.yausername.youtubedl_android.YoutubeDLRequest
 import kotlinx.coroutines.CancellationException
@@ -39,7 +40,30 @@ class YtDownloader(
     private val dao: MusicDao,
     private val scope: CoroutineScope,
 ) {
-    private val ytdl get() = YoutubeDL.getInstance()
+    /**
+     * `YoutubeDL.init` desempaqueta el intérprete de Python y las bibliotecas
+     * nativas desde el APK: cientos de milisegundos de disco que, hechos en
+     * `Application.onCreate`, retrasan el primer fotograma. Se hace en segundo
+     * plano y todo lo que use yt-dlp espera aquí.
+     */
+    private val ready = kotlinx.coroutines.CompletableDeferred<Unit>()
+
+    fun initEngine() {
+        scope.launch(Dispatchers.IO) {
+            runCatching {
+                YoutubeDL.getInstance().init(context)
+                FFmpeg.getInstance().init(context)
+            }.onFailure { Log.e("YtDownloader", "yt-dlp init failed", it) }
+            // Se completa pase lo que pase: si el motor no arrancó, que las
+            // llamadas fallen con su propia excepción y no se queden colgadas.
+            ready.complete(Unit)
+        }
+    }
+
+    private suspend fun ytdl(): YoutubeDL {
+        ready.await()
+        return YoutubeDL.getInstance()
+    }
 
     val musicDir: File = File(context.getExternalFilesDir(null) ?: context.filesDir, "music")
         .apply { mkdirs() }
@@ -87,7 +111,7 @@ class YtDownloader(
                 addOption("--flat-playlist")
                 addOption("--no-warnings")
             }
-            val out = ytdl.execute(request).out
+            val out = ytdl().execute(request).out
             out.lineSequence()
                 .filter { it.trim().startsWith("{") }
                 .mapNotNull { line ->
@@ -295,7 +319,7 @@ class YtDownloader(
                 addOption("--flat-playlist")
                 addOption("--no-warnings")
             }
-            val out = ytdl.execute(request).out
+            val out = ytdl().execute(request).out
             var playlistTitle = "Playlist"
             val entries = out.lineSequence()
                 .filter { it.trim().startsWith("{") }
@@ -396,7 +420,7 @@ class YtDownloader(
                 addOption("-f", "bestaudio/best")
                 addOption("--no-playlist")
             }
-            ytdl.getInfo(request).url?.takeIf { it.startsWith("http") }
+            ytdl().getInfo(request).url?.takeIf { it.startsWith("http") }
         }.onFailure { Log.e("YtDownloader", "streamUrl failed for $id", it) }.getOrNull()
     }
 
@@ -404,7 +428,7 @@ class YtDownloader(
     fun enqueueUrl(url: String) {
         scope.launch(Dispatchers.IO) {
             try {
-                val info = ytdl.getInfo(url)
+                val info = ytdl().getInfo(url)
                 enqueue(
                     SearchResult(
                         id = info.id ?: return@launch,
@@ -440,7 +464,7 @@ class YtDownloader(
                 addOption("--sponsorblock-remove", "music_offtopic")
             }
         }
-        ytdl.execute(request, result.id) { progress, _, _ ->
+        ytdl().execute(request, result.id) { progress, _, _ ->
             // Ignore late progress ticks after the user cancelled (the native
             // process is being torn down): otherwise they'd re-add the id.
             if (result.id !in cancelled) {
@@ -502,10 +526,22 @@ class YtDownloader(
         _downloads.update { it - song.id }
     }
 
-    /** Keep yt-dlp current — YouTube breaks old extractor versions regularly. */
+    /**
+     * Keep yt-dlp current — YouTube breaks old extractor versions regularly.
+     *
+     * Una vez al día basta: los extractores no cambian cada vez que abres la app,
+     * y comprobarlo en cada arranque en frío es una petición de red y una escritura
+     * en disco compitiendo con el primer fotograma.
+     */
     fun updateYtDlp() {
+        val prefs = context.getSharedPreferences("settings", Context.MODE_PRIVATE)
+        val last = prefs.getLong("ytdlp_checked_at", 0L)
+        val now = System.currentTimeMillis()
+        if (now - last < 24 * 60 * 60 * 1000L) return
         scope.launch(Dispatchers.IO) {
+            ready.await()
             runCatching { YoutubeDL.getInstance().updateYoutubeDL(context) }
+                .onSuccess { prefs.edit().putLong("ytdlp_checked_at", now).apply() }
                 .onFailure { Log.w("YtDownloader", "yt-dlp update failed", it) }
         }
     }

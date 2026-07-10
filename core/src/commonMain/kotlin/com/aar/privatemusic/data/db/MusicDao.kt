@@ -9,6 +9,15 @@ import androidx.room.Transaction
 import androidx.room.Update
 import kotlinx.coroutines.flow.Flow
 
+/**
+ * Una fila lista para escribir, ya medida. Los análisis de audio son lentos y
+ * se hacen fuera de la transacción; dentro sólo entran los `UPDATE`.
+ */
+data class QualityUpdate(val id: String, val codec: String?, val bitrateKbps: Int?, val sampleRateHz: Int?)
+data class LoudnessUpdate(val id: String, val loudnessDb: Float)
+data class AnalysisUpdate(val id: String, val bpm: Float?, val camelot: String?, val features: String?)
+data class TailSilenceUpdate(val id: String, val ms: Long)
+
 @Dao
 interface MusicDao {
 
@@ -168,6 +177,45 @@ interface MusicDao {
 
     @Query("UPDATE songs SET tailSilenceMs = NULL")
     suspend fun resetTailSilence()
+
+    /**
+     * ¿Queda algo por rellenar? Una sola cuenta en vez de cuatro `SELECT *` que
+     * traen filas enteras para no usarlas. En el caso normal —la biblioteca ya
+     * analizada— el arranque no toca nada más.
+     */
+    @Query(
+        """
+        SELECT COUNT(*) FROM songs
+        WHERE codec IS NULL OR loudnessDb IS NULL
+           OR sonicFeatures IS NULL OR tailSilenceMs IS NULL
+        """,
+    )
+    suspend fun pendingBackfillCount(): Int
+
+    // Escribir de una en una despierta al observador de `songs` una vez por
+    // canción: con doscientas, doscientas reconsultas y doscientas
+    // recomposiciones de la biblioteca mientras arranca la app. Por lotes,
+    // Room invalida una vez al confirmar la transacción.
+
+    @Transaction
+    suspend fun updateQualityBatch(rows: List<QualityUpdate>) {
+        rows.forEach { updateQuality(it.id, it.codec, it.bitrateKbps, it.sampleRateHz) }
+    }
+
+    @Transaction
+    suspend fun updateLoudnessBatch(rows: List<LoudnessUpdate>) {
+        rows.forEach { updateLoudness(it.id, it.loudnessDb) }
+    }
+
+    @Transaction
+    suspend fun updateAnalysisBatch(rows: List<AnalysisUpdate>) {
+        rows.forEach { updateAnalysis(it.id, it.bpm, it.camelot, it.features) }
+    }
+
+    @Transaction
+    suspend fun updateTailSilenceBatch(rows: List<TailSilenceUpdate>) {
+        rows.forEach { updateTailSilence(it.id, it.ms) }
+    }
 
     @Query("UPDATE songs SET title = :title, artist = :artist WHERE id = :id")
     suspend fun updateSongMeta(id: String, title: String, artist: String)

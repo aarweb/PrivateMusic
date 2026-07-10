@@ -54,6 +54,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -85,14 +87,28 @@ fun LibraryScreen(app: PrivateMusicApp, onOpenArtist: (String) -> Unit = {}) {
     val recent by app.repository.observeRecentlyPlayed(10).collectAsState(initial = emptyList())
     val playlists by app.repository.observePlaylists().collectAsState(initial = emptyList())
     val pendingDownloads by app.repository.observePendingDownloads().collectAsState(initial = emptyList())
-    val downloadStates by app.downloader.downloads.collectAsState()
+    // El mapa de descargas cambia varias veces por segundo mientras baja algo (el
+    // progreso vive dentro), y leerlo aquí recomponía la biblioteca entera a ese
+    // ritmo. De él sólo interesan dos cosas, y ninguna cambia con el progreso:
+    // qué ha fallado y qué se está siguiendo.
+    val failedMessages by remember(app) {
+        app.downloader.downloads
+            .map { states ->
+                states.mapNotNull { (id, st) ->
+                    (st as? com.aar.privatemusic.downloader.DownloadState.Failed)?.let { id to it.message }
+                }.toMap()
+            }
+            .distinctUntilChanged()
+    }.collectAsState(initial = emptyMap())
+    val trackedIds by remember(app) {
+        app.downloader.downloads.map { it.keys }.distinctUntilChanged()
+    }.collectAsState(initial = emptySet())
+
     // Downloads that failed (this session, or a stuck row from a past session):
     // shown in an errors section with a retry button. Active ones are excluded.
-    val failedDownloads = pendingDownloads.filter { p ->
-        when (val st = downloadStates[p.id]) {
-            is com.aar.privatemusic.downloader.DownloadState.Failed -> true
-            null -> p.attempts >= 1
-            else -> false
+    val failedDownloads = remember(pendingDownloads, failedMessages, trackedIds) {
+        pendingDownloads.filter { p ->
+            p.id in failedMessages || (p.id !in trackedIds && p.attempts >= 1)
         }
     }
     val scope = rememberCoroutineScope()
@@ -287,7 +303,7 @@ fun LibraryScreen(app: PrivateMusicApp, onOpenArtist: (String) -> Unit = {}) {
                     )
                 }
                 items(failedDownloads, key = { "dlerr-${it.id}" }, contentType = { "dlerr" }) { p ->
-                    val msg = (downloadStates[p.id] as? com.aar.privatemusic.downloader.DownloadState.Failed)?.message
+                    val msg = failedMessages[p.id]
                     DownloadErrorRow(
                         title = p.title,
                         thumbnailUrl = p.thumbnailUrl,
