@@ -46,10 +46,15 @@ class PrivateMusicApp : Application() {
         private set
     lateinit var libraryShare: com.aar.privatemusic.sync.LibraryShare
         private set
+    lateinit var musicDao: com.aar.privatemusic.data.db.MusicDao
+        private set
+
+    private val restoringQueue = java.util.concurrent.atomic.AtomicBoolean(false)
 
     override fun onCreate() {
         super.onCreate()
         val dao = openMusicDatabase(this).musicDao()
+        musicDao = dao
         settings = AppSettings(this)
         downloader = YtDownloader(this, dao, appScope)
         // Desempaquetar yt-dlp y ffmpeg del APK es disco, y aquí estaríamos en el
@@ -90,25 +95,7 @@ class PrivateMusicApp : Application() {
         // 80/20: downloads throttle themselves while audio is actually playing.
         downloader.isPlayingProvider = { playerController.isPlaying.value }
         // Restore the last session's queue (paused) after a cold start.
-        appScope.launch {
-            playerController.savedQueue()?.let { saved ->
-                // Una canción borrada desde la última sesión desaparece de la
-                // lista, y con ella se corren todos los índices siguientes: con
-                // el índice guardado a secas, al arrancar sonaría otra canción.
-                val found = saved.ids.map { dao.getSong(it) }
-                val songs = found.filterNotNull()
-                if (songs.isNotEmpty()) {
-                    val present = found.map { it != null }
-                    val index = com.aar.privatemusic.player.QueueLogic
-                        .restoreIndex(present, saved.index)
-                    val position = com.aar.privatemusic.player.QueueLogic
-                        .restorePositionMs(present, saved.index, saved.positionMs)
-                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-                        playerController.restoreQueue(songs, index, position)
-                    }
-                }
-            }
-        }
+        restoreSavedQueue()
         appScope.launch {
             downloader.updateYtDlp() // YouTube breaks old extractors regularly
             downloader.resumePending() // finish downloads cut off by process death
@@ -130,6 +117,45 @@ class PrivateMusicApp : Application() {
                 )
                 .build(),
         )
+    }
+
+    /**
+     * Devuelve al reproductor la cola de la última sesión, en pausa y donde la
+     * dejaste, como hace Spotify.
+     *
+     * No basta con hacerlo en `onCreate`. Al cerrar la app desde recientes,
+     * `PlaybackService.onTaskRemoved` vacía el reproductor para que la música no
+     * siga sonando, pero **el proceso sobrevive**: `Application.onCreate` no se
+     * repite, así que al volver a entrar no había ninguna canción aunque en
+     * disco siguiera guardada. Por eso lo llama también `MainActivity`, en cada
+     * arranque de la pantalla.
+     *
+     * Repetirlo es inofensivo: `restoreQueue` no toca nada si el reproductor ya
+     * tiene cola, y el cerrojo evita que dos llamadas se pisen.
+     */
+    fun restoreSavedQueue() {
+        if (!restoringQueue.compareAndSet(false, true)) return
+        appScope.launch {
+            try {
+                val saved = playerController.savedQueue() ?: return@launch
+                // Una canción borrada desde la última sesión desaparece de la
+                // lista, y con ella se corren todos los índices siguientes: con
+                // el índice guardado a secas, al arrancar sonaría otra canción.
+                val found = saved.ids.map { musicDao.getSong(it) }
+                val songs = found.filterNotNull()
+                if (songs.isEmpty()) return@launch
+                val present = found.map { it != null }
+                val index = com.aar.privatemusic.player.QueueLogic
+                    .restoreIndex(present, saved.index)
+                val position = com.aar.privatemusic.player.QueueLogic
+                    .restorePositionMs(present, saved.index, saved.positionMs)
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                    playerController.restoreQueue(songs, index, position)
+                }
+            } finally {
+                restoringQueue.set(false)
+            }
+        }
     }
 
     /**

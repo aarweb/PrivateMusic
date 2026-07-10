@@ -63,6 +63,11 @@ class MainActivity : ComponentActivity() {
                 .launch(Manifest.permission.POST_NOTIFICATIONS)
         }
         handleShareIntent(intent)
+        // Cerrar la app desde recientes vacía el reproductor pero no siempre mata
+        // el proceso, y entonces `Application.onCreate` no vuelve a correr. Sin
+        // esto, volver a entrar te dejaba sin la canción que escuchabas.
+        // No hace nada si el reproductor ya tiene cola.
+        app.restoreSavedQueue()
         // Al abrir en frío, no sólo al entrar en Ajustes. Cuelga de `appScope`:
         // girar la pantalla no debe cancelar una descarga de noventa megas.
         UpdateGate.checkOnStart(this, app.appScope)
