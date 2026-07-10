@@ -62,8 +62,19 @@ object DesktopUpdater {
      * sistema; en Linux devuelve el comando que hay que ejecutar al salir.
      * Nunca toca la instalación actual mientras la app corre.
      */
+    private fun targetFor(info: UpdateInfo) =
+        File(System.getProperty("java.io.tmpdir"), "privatemusic-${info.version}${assetSuffix}")
+
+    /**
+     * El paquete de esta versión, si ya se bajó entero. Una descarga cortada se
+     * queda en `.part` y nunca llega a este nombre, así que si el fichero existe
+     * está completo. Sin esto, la actualización automática se bajaría cien megas
+     * en cada arranque hasta que el usuario cerrara la app.
+     */
+    fun cached(info: UpdateInfo): File? = targetFor(info).takeIf { it.length() > 1_000_000 }
+
     suspend fun download(info: UpdateInfo, onProgress: (Int) -> Unit): File = withContext(Dispatchers.IO) {
-        val target = File(System.getProperty("java.io.tmpdir"), "privatemusic-${info.version}${assetSuffix}")
+        val target = targetFor(info)
         val tmp = File(target.parentFile, "${target.name}.part")
 
         val conn = URL(info.assetUrl).openConnection() as HttpURLConnection
@@ -107,9 +118,16 @@ object DesktopUpdater {
      * deja un script que espera a que este proceso muera antes de cambiar los
      * ficheros: una app no puede borrarse a sí misma mientras corre.
      *
-     * Devuelve false si no hay nada que hacer; si tiene éxito, no vuelve.
+     * Devuelve false si no hay nada que hacer. Si tiene éxito, vuelve enseguida:
+     * el trabajo lo hace el script cuando este proceso muera, así que el llamante
+     * debe salir a continuación.
+     *
+     * [relaunch] arranca la versión nueva al terminar. Es lo que quieres al pulsar
+     * "Actualizar" (la app se va y vuelve ya actualizada), y lo que **no** quieres
+     * al aplicarla porque el usuario ha cerrado la ventana: cerrar una app y verla
+     * reaparecer sola es de las cosas que hacen desinstalarla.
      */
-    fun install(downloaded: File): Boolean {
+    fun install(downloaded: File, relaunch: Boolean = true): Boolean {
         if (isWindows) {
             return runCatching {
                 ProcessBuilder("msiexec", "/i", downloaded.absolutePath).start()
@@ -145,7 +163,7 @@ object DesktopUpdater {
                 exit 1
             fi
             rm -rf '$old' '${staging.absolutePath}' '${downloaded.absolutePath}'
-            exec '${root.absolutePath}/bin/PrivateMusic'
+            ${if (relaunch) "exec '${root.absolutePath}/bin/PrivateMusic'" else ""}
         """.trimIndent()
 
         return runCatching {

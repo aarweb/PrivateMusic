@@ -9,6 +9,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.lifecycle.lifecycleScope
 import com.aar.privatemusic.downloader.SpotifyResolver
+import com.aar.privatemusic.util.UpdateGate
 import com.aar.privatemusic.widget.ACTION_PLAY_DAILY_MIX
 import kotlinx.coroutines.launch
 import androidx.compose.foundation.layout.Column
@@ -62,6 +63,9 @@ class MainActivity : ComponentActivity() {
                 .launch(Manifest.permission.POST_NOTIFICATIONS)
         }
         handleShareIntent(intent)
+        // Al abrir en frío, no sólo al entrar en Ajustes. Cuelga de `appScope`:
+        // girar la pantalla no debe cancelar una descarga de noventa megas.
+        UpdateGate.checkOnStart(this, app.appScope)
 
         setContent {
             val themeMode by app.settings.themeMode.collectAsState()

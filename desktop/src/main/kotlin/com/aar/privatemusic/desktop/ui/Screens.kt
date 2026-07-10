@@ -317,6 +317,15 @@ fun SettingsScreen(
 
         Text("Aplicación", Modifier.padding(top = 28.dp, bottom = 8.dp), style = MaterialTheme.typography.titleMedium)
         InfoRow("Versión", DesktopUpdater.currentVersion)
+
+        val autoUpdate by settings.autoUpdate.collectAsState()
+        SettingSwitch(
+            "Actualizar automáticamente",
+            "Al abrir la app descarga la versión nueva, y la instala al cerrarla. " +
+                "Nunca corta la música a medias.",
+            autoUpdate,
+        ) { settings.setAutoUpdate(it) }
+
         if (update != null) {
             Button(onClick = onUpdate, modifier = Modifier.padding(top = 12.dp)) {
                 Icon(Icons.Filled.Download, null, Modifier.size(18.dp))

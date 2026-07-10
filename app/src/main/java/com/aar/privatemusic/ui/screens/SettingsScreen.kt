@@ -40,6 +40,7 @@ import com.aar.privatemusic.data.BackupManager
 import com.aar.privatemusic.data.MusicRepository
 import com.aar.privatemusic.downloader.SpotifySync
 import com.aar.privatemusic.util.AppUpdater
+import com.aar.privatemusic.util.UpdateGate
 import kotlinx.coroutines.launch
 
 @Composable
@@ -592,6 +593,26 @@ fun SettingsScreen(app: PrivateMusicApp, onOpenStats: () -> Unit, onOpenEq: () -
         var updateInfo by remember { mutableStateOf<AppUpdater.UpdateInfo?>(null) }
         var updateStatus by remember { mutableStateOf<String?>(null) }
         var downloadProgress by remember { mutableStateOf<Int?>(null) }
+
+        var autoUpdate by remember { mutableStateOf(UpdateGate.autoUpdate(context)) }
+        Row(
+            Modifier.fillMaxWidth().padding(vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text("Actualizar automáticamente", style = MaterialTheme.typography.bodyLarge)
+                Text(
+                    "Al abrir la app, descarga la versión nueva si hay Wi-Fi. Instalarla sigue " +
+                        "pidiendo tu confirmación: Android no deja hacerlo solo.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Switch(
+                checked = autoUpdate,
+                onCheckedChange = { UpdateGate.setAutoUpdate(context, it); autoUpdate = it },
+            )
+        }
 
         SettingsAction(
             title = "Buscar actualizaciones",

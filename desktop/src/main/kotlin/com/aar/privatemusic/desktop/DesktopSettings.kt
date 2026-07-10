@@ -29,6 +29,10 @@ class DesktopSettings(dataDir: File = DesktopStorage.dataDir) {
     private val _normalizeVolume = MutableStateFlow(props.getProperty(KEY_NORMALIZE, "false").toBoolean())
     val normalizeVolume: StateFlow<Boolean> = _normalizeVolume
 
+    /** Descargar sola la versión nueva y aplicarla al cerrar. */
+    private val _autoUpdate = MutableStateFlow(props.getProperty(KEY_AUTO_UPDATE, "true").toBoolean())
+    val autoUpdate: StateFlow<Boolean> = _autoUpdate
+
     /** Iguala el tempo de la saliente al de la entrante durante el fundido. */
     private val _autoMix = MutableStateFlow(props.getProperty(KEY_AUTOMIX, "false").toBoolean())
     val autoMix: StateFlow<Boolean> = _autoMix
@@ -56,6 +60,8 @@ class DesktopSettings(dataDir: File = DesktopStorage.dataDir) {
     fun setNormalizeVolume(value: Boolean) = put(KEY_NORMALIZE, value.toString()) { _normalizeVolume.value = value }
 
     fun setAutoMix(value: Boolean) = put(KEY_AUTOMIX, value.toString()) { _autoMix.value = value }
+
+    fun setAutoUpdate(value: Boolean) = put(KEY_AUTO_UPDATE, value.toString()) { _autoUpdate.value = value }
 
     fun setEqEnabled(value: Boolean) = put(KEY_EQ_ENABLED, value.toString()) { _eqEnabled.value = value }
 
@@ -125,6 +131,7 @@ class DesktopSettings(dataDir: File = DesktopStorage.dataDir) {
         const val KEY_CROSSFADE = "crossfade_sec"
         const val KEY_NORMALIZE = "normalize_volume"
         const val KEY_AUTOMIX = "automix"
+        const val KEY_AUTO_UPDATE = "auto_update"
         const val KEY_DENSITY = "row_density"
         const val KEY_EQ_ENABLED = "eq_enabled"
         const val KEY_EQ_PREAMP = "eq_preamp"

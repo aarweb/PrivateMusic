@@ -93,7 +93,7 @@ fun AppearanceSettings(settings: DesktopSettings) {
 }
 
 @Composable
-private fun SettingSwitch(
+internal fun SettingSwitch(
     title: String,
     subtitle: String,
     checked: Boolean,

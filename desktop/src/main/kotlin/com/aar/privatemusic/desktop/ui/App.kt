@@ -52,6 +52,7 @@ import com.aar.privatemusic.desktop.sync.PhoneDiscovery
 import com.aar.privatemusic.desktop.sync.SyncClient
 import com.aar.privatemusic.desktop.sync.SyncResult
 import com.aar.privatemusic.desktop.update.DesktopUpdater
+import com.aar.privatemusic.desktop.update.PendingUpdate
 import com.aar.privatemusic.downloader.DeezerDownloader
 import com.aar.privatemusic.downloader.InternetArchiveDownloader
 import kotlinx.coroutines.CoroutineScope
@@ -165,7 +166,27 @@ fun App(shortcuts: KeyShortcuts) {
     var syncStatus by remember { mutableStateOf<String?>(null) }
     var update by remember { mutableStateOf<DesktopUpdater.UpdateInfo?>(null) }
 
-    LaunchedEffect(Unit) { update = DesktopUpdater.check() }
+    // Al abrir en frío se mira si hay versión nueva. Si el usuario lo quiere
+    // automático, se descarga aquí y se aplica al cerrar: interrumpir la música
+    // para actualizar es lo contrario de automático.
+    LaunchedEffect(Unit) {
+        val info = DesktopUpdater.check() ?: return@LaunchedEffect
+        update = info
+        if (!settings.autoUpdate.value || PendingUpdate.isReady) return@LaunchedEffect
+        // Si ya se bajó en un arranque anterior, no se vuelve a bajar.
+        DesktopUpdater.cached(info)?.let {
+            PendingUpdate.offer(it, info.version)
+            DesktopFeedback.show("PrivateMusic ${info.version} lista: se instalará al cerrar")
+            return@LaunchedEffect
+        }
+        appScope.launch {
+            runCatching { DesktopUpdater.download(info) {} }
+                .onSuccess {
+                    PendingUpdate.offer(it, info.version)
+                    DesktopFeedback.show("PrivateMusic ${info.version} descargada: se instalará al cerrar")
+                }
+        }
+    }
 
 
     /** Lo que ha llegado, en una línea. Callar el historial sería esconderlo. */

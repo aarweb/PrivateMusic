@@ -95,6 +95,23 @@ object AppUpdater {
         apkUrl: String,
         version: String,
         onProgress: (Int) -> Unit,
+    ): Boolean {
+        if (!download(context, apkUrl, version, onProgress)) return false
+        launchInstaller(context, cachedApk(context))
+        return true
+    }
+
+    /**
+     * Sólo descarga y deja el APK en la caché. Android no permite instalar sin
+     * que el usuario lo confirme en la pantalla del sistema, así que "actualizar
+     * automáticamente" es exactamente esto: tenerlo bajado para que instalarlo
+     * sea un toque y no una espera de noventa megas.
+     */
+    suspend fun download(
+        context: Context,
+        apkUrl: String,
+        version: String,
+        onProgress: (Int) -> Unit,
     ): Boolean = withContext(Dispatchers.IO) {
         val apk = cachedApk(context).apply { parentFile?.mkdirs() }
         val tmp = File(apk.parentFile, "${apk.name}.part")
@@ -130,8 +147,6 @@ object AppUpdater {
 
             context.getSharedPreferences("settings", Context.MODE_PRIVATE)
                 .edit().putString("cached_update_version", version).apply()
-
-            launchInstaller(context, apk)
             true
         } catch (e: Exception) {
             tmp.delete()
