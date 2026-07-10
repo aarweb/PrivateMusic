@@ -255,6 +255,13 @@ class DesktopPlayer(
     }
 
     fun next() {
+        // En mitad de un cruce el índice ya apunta a la entrante: el motor la
+        // adelantó él solo. Sumar aquí otra vez se comería una canción (5 -> 7).
+        // Cortamos el fundido y nos quedamos en la que estaba entrando.
+        if (engine.crossfading.value) {
+            engine.settleCrossfade()
+            return
+        }
         val position = _index.value + 1
         if (position in _queue.value.indices) playAt(position)
     }

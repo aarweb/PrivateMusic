@@ -21,6 +21,7 @@ dependencies {
     implementation(libs.jmdns)
     // Mismo API que en Android: el código que lee /library se parece al que lo escribe.
     implementation(libs.json)
+    testImplementation(kotlin("test"))
 }
 
 // La release la pasa el workflow desde la etiqueta (`-PdesktopVersion=1.68`).

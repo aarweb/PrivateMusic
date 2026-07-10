@@ -174,6 +174,11 @@ class VlcAudioEngine : AudioEngine {
         crossfadeJob = null
     }
 
+    // El `finally` del cruce apaga la saliente y devuelve el volumen íntegro a la
+    // entrante, que es justo lo que queremos al cortar el fundido y quedarnos en
+    // ella. No hay que reiniciar nada: el reproductor entrante ya está sonando.
+    override fun settleCrossfade() = cancelCrossfade()
+
     override fun pause() = active.controls().pause()
 
     override fun resume() = active.controls().play()

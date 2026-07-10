@@ -38,6 +38,15 @@ interface AudioEngine {
      */
     fun crossfadeTo(file: File, gain: Float, durationMs: Long, rateOut: Float = 1f)
 
+    /**
+     * Corta un cruce en marcha dejando sonando la entrante a volumen íntegro,
+     * sin reiniciarla (sigue desde donde iba). A diferencia de [play] no toca la
+     * cola ni el índice. Sirve para que "siguiente" en mitad de un cruce no se
+     * coma una canción: el índice ya apunta a la entrante, así que basta con
+     * apagar el fundido y quedarse en ella.
+     */
+    fun settleCrossfade()
+
     fun pause()
 
     fun resume()
