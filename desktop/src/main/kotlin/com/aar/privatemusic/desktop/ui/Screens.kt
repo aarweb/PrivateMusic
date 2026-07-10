@@ -25,6 +25,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ElevatedCard
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -137,7 +138,12 @@ private fun greeting(): String {
 // ---- Biblioteca ----
 
 @Composable
-fun LibraryScreen(songs: List<Song>, player: DesktopPlayer, currentId: String?) {
+fun LibraryScreen(
+    songs: List<Song>,
+    player: DesktopPlayer,
+    currentId: String?,
+    density: RowDensity,
+) {
     var query by remember { mutableStateOf("") }
     val filtered = remember(songs, query) {
         if (query.isBlank()) songs
@@ -147,15 +153,21 @@ fun LibraryScreen(songs: List<Song>, player: DesktopPlayer, currentId: String?) 
         }
     }
 
-    Column(Modifier.fillMaxSize().padding(24.dp)) {
-        OutlinedTextField(
-            value = query,
-            onValueChange = { query = it },
-            label = { Text("Buscar en la biblioteca") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        Spacer(Modifier.height(16.dp))
+    Column(Modifier.fillMaxSize()) {
+        Row(
+            Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, top = 24.dp, bottom = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("Biblioteca", style = MaterialTheme.typography.headlineSmall)
+            Spacer(Modifier.weight(1f))
+            OutlinedTextField(
+                value = query,
+                onValueChange = { query = it },
+                label = { Text("Filtrar") },
+                singleLine = true,
+                modifier = Modifier.width(280.dp),
+            )
+        }
 
         if (songs.isEmpty()) {
             EmptyState("Biblioteca vacía", "Sincroniza con el móvil desde Ajustes")
@@ -165,98 +177,69 @@ fun LibraryScreen(songs: List<Song>, player: DesktopPlayer, currentId: String?) 
             EmptyState("Sin resultados", "Nada coincide con «$query»")
             return
         }
-
-        LazyColumn {
-            itemsIndexed(filtered, key = { _, s -> s.id }) { index, song ->
-                SongRow(song, playing = song.id == currentId, onClick = { player.playQueue(filtered, index) })
-            }
-        }
+        SongTable(
+            songs = filtered,
+            density = density,
+            currentId = currentId,
+            onPlay = { list, index -> player.playQueue(list, index) },
+            onToggleFavorite = player::toggleFavoriteOf,
+        )
     }
 }
 
 // ---- Playlists ----
 
 @Composable
-fun PlaylistsScreen(dao: MusicDao, player: DesktopPlayer, currentId: String?) {
-    var open by remember { mutableStateOf<Playlist?>(null) }
-    val playlists by dao.observePlaylists().collectAsState(emptyList())
-
-    open?.let { playlist ->
-        PlaylistDetail(playlist, dao, player, currentId, onBack = { open = null })
-        return
-    }
-
-    if (playlists.isEmpty()) {
-        EmptyState("No hay playlists", "Las que tengas en el móvil llegarán al sincronizar")
-        return
-    }
-
-    Column(Modifier.fillMaxSize().padding(24.dp)) {
-        Text("Playlists", style = MaterialTheme.typography.headlineSmall)
-        Spacer(Modifier.height(16.dp))
-        LazyColumn {
-            items(playlists, key = { it.id }) { playlist ->
-                PlaylistRow(playlist, dao, onClick = { open = playlist })
-            }
-        }
-    }
-}
-
-@Composable
-private fun PlaylistRow(playlist: Playlist, dao: MusicDao, onClick: () -> Unit) {
-    val artPaths by dao.observePlaylistArt(playlist.id).collectAsState(emptyList())
-    val size by dao.observePlaylistSize(playlist.id).collectAsState(0)
-
-    Card(onClick = onClick, modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-            PlaylistCover(artPaths, 56.dp)
-            Column(Modifier.padding(start = 16.dp)) {
-                Text(playlist.name, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(
-                    listOfNotNull("$size canciones", playlist.description?.takeIf { it.isNotBlank() })
-                        .joinToString(" · "),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun PlaylistDetail(
+fun PlaylistDetail(
     playlist: Playlist,
     dao: MusicDao,
     player: DesktopPlayer,
     currentId: String?,
-    onBack: () -> Unit,
+    density: RowDensity,
 ) {
     val songs by dao.observePlaylistSongsOrdered(playlist.id).collectAsState(emptyList())
+    val artPaths by dao.observePlaylistArt(playlist.id).collectAsState(emptyList())
 
-    Column(Modifier.fillMaxSize().padding(24.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onBack) { Icon(Icons.Filled.ArrowBack, "Atrás") }
-            Text(playlist.name, Modifier.padding(start = 8.dp), style = MaterialTheme.typography.headlineSmall)
-            Spacer(Modifier.weight(1f))
-            if (songs.isNotEmpty()) {
-                Button(onClick = { player.playQueue(songs, 0) }) {
-                    Icon(Icons.Filled.PlayArrow, null, Modifier.size(18.dp))
-                    Text("  Reproducir")
+    Column(Modifier.fillMaxSize()) {
+        Row(Modifier.padding(24.dp), verticalAlignment = Alignment.CenterVertically) {
+            PlaylistCover(artPaths, 160.dp)
+            Column(Modifier.padding(start = 24.dp)) {
+                Text(playlist.name, style = MaterialTheme.typography.headlineMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Text(
+                    listOfNotNull(
+                        "${songs.size} canciones",
+                        playlist.description?.takeIf { it.isNotBlank() },
+                    ).joinToString(" · "),
+                    Modifier.padding(top = 4.dp),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (songs.isNotEmpty()) {
+                    Row(Modifier.padding(top = 16.dp)) {
+                        Button(onClick = { player.playQueue(songs, 0) }) {
+                            Icon(Icons.Filled.PlayArrow, null, Modifier.size(18.dp))
+                            Text("  Reproducir")
+                        }
+                        Spacer(Modifier.width(12.dp))
+                        FilledTonalButton(onClick = { player.playShuffled(songs) }) {
+                            Icon(Icons.Filled.Shuffle, null, Modifier.size(18.dp))
+                            Text("  Aleatorio")
+                        }
+                    }
                 }
             }
         }
-        Spacer(Modifier.height(12.dp))
         if (songs.isEmpty()) {
             EmptyState("Playlist vacía", "No tiene canciones todavía")
             return
         }
-        LazyColumn {
-            itemsIndexed(songs, key = { _, s -> s.id }) { index, song ->
-                SongRow(song, playing = song.id == currentId, onClick = { player.playQueue(songs, index) })
-            }
-        }
+        SongTable(
+            songs = songs,
+            density = density,
+            currentId = currentId,
+            onPlay = { list, index -> player.playQueue(list, index) },
+            onToggleFavorite = player::toggleFavoriteOf,
+        )
     }
 }
 
@@ -319,6 +302,8 @@ fun SettingsScreen(
         }
 
         PlaybackSettings(settings, engine)
+
+        AppearanceSettings(settings)
 
         DeezerSettings(settings)
 

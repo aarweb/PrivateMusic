@@ -75,6 +75,23 @@ fun PlaybackSettings(settings: DesktopSettings, engine: AudioEngine) {
     EqualizerSettings(settings, engine)
 }
 
+/** Apariencia: por ahora sólo el alto de fila de las tablas. */
+@Composable
+fun AppearanceSettings(settings: DesktopSettings) {
+    val current by settings.rowDensity.collectAsState()
+    Text("Apariencia", Modifier.padding(top = 28.dp, bottom = 8.dp), style = MaterialTheme.typography.titleMedium)
+    Text("Alto de las filas", style = MaterialTheme.typography.bodyLarge)
+    Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        RowDensity.entries.forEach { density ->
+            FilterChip(
+                selected = current == density.name,
+                onClick = { settings.setRowDensity(density.name) },
+                label = { Text(density.label) },
+            )
+        }
+    }
+}
+
 @Composable
 private fun SettingSwitch(
     title: String,

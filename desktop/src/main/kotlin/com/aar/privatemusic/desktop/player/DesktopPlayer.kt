@@ -247,6 +247,11 @@ class DesktopPlayer(
 
     fun toggleFavorite() {
         val song = _current.value ?: return
+        toggleFavoriteOf(song)
+    }
+
+    /** El corazón de una fila cualquiera, no sólo el de la que suena. */
+    fun toggleFavoriteOf(song: Song) {
         scope.launch { dao.setFavorite(song.id, !song.isFavorite) }
     }
 

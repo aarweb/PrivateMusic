@@ -33,6 +33,12 @@ class DesktopSettings(dataDir: File = DesktopStorage.dataDir) {
     private val _autoMix = MutableStateFlow(props.getProperty(KEY_AUTOMIX, "false").toBoolean())
     val autoMix: StateFlow<Boolean> = _autoMix
 
+    /** Alto de fila de las tablas: "COMPACTA" | "NORMAL" | "GRANDE". */
+    private val _rowDensity = MutableStateFlow(props.getProperty(KEY_DENSITY, "NORMAL"))
+    val rowDensity: StateFlow<String> = _rowDensity
+
+    fun setRowDensity(value: String) = put(KEY_DENSITY, value) { _rowDensity.value = value }
+
     private val _eqEnabled = MutableStateFlow(props.getProperty(KEY_EQ_ENABLED, "false").toBoolean())
     val eqEnabled: StateFlow<Boolean> = _eqEnabled
 
@@ -119,6 +125,7 @@ class DesktopSettings(dataDir: File = DesktopStorage.dataDir) {
         const val KEY_CROSSFADE = "crossfade_sec"
         const val KEY_NORMALIZE = "normalize_volume"
         const val KEY_AUTOMIX = "automix"
+        const val KEY_DENSITY = "row_density"
         const val KEY_EQ_ENABLED = "eq_enabled"
         const val KEY_EQ_PREAMP = "eq_preamp"
         const val KEY_EQ_AMPS = "eq_amps"

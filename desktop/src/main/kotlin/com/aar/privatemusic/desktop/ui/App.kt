@@ -9,22 +9,17 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.LibraryMusic
-import androidx.compose.material.icons.filled.QueueMusic
-import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material3.Icon
-import androidx.compose.material3.NavigationRail
-import androidx.compose.material3.NavigationRailItem
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.remember
@@ -32,13 +27,13 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.isCtrlPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.type
+import com.aar.privatemusic.data.db.Playlist
 import com.aar.privatemusic.data.db.openMusicDatabase
 import com.aar.privatemusic.desktop.DesktopSettings
 import com.aar.privatemusic.desktop.DesktopStorage
@@ -63,12 +58,15 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlin.system.exitProcess
 
-private enum class Tab(val label: String, val icon: ImageVector) {
-    INICIO("Inicio", Icons.Filled.Home),
-    BUSCAR("Buscar", Icons.Filled.Search),
-    BIBLIOTECA("Biblioteca", Icons.Filled.LibraryMusic),
-    PLAYLISTS("Playlists", Icons.Filled.QueueMusic),
-    AJUSTES("Ajustes", Icons.Filled.Settings),
+/**
+ * Lo que se ve en el área principal. Los destinos de la barra lateral son las
+ * raíces; artista, álbum y playlist se apilan encima y vuelven con Atrás.
+ */
+private sealed interface View {
+    data class Root(val destination: Destination) : View
+    data class ArtistView(val name: String) : View
+    data class AlbumView(val name: String) : View
+    data class PlaylistView(val playlist: Playlist) : View
 }
 
 @Composable
@@ -124,7 +122,26 @@ fun App(shortcuts: KeyShortcuts) {
     // base (marcarla favorita), hay que refrescar la copia del reproductor.
     LaunchedEffect(songs) { player.refresh(songs) }
 
-    var tab by remember { mutableStateOf(Tab.INICIO) }
+    var view by remember { mutableStateOf<View>(View.Root(Destination.INICIO)) }
+    val back = remember { mutableStateListOf<View>() }
+    var sidebarExpanded by remember { mutableStateOf(true) }
+    val playlists by dao.observePlaylists().collectAsState(emptyList())
+    val densityName by settings.rowDensity.collectAsState()
+    val density = remember(densityName) {
+        runCatching { RowDensity.valueOf(densityName) }.getOrDefault(RowDensity.NORMAL)
+    }
+
+    fun go(destination: View) {
+        // Cambiar de raíz no es "entrar": vacía la pila para que Atrás no
+        // devuelva a un artista que ya no viene a cuento.
+        if (destination is View.Root) back.clear() else back.add(view)
+        view = destination
+    }
+
+    fun goBack() {
+        if (back.isNotEmpty()) view = back.removeAt(back.lastIndex)
+    }
+
     var panelOpen by remember { mutableStateOf(false) }
     var syncing by remember { mutableStateOf(false) }
     var syncStatus by remember { mutableStateOf<String?>(null) }
@@ -173,7 +190,8 @@ fun App(shortcuts: KeyShortcuts) {
                 event.key == Key.DirectionRight && event.isCtrlPressed -> { player.next(); true }
                 event.key == Key.DirectionLeft && event.isCtrlPressed -> { player.previous(); true }
                 event.key == Key.Escape && panelOpen -> { panelOpen = false; true }
-                event.key == Key.F && event.isCtrlPressed -> { tab = Tab.BIBLIOTECA; true }
+                event.key == Key.Escape && back.isNotEmpty() -> { goBack(); true }
+                event.key == Key.F && event.isCtrlPressed -> { go(View.Root(Destination.BIBLIOTECA)); true }
                 event.key == Key.F -> { player.toggleFavorite(); true }
                 else -> false
             }
@@ -183,52 +201,97 @@ fun App(shortcuts: KeyShortcuts) {
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize()) {
             Row(Modifier.weight(1f)) {
-                NavigationRail {
-                    Tab.entries.forEach { entry ->
-                        NavigationRailItem(
-                            selected = tab == entry,
-                            onClick = { tab = entry },
-                            icon = { Icon(entry.icon, entry.label) },
-                            label = { Text(entry.label) },
-                        )
-                    }
-                }
+                Sidebar(
+                    expanded = sidebarExpanded,
+                    onToggle = { sidebarExpanded = !sidebarExpanded },
+                    selected = (view as? View.Root)?.destination,
+                    onSelect = { go(View.Root(it)) },
+                    playlists = playlists,
+                    openPlaylistId = (view as? View.PlaylistView)?.playlist?.id,
+                    onOpenPlaylist = { go(View.PlaylistView(it)) },
+                )
 
-                Box(Modifier.weight(1f)) {
-                    when (tab) {
-                        Tab.INICIO -> HomeScreen(songs, player, ::runSync, syncing)
-                        Tab.BUSCAR -> SearchScreen(
-                            yt = yt,
-                            deezer = deezer,
-                            archive = archive,
-                            settings = settings,
-                            player = player,
-                            songs = songs,
-                            onMessage = { scope.launch { snackbar.showSnackbar(it) } },
-                        )
-                        Tab.BIBLIOTECA -> LibraryScreen(songs, player, current?.id)
-                        Tab.PLAYLISTS -> PlaylistsScreen(dao, player, current?.id)
-                        Tab.AJUSTES -> SettingsScreen(
-                            songs = songs,
-                            settings = settings,
-                            engine = engine,
-                            syncing = syncing,
-                            syncStatus = syncStatus,
-                            onSync = ::runSync,
-                            onSyncAddress = ::runSyncAddress,
-                            update = update,
-                            onUpdate = {
-                                scope.launch {
-                                    val info = update ?: return@launch
-                                    runCatching {
-                                        val file = DesktopUpdater.download(info) { syncStatus = "Descargando… $it %" }
-                                        syncStatus = "Instalando…"
-                                        if (DesktopUpdater.install(file)) exitProcess(0)
-                                        syncStatus = "No se pudo instalar"
-                                    }.onFailure { syncStatus = "Falló la actualización: ${it.message}" }
+                Column(Modifier.weight(1f)) {
+                    // Sólo hay atrás cuando se ha entrado en algo: una flecha muerta
+                    // permanente enseña a ignorarla.
+                    if (back.isNotEmpty()) {
+                        Row(Modifier.padding(start = 12.dp, top = 8.dp)) {
+                            IconButton(::goBack) { Icon(Icons.Filled.ArrowBack, "Atrás") }
+                        }
+                    }
+                    Box(Modifier.weight(1f)) {
+                        when (val v = view) {
+                            is View.Root -> when (v.destination) {
+                                Destination.INICIO -> HomeScreen(songs, player, ::runSync, syncing)
+                                Destination.BUSCAR -> SearchScreen(
+                                    yt = yt,
+                                    deezer = deezer,
+                                    archive = archive,
+                                    settings = settings,
+                                    player = player,
+                                    songs = songs,
+                                    onMessage = { scope.launch { snackbar.showSnackbar(it) } },
+                                )
+                                Destination.BIBLIOTECA -> LibraryScreen(songs, player, current?.id, density)
+                                Destination.ARTISTAS -> ArtistsScreen(songs) { go(View.ArtistView(it)) }
+                                Destination.ALBUMES -> AlbumsScreen(songs) { go(View.AlbumView(it)) }
+                                Destination.FAVORITAS -> FavoritesScreen(
+                                    songs, density, current?.id,
+                                    onPlay = player::playQueue,
+                                    onToggleFavorite = player::toggleFavoriteOf,
+                                )
+                                Destination.AJUSTES -> SettingsScreen(
+                                    songs = songs,
+                                    settings = settings,
+                                    engine = engine,
+                                    syncing = syncing,
+                                    syncStatus = syncStatus,
+                                    onSync = ::runSync,
+                                    onSyncAddress = ::runSyncAddress,
+                                    update = update,
+                                    onUpdate = {
+                                        scope.launch {
+                                            val info = update ?: return@launch
+                                            runCatching {
+                                                val file = DesktopUpdater.download(info) { syncStatus = "Descargando… $it %" }
+                                                syncStatus = "Instalando…"
+                                                if (DesktopUpdater.install(file)) exitProcess(0)
+                                                syncStatus = "No se pudo instalar"
+                                            }.onFailure { syncStatus = "Falló la actualización: ${it.message}" }
+                                        }
+                                    },
+                                )
+                            }
+
+                            is View.ArtistView -> {
+                                val group = remember(songs, v.name) {
+                                    artistsOf(songs).firstOrNull { it.name == v.name }
                                 }
-                            },
-                        )
+                                if (group == null) EmptyState("Artista vacío", "Ya no tiene canciones")
+                                else GroupingDetail(
+                                    group, round = true, density = density, currentId = current?.id,
+                                    onPlay = player::playQueue,
+                                    onShuffle = player::playShuffled,
+                                    onToggleFavorite = player::toggleFavoriteOf,
+                                )
+                            }
+
+                            is View.AlbumView -> {
+                                val group = remember(songs, v.name) {
+                                    albumsOf(songs).firstOrNull { it.name == v.name }
+                                }
+                                if (group == null) EmptyState("Álbum vacío", "Ya no tiene canciones")
+                                else GroupingDetail(
+                                    group, round = false, density = density, currentId = current?.id,
+                                    onPlay = player::playQueue,
+                                    onShuffle = player::playShuffled,
+                                    onToggleFavorite = player::toggleFavoriteOf,
+                                )
+                            }
+
+                            is View.PlaylistView ->
+                                PlaylistDetail(v.playlist, dao, player, current?.id, density)
+                        }
                     }
                 }
 
