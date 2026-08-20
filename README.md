@@ -30,6 +30,8 @@ Requiere Android 8.0+ (arm64).
 **Biblioteca y playlists**
 - Favoritos, historial, búsqueda en vivo, ordenación, snooze de canciones.
 - Playlists normales (drag & drop, portadas personalizadas, pins), **carpetas** para organizarlas, **smart playlists** por reglas y automáticas (Más escuchadas, Olvidadas, Top de tu temporada, **Mix de hoy**).
+- **Mix a medida**: describe lo que te apetece ("algo tranquilo de los 90 sin voz que no haya sonado en un mes") y la app lo convierte, sin nube ni modelo de lenguaje, en una cola de tu biblioteca; se puede guardar como smart playlist.
+- **Importar historial** de Spotify (exportación GDPR), Last.fm (CSV) y YouTube Takeout, para que el Recap y las playlists automáticas tengan memoria desde el primer día.
 - Carátulas de canción personalizables y editor de metadatos.
 - **Copia completa para cambiar de móvil**: un ZIP con canciones, carátulas, letras, playlists, historial y ajustes que se restaura en el móvil nuevo desde Ajustes. Además, backup de base de datos + export/import M3U/CSV. Sin lock-in.
 
@@ -42,6 +44,8 @@ Requiere Android 8.0+ (arm64).
 
 **Inteligencia on-device (sin nube)**
 - Análisis de cada canción al descargarla: **BPM**, **tonalidad Camelot** y huella sónica.
+- **Ánimo, energía, bailabilidad y voz** por canción con los modelos Discogs-EffNet de Essentia (ONNX, en el móvil): se ven en el reproductor y valen como reglas de smart playlist.
+- **Modo correr**: cadencia manual o del podómetro, cola por BPM (también a medio o doble tiempo) y tempo ajustado hasta ±6 % para clavar tus pasos.
 - **Karaoke**: separa la voz de cualquier canción con IA local y reproduce la instrumental con la letra sincronizada para cantar encima. Dos motores: rápido (Open-Unmix, 36 MB) o de alta calidad (MDX-Net, 67 MB), ambos descargados una sola vez.
 - **Radio de esta canción**: cola infinita por similitud sónica de tu propia biblioteca.
 - **Aventura sónica**: una cola que transforma gradualmente una canción en otra, interpolando en el espacio de huellas sónicas.
