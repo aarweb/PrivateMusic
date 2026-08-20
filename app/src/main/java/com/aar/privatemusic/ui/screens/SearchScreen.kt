@@ -1,6 +1,7 @@
 package com.aar.privatemusic.ui.screens
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -147,6 +148,25 @@ fun SearchScreen(app: PrivateMusicApp) {
     val nowPlaying by app.playerController.nowPlaying.collectAsState()
     val isPlaying by app.playerController.isPlaying.collectAsState()
     var previewLoadingId by remember { mutableStateOf<String?>(null) }
+    // Búsqueda de capítulos en curso, y el diálogo cuando el vídeo tiene.
+    var chapterChecking by remember { mutableStateOf<String?>(null) }
+    var chapterPrompt by remember {
+        mutableStateOf<Pair<SearchResult, List<com.aar.privatemusic.downloader.Chapter>>?>(null)
+    }
+
+    fun checkChapters(result: SearchResult) {
+        if (chapterChecking != null) return
+        chapterChecking = result.id
+        scope.launch {
+            val chapters = app.downloader.fetchChapters(result.id)
+            chapterChecking = null
+            if (chapters.size >= 2) {
+                chapterPrompt = result to chapters
+            } else {
+                actionMessage = "Este vídeo no tiene capítulos para dividir"
+            }
+        }
+    }
 
     fun togglePreview(result: SearchResult) {
         // If this row's preview is already loaded (playing, paused or buffering),
@@ -664,10 +684,53 @@ fun SearchScreen(app: PrivateMusicApp) {
                                 else -> app.downloader.cancel(result.id)
                             }
                         },
+                        // Sólo YouTube tiene capítulos; long-press para dividir.
+                        onLongPress = if (!result.isTorrent && !result.isArchive) {
+                            { checkChapters(result) }
+                        } else null,
                     )
                 }
             }
         }
+    }
+
+    chapterChecking?.let {
+        actionMessage = "Buscando capítulos…"
+    }
+
+    chapterPrompt?.let { (result, chapters) ->
+        AlertDialog(
+            onDismissRequest = { chapterPrompt = null },
+            title = { Text("Dividir por capítulos") },
+            text = {
+                Column {
+                    Text("\"${result.title}\" tiene ${chapters.size} capítulos.")
+                    Text(
+                        "Se descargará entero y se partirá en ${chapters.size} pistas, en una playlist nueva.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 8.dp),
+                    )
+                    chapters.take(6).forEach {
+                        Text("• ${it.title}", style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                    if (chapters.size > 6) Text("…y ${chapters.size - 6} más", style = MaterialTheme.typography.bodySmall)
+                }
+            },
+            confirmButton = {
+                Button(onClick = {
+                    app.downloader.enqueueChapters(result, chapters, result.title)
+                    actionMessage = "Dividiendo \"${result.title}\" en ${chapters.size} pistas…"
+                    chapterPrompt = null
+                }) { Text("Dividir en ${chapters.size}") }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    app.downloader.enqueue(result)
+                    chapterPrompt = null
+                }) { Text("Descargar entero") }
+            },
+        )
     }
 
     if (review.isNotEmpty()) {
@@ -824,6 +887,7 @@ private fun Pill(
     )
 }
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun SearchResultRow(
     result: SearchResult,
@@ -836,12 +900,19 @@ private fun SearchResultRow(
     onDownload: () -> Unit,
     onCancel: () -> Unit = {},
     qualityLabel: String? = null,
+    onLongPress: (() -> Unit)? = null,
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
             // Tapping a result streams it (listen first); download is the explicit icon.
-            .clickable { onPreview() }
+            // Long-press on a YouTube result offers splitting by chapters.
+            .then(
+                if (onLongPress != null) Modifier.combinedClickable(
+                    onClick = onPreview,
+                    onLongClick = onLongPress,
+                ) else Modifier.clickable { onPreview() }
+            )
             .padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

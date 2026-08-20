@@ -65,6 +65,18 @@ class YtDownloader(
         return YoutubeDL.getInstance()
     }
 
+    /**
+     * Aplica el cliente de YouTube elegido en Ajustes. Desde 2026 los clientes
+     * por defecto (`web`, `android`, `ios`) exigen un PO token para el stream y
+     * fallan sin él; una cadena como `default,android_vr,web_embedded,tv` prueba
+     * varios y se queda con el primero que sirva. Vacío = por defecto de yt-dlp.
+     */
+    private fun YoutubeDLRequest.applyYoutubeClient(): YoutubeDLRequest {
+        val client = AppSettings.readYoutubeClient(context)
+        if (client.isNotBlank()) addOption("--extractor-args", "youtube:player_client=$client")
+        return this
+    }
+
     val musicDir: File = File(context.getExternalFilesDir(null) ?: context.filesDir, "music")
         .apply { mkdirs() }
 
@@ -107,6 +119,7 @@ class YtDownloader(
     private suspend fun searchInner(query: String, limit: Int): List<SearchResult> =
         withContext(Dispatchers.IO) {
             val request = YoutubeDLRequest("ytsearch$limit:$query").apply {
+                applyYoutubeClient()
                 addOption("--dump-json")
                 addOption("--flat-playlist")
                 addOption("--no-warnings")
@@ -315,6 +328,7 @@ class YtDownloader(
     private suspend fun resolvePlaylistInner(url: String): Pair<String, List<SearchResult>> =
         withContext(Dispatchers.IO) {
             val request = YoutubeDLRequest(url).apply {
+                applyYoutubeClient()
                 addOption("--dump-json")
                 addOption("--flat-playlist")
                 addOption("--no-warnings")
@@ -417,6 +431,7 @@ class YtDownloader(
     private suspend fun streamUrlInner(id: String): String? = withContext(Dispatchers.IO) {
         runCatching {
             val request = YoutubeDLRequest("https://www.youtube.com/watch?v=$id").apply {
+                applyYoutubeClient()
                 addOption("-f", "bestaudio/best")
                 addOption("--no-playlist")
             }
@@ -428,7 +443,8 @@ class YtDownloader(
     fun enqueueUrl(url: String) {
         scope.launch(Dispatchers.IO) {
             try {
-                val info = ytdl().getInfo(url)
+                val infoReq = YoutubeDLRequest(url).apply { applyYoutubeClient() }
+                val info = ytdl().getInfo(infoReq)
                 enqueue(
                     SearchResult(
                         id = info.id ?: return@launch,
@@ -446,6 +462,7 @@ class YtDownloader(
 
     private suspend fun download(result: SearchResult) {
         val request = YoutubeDLRequest("https://www.youtube.com/watch?v=${result.id}").apply {
+            applyYoutubeClient()
             // bestaudio picks the highest-bitrate stream YouTube serves
             // (Opus 160k on normal videos, Opus/AAC 256k when available).
             addOption("-f", "bestaudio/best")
@@ -516,6 +533,154 @@ class YtDownloader(
                 }
             }
         }
+    }
+
+    // ---- Capítulos: un vídeo largo con marcadores → una pista por capítulo ----
+
+    /**
+     * Lee los capítulos de un vídeo (yt-dlp los expone en `chapters`). Lista
+     * vacía si no tiene, o si falla la red. No descarga nada: sólo metadatos.
+     */
+    suspend fun fetchChapters(videoId: String): List<Chapter> = withContext(Dispatchers.IO) {
+        runCatching {
+            val request = YoutubeDLRequest("https://www.youtube.com/watch?v=$videoId").apply {
+                applyYoutubeClient()
+                addOption("--dump-single-json")
+                addOption("--no-warnings")
+                addOption("--skip-download")
+            }
+            val out = ytdl().execute(request).out
+            val json = out.lineSequence().firstOrNull { it.trim().startsWith("{") } ?: return@runCatching emptyList()
+            val chapters = JSONObject(json).optJSONArray("chapters") ?: return@runCatching emptyList<Chapter>()
+            (0 until chapters.length()).mapNotNull { i ->
+                val c = chapters.optJSONObject(i) ?: return@mapNotNull null
+                Chapter(
+                    index = i + 1,
+                    title = c.optString("title").ifBlank { "Capítulo ${i + 1}" },
+                    startSec = c.optDouble("start_time", 0.0),
+                    endSec = c.optDouble("end_time", 0.0),
+                )
+            }
+        }.getOrElse {
+            Log.w("YtDownloader", "no se pudieron leer los capítulos de $videoId", it)
+            emptyList()
+        }
+    }
+
+    /**
+     * Descarga un vídeo y lo parte en una pista por capítulo (`--split-chapters`,
+     * sin recodificar). Cada trozo entra en la biblioteca como su propia canción,
+     * con id `${videoId}_chNNN`, y todas van a una playlist con el título del
+     * vídeo. La carátula del vídeo se reutiliza para todas.
+     */
+    fun enqueueChapters(result: SearchResult, chapters: List<Chapter>, albumTitle: String) {
+        if (chapters.isEmpty()) { enqueue(result); return }
+        val marker = "chapters:${result.id}"
+        cancelled.remove(marker)
+        titles[marker] = albumTitle
+        setState(marker, DownloadState.Queued)
+        DownloadService.ensureRunning(context)
+        val job = scope.launch(downloadDispatcher) {
+            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
+            try {
+                slots.withPermit {
+                    val runHeavy: suspend () -> Unit = { downloadChapters(result, chapters, albumTitle) }
+                    if (isPlayingProvider()) soloWhilePlaying.withLock { runHeavy() } else runHeavy()
+                    setState(marker, DownloadState.Done)
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.e("YtDownloader", "chapter split failed for ${result.id}", e)
+                setState(marker, DownloadState.Failed(e.message ?: "Error"))
+            } finally {
+                jobs.remove(marker)
+                titles.remove(marker)
+                cancelled.remove(marker)
+            }
+        }
+        jobs[marker] = job
+    }
+
+    private suspend fun downloadChapters(result: SearchResult, chapters: List<Chapter>, albumTitle: String) {
+        setState("chapters:${result.id}", DownloadState.Downloading(0f))
+        // Los trozos se nombran por número de capítulo (0-padded), así que el
+        // título del capítulo —con barras u otros caracteres— nunca toca el disco.
+        val chapterTemplate = "${musicDir.absolutePath}/${result.id}_ch%(section_number)03d.%(ext)s"
+        val request = YoutubeDLRequest("https://www.youtube.com/watch?v=${result.id}").apply {
+            applyYoutubeClient()
+            addOption("-f", "bestaudio/best")
+            addOption("--no-playlist")
+            addOption("--no-mtime")
+            addOption("--split-chapters")
+            // El fichero completo iría a un id temporal; luego se borra.
+            addOption("-o", "${musicDir.absolutePath}/${result.id}_full.%(ext)s")
+            addOption("-o", "chapter:$chapterTemplate")
+            addOption("--write-thumbnail")
+            addOption("--convert-thumbnails", "jpg")
+            addOption("-o", "thumbnail:${musicDir.absolutePath}/${result.id}.%(ext)s")
+            if (isPlayingProvider()) addOption("--limit-rate", "1M")
+        }
+        ytdl().execute(request, "chapters:${result.id}") { progress, _, _ ->
+            if ("chapters:${result.id}" !in cancelled) {
+                setState("chapters:${result.id}", DownloadState.Downloading(progress.coerceIn(0f, 100f)))
+            }
+        }
+
+        // El fichero completo ya no hace falta: sólo queríamos los trozos.
+        musicDir.listFiles()?.filter { it.name.startsWith("${result.id}_full") }?.forEach { it.delete() }
+        val artFile = File(musicDir, "${result.id}.jpg").takeIf { it.exists() }
+
+        val playlistId = dao.insertPlaylist(
+            com.aar.privatemusic.data.db.Playlist(
+                name = albumTitle.take(60),
+                createdAt = System.currentTimeMillis(),
+                updatedAt = System.currentTimeMillis(),
+            )
+        )
+        var added = 0
+        chapters.forEach { chapter ->
+            val chId = "${result.id}_ch%03d".format(chapter.index)
+            val audioFile = musicDir.listFiles()
+                ?.firstOrNull { it.nameWithoutExtension == chId && it.extension != "jpg" }
+                ?: return@forEach
+            val quality = readAudioQuality(audioFile.absolutePath, chapter.durationSec)
+            dao.insertSong(
+                Song(
+                    id = chId,
+                    title = chapter.title,
+                    artist = result.artist,
+                    durationSec = chapter.durationSec,
+                    filePath = audioFile.absolutePath,
+                    artPath = artFile?.absolutePath,
+                    thumbnailUrl = result.thumbnailUrl,
+                    addedAt = System.currentTimeMillis(),
+                    album = albumTitle,
+                    trackNumber = chapter.index,
+                    codec = quality?.codec,
+                    bitrateKbps = quality?.bitrateKbps,
+                    sampleRateHz = quality?.sampleRateHz,
+                )
+            )
+            dao.addToPlaylist(
+                com.aar.privatemusic.data.db.PlaylistSongCrossRef(playlistId, chId, added)
+            )
+            added++
+            // Post-proceso barato por pista (letra no aplica; loudness/análisis sí).
+            dao.getSong(chId)?.let { saved ->
+                scope.launch(Dispatchers.IO) {
+                    runCatching {
+                        LoudnessScanner.measureRmsDb(saved.filePath)?.let { dao.updateLoudness(saved.id, it) }
+                    }
+                    runCatching {
+                        AudioAnalyzer.analyze(saved.filePath, saved.durationSec)?.let {
+                            dao.updateAnalysis(saved.id, it.bpm, it.camelot, it.featuresJson())
+                        }
+                    }
+                }
+            }
+        }
+        com.aar.privatemusic.util.Feedback.show("\"$albumTitle\": $added pistas divididas por capítulos")
     }
 
     suspend fun deleteSongFiles(song: Song) = withContext(Dispatchers.IO) {
