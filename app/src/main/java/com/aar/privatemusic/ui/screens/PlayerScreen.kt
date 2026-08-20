@@ -365,8 +365,25 @@ fun PlayerScreen(
 
         Spacer(Modifier.weight(0.6f))
         if (showLyrics && lyrics != null) {
+            // Letras en hangul, kana, cirílico…: un toggle para leerlas en latino.
+            val romanize by app.settings.romanizeLyrics.collectAsState()
+            val foreign = remember(lyrics) { com.aar.privatemusic.lyrics.Romanizer.needsRomanization(lyrics!!) }
+            val shown by produceState(initialValue = lyrics!!, lyrics, romanize, foreign) {
+                value = if (foreign && romanize) {
+                    withContext(Dispatchers.Default) { com.aar.privatemusic.lyrics.Romanizer.romanize(lyrics!!) }
+                } else lyrics!!
+            }
+            if (foreign) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
+                    androidx.compose.material3.FilterChip(
+                        selected = romanize,
+                        onClick = { app.settings.setRomanizeLyrics(!romanize) },
+                        label = { Text(if (romanize) "Romanizado" else "Romanizar") },
+                    )
+                }
+            }
             LyricsPanel(
-                lyrics = lyrics!!,
+                lyrics = shown,
                 positionMs = { sliderPosition.floatValue.toLong() },
                 onSeek = { controller.seekTo(it) },
                 accent = accent,

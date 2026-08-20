@@ -49,6 +49,15 @@ class AppSettings(context: Context) {
     private val _shareWithPc = MutableStateFlow(prefs.getBoolean(KEY_SHARE_PC, false))
     val shareWithPc: StateFlow<Boolean> = _shareWithPc
 
+    /** Mostrar las letras en otros alfabetos romanizadas (karaoke de K-pop/J-pop). */
+    private val _romanizeLyrics = MutableStateFlow(prefs.getBoolean(KEY_ROMANIZE, false))
+    val romanizeLyrics: StateFlow<Boolean> = _romanizeLyrics
+
+    fun setRomanizeLyrics(value: Boolean) {
+        prefs.edit().putBoolean(KEY_ROMANIZE, value).apply()
+        _romanizeLyrics.value = value
+    }
+
     private val _listenBrainzToken = MutableStateFlow(prefs.getString(KEY_LISTENBRAINZ, "") ?: "")
     val listenBrainzToken: StateFlow<String> = _listenBrainzToken
 
@@ -128,6 +137,7 @@ class AppSettings(context: Context) {
         private const val KEY_LISTENBRAINZ = "listenbrainz_token"
         private const val KEY_AUTOMIX = "automix"
         private const val KEY_SHARE_PC = "share_with_pc"
+        private const val KEY_ROMANIZE = "romanize_lyrics"
         private const val KEY_DZ_ARL = "deezer_arl"
         private const val KEY_DZ_USER = "deezer_user"
         private const val KEY_DZ_QUALITY = "deezer_quality"
