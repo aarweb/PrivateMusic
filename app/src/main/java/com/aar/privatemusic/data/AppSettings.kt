@@ -58,6 +58,15 @@ class AppSettings(context: Context) {
         _romanizeLyrics.value = value
     }
 
+    // "" = clientes por defecto de yt-dlp; si no, cadena para player_client.
+    private val _youtubeClient = MutableStateFlow(prefs.getString(KEY_YT_CLIENT, "") ?: "")
+    val youtubeClient: StateFlow<String> = _youtubeClient
+
+    fun setYoutubeClient(value: String) {
+        prefs.edit().putString(KEY_YT_CLIENT, value).apply()
+        _youtubeClient.value = value
+    }
+
     private val _listenBrainzToken = MutableStateFlow(prefs.getString(KEY_LISTENBRAINZ, "") ?: "")
     val listenBrainzToken: StateFlow<String> = _listenBrainzToken
 
@@ -156,6 +165,7 @@ class AppSettings(context: Context) {
         private const val KEY_AUTOMIX = "automix"
         private const val KEY_SHARE_PC = "share_with_pc"
         private const val KEY_ROMANIZE = "romanize_lyrics"
+        private const val KEY_YT_CLIENT = "youtube_client"
         private const val KEY_DZ_ARL = "deezer_arl"
         private const val KEY_DZ_USER = "deezer_user"
         private const val KEY_DZ_QUALITY = "deezer_quality"
@@ -171,6 +181,10 @@ class AppSettings(context: Context) {
         fun readDeezerQuality(context: Context): String =
             context.getSharedPreferences("settings", Context.MODE_PRIVATE)
                 .getString(KEY_DZ_QUALITY, "FLAC") ?: "FLAC"
+
+        fun readYoutubeClient(context: Context): String =
+            context.getSharedPreferences("settings", Context.MODE_PRIVATE)
+                .getString(KEY_YT_CLIENT, "") ?: ""
 
         fun readSponsorBlock(context: Context): Boolean =
             context.getSharedPreferences("settings", Context.MODE_PRIVATE)

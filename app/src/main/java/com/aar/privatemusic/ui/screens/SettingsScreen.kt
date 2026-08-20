@@ -3,6 +3,7 @@ package com.aar.privatemusic.ui.screens
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -357,6 +358,8 @@ fun SettingsScreen(app: PrivateMusicApp, onOpenStats: () -> Unit, onOpenEq: () -
             }
             Switch(checked = sponsorBlock, onCheckedChange = { app.settings.setSponsorBlock(it) })
         }
+
+        YoutubeClientSetting(app)
 
         SettingsAction(
             title = "Importar CSV de Spotify (buscar y descargar)",
@@ -807,6 +810,52 @@ fun SettingsScreen(app: PrivateMusicApp, onOpenStats: () -> Unit, onOpenEq: () -
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(top = 24.dp),
         )
+    }
+}
+
+/**
+ * Cliente de YouTube (avanzado): desde 2026 los clientes por defecto de yt-dlp
+ * (`web`, `android`, `ios`) exigen un PO token y fallan sin él. Elegir una
+ * cadena de reserva (`android_vr`, `web_embedded`, `tv`) evita bastantes fallos.
+ */
+@Composable
+private fun YoutubeClientSetting(app: PrivateMusicApp) {
+    val current by app.settings.youtubeClient.collectAsState()
+    var expanded by remember { mutableStateOf(false) }
+    // etiqueta visible -> valor de player_client ("" = por defecto de yt-dlp)
+    val options = listOf(
+        "Automático (por defecto)" to "",
+        "Recomendado (VR + embebido + TV)" to "default,android_vr,web_embedded,tv",
+        "Sólo TV" to "tv",
+        "Sólo web embebido" to "web_embedded",
+    )
+    val currentLabel = options.firstOrNull { it.second == current }?.first ?: "Personalizado"
+
+    Box {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .clickable { expanded = true }
+                .padding(vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text("Cliente de YouTube (avanzado)", style = MaterialTheme.typography.bodyLarge)
+                Text(
+                    currentLabel + " · si las descargas fallan, prueba otro",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        androidx.compose.material3.DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            options.forEach { (label, value) ->
+                androidx.compose.material3.DropdownMenuItem(
+                    text = { Text(label) },
+                    onClick = { app.settings.setYoutubeClient(value); expanded = false },
+                )
+            }
+        }
     }
 }
 
