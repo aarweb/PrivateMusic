@@ -53,6 +53,9 @@ class PrivateMusicApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        // Antes de abrir la BD o cualquier preferencia: una copia restaurada
+        // desde Ajustes se coloca aquí, con todo aún cerrado.
+        com.aar.privatemusic.data.FullBackup.applyPendingRestore(this)
         val dao = openMusicDatabase(this).musicDao()
         musicDao = dao
         settings = AppSettings(this)

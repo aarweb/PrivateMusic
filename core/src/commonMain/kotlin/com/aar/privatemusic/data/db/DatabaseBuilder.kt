@@ -33,3 +33,19 @@ suspend fun MusicDatabase.walCheckpoint() {
         connection.usePrepared("PRAGMA wal_checkpoint(FULL)") { it.step() }
     }
 }
+
+/**
+ * Copia consistente de la biblioteca en [targetPath], hecha por el propio
+ * SQLite (`VACUUM INTO`): incluye lo que aún vive en el WAL, no se lleva
+ * páginas libres y no le afectan las escrituras concurrentes, al contrario que
+ * copiar `music.db` a mano mientras la app sigue escribiendo. El destino no
+ * debe existir.
+ */
+suspend fun MusicDatabase.snapshotTo(targetPath: String) {
+    useWriterConnection { connection ->
+        connection.usePrepared("VACUUM INTO ?") { statement ->
+            statement.bindText(1, targetPath)
+            statement.step()
+        }
+    }
+}

@@ -31,7 +31,7 @@ Requiere Android 8.0+ (arm64).
 - Favoritos, historial, búsqueda en vivo, ordenación, snooze de canciones.
 - Playlists normales (drag & drop, portadas personalizadas, pins), **carpetas** para organizarlas, **smart playlists** por reglas y automáticas (Más escuchadas, Olvidadas, Top de tu temporada, **Mix de hoy**).
 - Carátulas de canción personalizables y editor de metadatos.
-- Backup de base de datos + export/import M3U/CSV. Sin lock-in.
+- **Copia completa para cambiar de móvil**: un ZIP con canciones, carátulas, letras, playlists, historial y ajustes que se restaura en el móvil nuevo desde Ajustes. Además, backup de base de datos + export/import M3U/CSV. Sin lock-in.
 
 **Reproducción**
 - Media3/ExoPlayer en segundo plano, Android Auto, widget de pantalla de inicio.

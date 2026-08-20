@@ -37,6 +37,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.aar.privatemusic.PrivateMusicApp
 import com.aar.privatemusic.data.BackupManager
+import com.aar.privatemusic.data.FullBackup
 import com.aar.privatemusic.data.MusicRepository
 import com.aar.privatemusic.downloader.SpotifySync
 import com.aar.privatemusic.util.AppUpdater
@@ -114,6 +115,19 @@ fun SettingsScreen(app: PrivateMusicApp, onOpenStats: () -> Unit, onOpenEq: () -
             }
         }
     }
+
+    val fullExportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/zip")
+    ) { uri ->
+        if (uri != null) FullBackup.export(context, uri, app.appScope)
+    }
+    // Restaurar sustituye la biblioteca: se confirma antes de empezar.
+    var restoreCandidate by remember { mutableStateOf<android.net.Uri?>(null) }
+    val fullImportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri -> if (uri != null) restoreCandidate = uri }
+    val backupProgress by FullBackup.progress.collectAsState()
+    val backupOutcome by FullBackup.outcome.collectAsState()
 
     val exportLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/zip")
@@ -482,6 +496,99 @@ fun SettingsScreen(app: PrivateMusicApp, onOpenStats: () -> Unit, onOpenEq: () -
             scope.launch {
                 val file = BackupManager.backupDatabase(context)
                 operationResult = if (file != null) "Copia creada: ${file.name}" else "Error al crear la copia"
+            }
+        }
+
+        val sizeHint = storage?.let { " · ~${"%.0f".format(it.totalBytes / 1024f / 1024f)} MB" } ?: ""
+        SettingsAction(
+            title = "Copia completa para cambiar de móvil",
+            subtitle = "ZIP con todas las canciones, carátulas, letras, playlists, historial y ajustes " +
+                "(incluye tus sesiones de Deezer y ListenBrainz)$sizeHint",
+        ) {
+            if (backupProgress == null) {
+                val stamp = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date())
+                fullExportLauncher.launch("privatemusic-completo-$stamp.zip")
+            }
+        }
+        SettingsAction(
+            title = "Restaurar copia completa",
+            subtitle = "Desde un ZIP de copia completa o un music-*.db; sustituye la biblioteca de este móvil y reinicia la app",
+        ) {
+            if (backupProgress == null) fullImportLauncher.launch(arrayOf("*/*"))
+        }
+
+        backupProgress?.let { p ->
+            Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+                Text(p.phase, style = MaterialTheme.typography.bodySmall, maxLines = 1)
+                val f = p.fraction
+                if (f != null) {
+                    androidx.compose.material3.LinearProgressIndicator(
+                        progress = { f },
+                        modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                    )
+                    Text(
+                        "${"%.0f".format(p.done / 1024f / 1024f)} / ${"%.0f".format(p.total / 1024f / 1024f)} MB" +
+                            (if (p.files > 0) " · ${p.files} archivos" else ""),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                } else {
+                    androidx.compose.material3.LinearProgressIndicator(
+                        modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                    )
+                }
+            }
+        }
+
+        restoreCandidate?.let { uri ->
+            AlertDialog(
+                onDismissRequest = { restoreCandidate = null },
+                title = { Text("¿Restaurar la copia completa?") },
+                text = {
+                    Text(
+                        "La biblioteca, las playlists, el historial y los ajustes de este móvil se " +
+                            "sustituirán por los de la copia. Las canciones se copian a su sitio; " +
+                            "al terminar, la app se reiniciará."
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        restoreCandidate = null
+                        FullBackup.import(context, uri, app.appScope)
+                    }) { Text("Restaurar") }
+                },
+                dismissButton = { TextButton(onClick = { restoreCandidate = null }) { Text("Cancelar") } },
+            )
+        }
+
+        when (val o = backupOutcome) {
+            null -> Unit
+            is FullBackup.Outcome.Restored -> AlertDialog(
+                onDismissRequest = {},
+                title = { Text("Copia restaurada") },
+                text = {
+                    Text(
+                        (if (o.files > 0) {
+                            "${o.songs} canciones y ${o.files} archivos (${"%.0f".format(o.bytes / 1024f / 1024f)} MB) listos."
+                        } else {
+                            "Biblioteca con ${o.songs} canciones lista."
+                        }) + " La app se reiniciará para cargarla; si no se vuelve a abrir sola, ábrela tú."
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        FullBackup.clearOutcome()
+                        FullBackup.restartApp(context)
+                    }) { Text("Reiniciar") }
+                },
+            )
+            is FullBackup.Outcome.Exported -> LaunchedEffect(o) {
+                operationResult = "Copia completa creada: ${o.files} archivos, ${"%.0f".format(o.bytes / 1024f / 1024f)} MB"
+                FullBackup.clearOutcome()
+            }
+            is FullBackup.Outcome.Failed -> LaunchedEffect(o) {
+                operationResult = o.message
+                FullBackup.clearOutcome()
             }
         }
 
