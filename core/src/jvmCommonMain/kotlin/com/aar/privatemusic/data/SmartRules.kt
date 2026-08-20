@@ -28,6 +28,13 @@ enum class RuleField(val label: String, val kind: FieldKind) {
     DURATION("Duración (segundos)", FieldKind.NUMBER),
     PLAY_COUNT("Reproducciones", FieldKind.NUMBER),
     BITRATE("Bitrate (kbps)", FieldKind.NUMBER),
+    // Rasgos de los modelos de Essentia, en porcentaje para que "mayor que 60" se lea solo.
+    DANCEABILITY("Bailable (0-100)", FieldKind.NUMBER),
+    ENERGY("Enérgica (0-100)", FieldKind.NUMBER),
+    RELAXED("Tranquila (0-100)", FieldKind.NUMBER),
+    HAPPY("Alegre (0-100)", FieldKind.NUMBER),
+    SAD("Triste (0-100)", FieldKind.NUMBER),
+    VOCALNESS("Voz (0-100; menos de 30 = instrumental)", FieldKind.NUMBER),
     LAST_PLAYED("Última escucha", FieldKind.DAYS),
     ADDED("Añadida", FieldKind.DAYS),
     FAVORITE("Favorita", FieldKind.BOOL),
@@ -155,6 +162,12 @@ object SmartRuleEngine {
                 RuleField.BPM -> song.bpm?.toDouble()
                 RuleField.DURATION -> song.durationSec.toDouble()
                 RuleField.BITRATE -> song.bitrateKbps?.toDouble()
+                RuleField.DANCEABILITY -> song.danceability?.let { it * 100.0 }
+                RuleField.ENERGY -> song.moodAggressive?.let { it * 100.0 }
+                RuleField.RELAXED -> song.moodRelaxed?.let { it * 100.0 }
+                RuleField.HAPPY -> song.moodHappy?.let { it * 100.0 }
+                RuleField.SAD -> song.moodSad?.let { it * 100.0 }
+                RuleField.VOCALNESS -> song.vocalness?.let { it * 100.0 }
                 else -> (ctx.playCounts[song.id] ?: 0).toDouble()
             }
             if (actual == null) false else when (c.op) {

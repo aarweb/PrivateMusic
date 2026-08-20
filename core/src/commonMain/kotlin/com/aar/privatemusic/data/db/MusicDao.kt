@@ -17,6 +17,7 @@ data class QualityUpdate(val id: String, val codec: String?, val bitrateKbps: In
 data class LoudnessUpdate(val id: String, val loudnessDb: Float)
 data class AnalysisUpdate(val id: String, val bpm: Float?, val camelot: String?, val features: String?)
 data class TailSilenceUpdate(val id: String, val ms: Long)
+data class MoodUpdate(val id: String, val happy: Float, val sad: Float, val aggressive: Float, val relaxed: Float, val danceability: Float, val vocalness: Float)
 
 @Dao
 interface MusicDao {
@@ -177,6 +178,23 @@ interface MusicDao {
 
     @Query("UPDATE songs SET tailSilenceMs = NULL")
     suspend fun resetTailSilence()
+
+    @Query("SELECT * FROM songs WHERE danceability IS NULL")
+    suspend fun songsMissingMood(): List<Song>
+
+    @Query("SELECT COUNT(*) FROM songs WHERE danceability IS NULL")
+    suspend fun countMissingMood(): Int
+
+    @Query(
+        """UPDATE songs SET moodHappy = :happy, moodSad = :sad, moodAggressive = :aggressive,
+           moodRelaxed = :relaxed, danceability = :danceability, vocalness = :vocalness WHERE id = :id"""
+    )
+    suspend fun updateMood(id: String, happy: Float, sad: Float, aggressive: Float, relaxed: Float, danceability: Float, vocalness: Float)
+
+    @Transaction
+    suspend fun updateMoodBatch(rows: List<MoodUpdate>) {
+        rows.forEach { updateMood(it.id, it.happy, it.sad, it.aggressive, it.relaxed, it.danceability, it.vocalness) }
+    }
 
     /**
      * ¿Queda algo por rellenar? Una sola cuenta en vez de cuatro `SELECT *` que

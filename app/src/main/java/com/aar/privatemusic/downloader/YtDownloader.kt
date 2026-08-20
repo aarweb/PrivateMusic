@@ -508,6 +508,12 @@ class YtDownloader(
                         dao.updateAnalysis(saved.id, it.bpm, it.camelot, it.featuresJson())
                     }
                 }
+                // Los modelos se bajan en el backfill del arranque; aquí sólo se usan si ya están.
+                runCatching {
+                    com.aar.privatemusic.util.MoodAnalyzer.analyze(context, saved.filePath, saved.durationSec)?.let {
+                        dao.updateMood(saved.id, it.happy, it.sad, it.aggressive, it.relaxed, it.danceability, it.vocalness)
+                    }
+                }
             }
         }
     }

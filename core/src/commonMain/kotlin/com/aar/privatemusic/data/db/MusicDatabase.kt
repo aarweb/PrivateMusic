@@ -10,7 +10,7 @@ import androidx.sqlite.execSQL
 
 @Database(
     entities = [Song::class, Playlist::class, PlaylistSongCrossRef::class, PlayEvent::class, SmartPlaylist::class, WatchedSource::class, PlaylistFolder::class, PendingDownload::class],
-    version = 15,
+    version = 16,
     exportSchema = false,
 )
 @ConstructedBy(MusicDatabaseConstructor::class)
@@ -177,6 +177,15 @@ internal val MUSIC_MIGRATIONS: Array<Migration> = arrayOf(
     object : Migration(14, 15) {
         override fun migrate(connection: SQLiteConnection) {
             connection.execSQL("ALTER TABLE songs ADD COLUMN note TEXT")
+        }
+    },
+
+    // Estado de ánimo, bailabilidad y voz (modelos Essentia), 0..1; null = pendiente.
+    object : Migration(15, 16) {
+        override fun migrate(connection: SQLiteConnection) {
+            listOf("moodHappy", "moodSad", "moodAggressive", "moodRelaxed", "danceability", "vocalness").forEach {
+                connection.execSQL("ALTER TABLE songs ADD COLUMN $it REAL")
+            }
         }
     },
 )

@@ -436,6 +436,16 @@ fun PlayerScreen(
             style = MaterialTheme.typography.bodyLarge,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        // Rasgos de ánimo (modelos locales): una línea discreta, sólo si hay alguno claro.
+        val moods = remember(song) { com.aar.privatemusic.data.MoodLabels.of(song) }
+        if (moods.isNotEmpty()) {
+            Text(
+                moods.joinToString(" · "),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(top = 4.dp),
+            )
+        }
         song?.note?.takeIf { it.isNotBlank() }?.let { note ->
             Text(
                 "📝 $note",

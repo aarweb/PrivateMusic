@@ -41,6 +41,13 @@ data class Song(
     val metadataResolved: Boolean = false,
     // Nota personal del usuario ("la de la boda", "versión del directo de 2019").
     val note: String? = null,
+    // Rasgos 0..1 de los modelos Discogs-EffNet de Essentia (null = sin analizar).
+    val moodHappy: Float? = null,
+    val moodSad: Float? = null,
+    val moodAggressive: Float? = null,
+    val moodRelaxed: Float? = null,
+    val danceability: Float? = null,
+    val vocalness: Float? = null,
 )
 
 /** Rule-based playlist evaluated live against the library. */

@@ -207,11 +207,14 @@ class PrivateMusicApp : Application() {
             prefs.edit().putInt("tail_silence_v", 2).apply()
         }
 
-        if (repository.pendingBackfills() == 0) return
-        repository.backfillQuality()
-        repository.backfillLoudness()
-        repository.backfillAnalysis()
-        repository.backfillTailSilence()
+        if (repository.pendingBackfills() > 0) {
+            repository.backfillQuality()
+            repository.backfillLoudness()
+            repository.backfillAnalysis()
+            repository.backfillTailSilence()
+        }
+        runCatching { repository.backfillMood(this) }
+            .onFailure { Log.w("PrivateMusicApp", "backfillMood failed", it) }
     }
 
     private companion object {

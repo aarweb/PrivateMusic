@@ -228,7 +228,7 @@ object AudioAnalyzer {
     // ---- decoding ----
 
     /** Decodes up to MAX_SECONDS of mono float PCM from the middle of the file. */
-    private fun decodeMonoPcm(path: String, durationSec: Int): Pair<FloatArray, Int>? {
+    internal fun decodeMonoPcm(path: String, durationSec: Int, maxSeconds: Int = MAX_SECONDS): Pair<FloatArray, Int>? {
         val extractor = MediaExtractor()
         var codec: MediaCodec? = null
         try {
@@ -247,8 +247,8 @@ object AudioAnalyzer {
             val channels = fmt.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
 
             // Seek to the middle so we analyze the body of the song, not the intro.
-            if (durationSec > MAX_SECONDS + 10) {
-                val startUs = (durationSec - MAX_SECONDS) / 2 * 1_000_000L
+            if (durationSec > maxSeconds + 10) {
+                val startUs = (durationSec - maxSeconds) / 2 * 1_000_000L
                 extractor.seekTo(startUs, MediaExtractor.SEEK_TO_CLOSEST_SYNC)
             }
 
@@ -258,7 +258,7 @@ object AudioAnalyzer {
             codec.configure(fmt, null, null, 0)
             codec.start()
 
-            val maxSamples = sampleRate * MAX_SECONDS
+            val maxSamples = sampleRate * maxSeconds
             val pcm = FloatArray(maxSamples)
             var written = 0
             var inputDone = false
@@ -307,7 +307,7 @@ object AudioAnalyzer {
 
     // ---- FFT (iterative radix-2) ----
 
-    private fun fft(re: FloatArray, im: FloatArray) {
+    internal fun fft(re: FloatArray, im: FloatArray) {
         val n = re.size
         var j = 0
         for (i in 1 until n) {

@@ -417,6 +417,31 @@ class MusicRepository(
         }
     }
 
+    /**
+     * Rasgos de ánimo/bailabilidad/voz con los modelos de Essentia. Baja los
+     * modelos la primera vez (21 MB); si no hay red, lo intenta al siguiente
+     * arranque. El backfill de mood va aparte de [pendingBackfills] para que
+     * una biblioteca ya analizada no vuelva a pasar por aquí cada arranque.
+     */
+    suspend fun backfillMood(context: android.content.Context) {
+        if (dao.countMissingMood() == 0) return
+        if (!com.aar.privatemusic.util.MoodAnalyzer.ensureModels(context)) return
+        try {
+            dao.songsMissingMood().chunked(BACKFILL_CHUNK).forEach { chunk ->
+                val rows = chunk.mapNotNull { song ->
+                    com.aar.privatemusic.util.MoodAnalyzer.analyze(context, song.filePath, song.durationSec)?.let {
+                        com.aar.privatemusic.data.db.MoodUpdate(
+                            song.id, it.happy, it.sad, it.aggressive, it.relaxed, it.danceability, it.vocalness,
+                        )
+                    }
+                }
+                if (rows.isNotEmpty()) dao.updateMoodBatch(rows)
+            }
+        } finally {
+            com.aar.privatemusic.util.MoodAnalyzer.release()
+        }
+    }
+
     /** "Song radio": the N sonically closest songs, starting with the seed. */
     suspend fun radioFor(seed: Song, size: Int = 25): List<Song> {
         val seedFeatures = seed.sonicFeatures?.let { AnalysisResult.parseFeatures(it) }
