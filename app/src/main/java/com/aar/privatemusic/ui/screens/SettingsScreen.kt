@@ -802,6 +802,7 @@ private fun DeezerSettings(app: PrivateMusicApp) {
     val quality by app.settings.deezerQuality.collectAsState()
     var loginOpen by remember { mutableStateOf(false) }
     var arlOpen by remember { mutableStateOf(false) }
+    val expired by app.settings.deezerArlExpired.collectAsState()
     val connected = arl.isNotBlank()
 
     Text(
@@ -809,7 +810,30 @@ private fun DeezerSettings(app: PrivateMusicApp) {
         style = MaterialTheme.typography.bodyLarge,
         modifier = Modifier.padding(top = 12.dp),
     )
-    if (connected) {
+    if (connected && expired) {
+        Text(
+            "🟠 Sesión caducada ($user) — vuelve a iniciar sesión o pega el ARL",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.error,
+        )
+        SettingsAction(
+            title = "Volver a iniciar sesión en Deezer",
+            subtitle = "Deezer ha dejado de aceptar la sesión guardada",
+        ) { loginOpen = true }
+        SettingsAction(
+            title = "Pegar ARL a mano",
+            subtitle = "Copia la cookie «arl» desde el navegador de tu PC",
+        ) { arlOpen = true }
+        SettingsAction(
+            title = "Cerrar sesión en Deezer",
+            subtitle = "Olvida la sesión caducada",
+        ) {
+            app.settings.clearDeezerSession()
+            scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                runCatching { android.webkit.CookieManager.getInstance().removeAllCookies(null) }
+            }
+        }
+    } else if (connected) {
         Text(
             "🟢 Conectado como $user" +
                 (app.settings.deezerCountry.takeIf { it.isNotBlank() }?.let { " · $it" } ?: "") +

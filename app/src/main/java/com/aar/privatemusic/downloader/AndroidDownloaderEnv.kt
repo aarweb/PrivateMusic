@@ -28,6 +28,14 @@ class AndroidDeezerAccount(private val context: Context) : DeezerAccount {
     override fun readArl(): String = AppSettings.readDeezerArl(context)
 
     override fun saveSession(arl: String, info: DeezerUserInfo) {
-        AppSettings(context).setDeezerSession(arl, info.name, info.country, info.hasFlac, info.hasHq)
+        app().settings.setDeezerSession(arl, info.name, info.country, info.hasFlac, info.hasHq)
     }
+
+    override fun markArlExpired(expired: Boolean) {
+        app().settings.setDeezerArlExpired(expired)
+    }
+
+    // La instancia compartida de AppSettings: si se creara otra, sus StateFlow
+    // no se enterarían del cambio y la UI seguiría diciendo "conectado".
+    private fun app() = context.applicationContext as com.aar.privatemusic.PrivateMusicApp
 }

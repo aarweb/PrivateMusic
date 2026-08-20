@@ -70,6 +70,21 @@ class AppSettings(context: Context) {
     val deezerUser: StateFlow<String> = _deezerUser
 
     private val _deezerQuality = MutableStateFlow(prefs.getString(KEY_DZ_QUALITY, "FLAC") ?: "FLAC")
+
+    /** Deezer ya no reconoce el ARL guardado; hay que volver a entrar. */
+    private val _deezerArlExpired = MutableStateFlow(prefs.getBoolean(KEY_DZ_EXPIRED, false))
+    val deezerArlExpired: StateFlow<Boolean> = _deezerArlExpired
+
+    /** El aviso de Inicio se puede apartar hasta el siguiente arranque. */
+    private val _deezerExpiredDismissed = MutableStateFlow(false)
+    val deezerExpiredDismissed: StateFlow<Boolean> = _deezerExpiredDismissed
+    fun dismissDeezerExpired() { _deezerExpiredDismissed.value = true }
+
+    fun setDeezerArlExpired(expired: Boolean) {
+        prefs.edit().putBoolean(KEY_DZ_EXPIRED, expired).apply()
+        _deezerArlExpired.value = expired
+        if (!expired) _deezerExpiredDismissed.value = false
+    }
     /** "FLAC" | "MP3_320" | "MP3_128". */
     val deezerQuality: StateFlow<String> = _deezerQuality
 
@@ -111,9 +126,12 @@ class AppSettings(context: Context) {
             .putString(KEY_DZ_COUNTRY, country)
             .putBoolean(KEY_DZ_HAS_FLAC, hasFlac)
             .putBoolean(KEY_DZ_HAS_HQ, hasHq)
+            .putBoolean(KEY_DZ_EXPIRED, false)
             .apply()
         _deezerArl.value = arl
         _deezerUser.value = user
+        _deezerArlExpired.value = false
+        _deezerExpiredDismissed.value = false
         // Al bajar de plan, no dejes seleccionada una calidad que ya no tienes.
         if (!hasFlac && _deezerQuality.value == "FLAC") setDeezerQuality(if (hasHq) "MP3_320" else "MP3_128")
     }
@@ -144,6 +162,7 @@ class AppSettings(context: Context) {
         private const val KEY_DZ_COUNTRY = "deezer_country"
         private const val KEY_DZ_HAS_FLAC = "deezer_has_flac"
         private const val KEY_DZ_HAS_HQ = "deezer_has_hq"
+        private const val KEY_DZ_EXPIRED = "deezer_arl_expired"
 
         fun readDeezerArl(context: Context): String =
             context.getSharedPreferences("settings", Context.MODE_PRIVATE)

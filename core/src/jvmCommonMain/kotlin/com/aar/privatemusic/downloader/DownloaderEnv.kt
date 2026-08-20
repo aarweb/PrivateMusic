@@ -28,4 +28,10 @@ interface DeezerAccount {
 
     /** Se llama tras revalidar la sesión, por si el plan cambió (p.ej. renovó HiFi). */
     fun saveSession(arl: String, info: DeezerUserInfo) {}
+
+    /**
+     * Deezer ha dejado de reconocer el ARL (caduca a los pocos meses). Distinto
+     * de "no hay red": la app debe pedir al usuario que vuelva a entrar.
+     */
+    fun markArlExpired(expired: Boolean) {}
 }

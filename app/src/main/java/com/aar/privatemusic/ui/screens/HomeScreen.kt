@@ -19,6 +19,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.QueueMusic
@@ -32,7 +33,9 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -81,6 +84,53 @@ fun HomeScreen(
             style = MaterialTheme.typography.headlineSmall,
             modifier = Modifier.padding(start = 20.dp, top = 20.dp, bottom = 4.dp),
         )
+
+        // La sesión de Deezer caduca sola cada pocos meses: avisar aquí evita
+        // descubrirlo cuando falla una descarga. Se puede apartar hasta el
+        // siguiente arranque.
+        val deezerExpired by app.settings.deezerArlExpired.collectAsState()
+        val deezerDismissed by app.settings.deezerExpiredDismissed.collectAsState()
+        var arlDialog by remember { mutableStateOf(false) }
+        if (deezerExpired && !deezerDismissed) {
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = MaterialTheme.colorScheme.errorContainer,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp, vertical = 8.dp),
+            ) {
+                Row(
+                    Modifier.padding(start = 16.dp, top = 8.dp, bottom = 8.dp, end = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            "La sesión de Deezer ha caducado",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.onErrorContainer,
+                        )
+                        Text(
+                            "Las descargas Deezer HQ fallarán hasta que vuelvas a entrar.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onErrorContainer,
+                        )
+                        androidx.compose.material3.TextButton(onClick = { arlDialog = true }) {
+                            Text("Pegar ARL")
+                        }
+                    }
+                    androidx.compose.material3.IconButton(onClick = { app.settings.dismissDeezerExpired() }) {
+                        Icon(
+                            androidx.compose.material.icons.Icons.Filled.Close,
+                            contentDescription = "Apartar",
+                            tint = MaterialTheme.colorScheme.onErrorContainer,
+                        )
+                    }
+                }
+            }
+        }
+        if (arlDialog) {
+            DeezerArlDialog(app, onDismiss = { arlDialog = false }, onDone = {})
+        }
 
         if (songs.isEmpty()) {
             // Empty state: guide to the search tab instead of a blank wall.

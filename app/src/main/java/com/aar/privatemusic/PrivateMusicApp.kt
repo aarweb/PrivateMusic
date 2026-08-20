@@ -183,6 +183,24 @@ class PrivateMusicApp : Application() {
                 .onFailure { Log.w("PrivateMusicApp", "repairMissingArt failed", it) }
         }
 
+        // El ARL de Deezer caduca a los pocos meses: mejor enterarse al abrir la
+        // app que al fallar una descarga. Una vez al día, y sin red no se toca.
+        val arl = settings.deezerArl.value
+        if (arl.isNotBlank() && now - prefs.getLong("deezer_arl_checked_at", 0L) > DAY_MS) {
+            when (val check = DeezerDownloader.checkArl(arl)) {
+                is com.aar.privatemusic.downloader.ArlCheck.Valid -> {
+                    settings.setDeezerSession(arl, check.info.name, check.info.country, check.info.hasFlac, check.info.hasHq)
+                    prefs.edit().putLong("deezer_arl_checked_at", now).apply()
+                }
+                is com.aar.privatemusic.downloader.ArlCheck.Rejected -> {
+                    settings.setDeezerArlExpired(true)
+                    prefs.edit().putLong("deezer_arl_checked_at", now).apply()
+                }
+                is com.aar.privatemusic.downloader.ArlCheck.Unreachable ->
+                    Log.w("PrivateMusicApp", "no se pudo revalidar el ARL: ${check.reason}")
+            }
+        }
+
         // v2: threshold went from -24dB to -18dB; recompute existing rows.
         if (prefs.getInt("tail_silence_v", 1) < 2) {
             repository.resetTailSilence()

@@ -210,12 +210,22 @@ class DeezerDownloader(
         session?.let { if (System.currentTimeMillis() - it.ts < 30 * 60_000) return it }
         val arl = account.readArl()
         if (arl.isBlank()) throw IllegalStateException("Inicia sesión en Deezer en Ajustes")
-        val pair = fetchSession(arl)
-            ?: throw IllegalStateException("Sesión de Deezer inválida (vuelve a iniciar sesión)")
-        // Mantén al día el plan por si cambió (p.ej. renovó HiFi).
-        account.saveSession(arl, pair.first)
-        session = pair.second
-        return pair.second
+        val check = checkArl(arl)
+        return when (check) {
+            is ArlCheck.Valid -> {
+                // Mantén al día el plan por si cambió (p.ej. renovó HiFi).
+                account.saveSession(arl, check.info)
+                account.markArlExpired(false)
+                session = check.session
+                check.session
+            }
+            is ArlCheck.Rejected -> {
+                account.markArlExpired(true)
+                throw IllegalStateException("La sesión de Deezer ha caducado: vuelve a iniciar sesión o pega el ARL")
+            }
+            is ArlCheck.Unreachable ->
+                throw IllegalStateException("No se pudo conectar con Deezer (${check.reason})")
+        }
     }
 
     private fun gwCall(method: String, apiToken: String, body: JSONObject): JSONObject {
