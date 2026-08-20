@@ -144,6 +144,32 @@ data class PlaylistSongCrossRef(
     val position: Int,
 )
 
+/** Una cola guardada con nombre, para restaurarla en reproducción más tarde. */
+@Entity(tableName = "saved_queues")
+data class SavedQueue(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val name: String,
+    val createdAt: Long,
+)
+
+/** Las canciones de una cola guardada, en orden. Sin clave foránea, como playlist_songs. */
+@Entity(
+    tableName = "saved_queue_songs",
+    primaryKeys = ["queueId", "position"],
+    indices = [androidx.room.Index("songId")],
+)
+data class SavedQueueSongCrossRef(
+    val queueId: Long,
+    val songId: String,
+    val position: Int,
+)
+
+/** Una cola guardada con su número de canciones, para la lista. */
+data class SavedQueueWithCount(
+    @androidx.room.Embedded val queue: SavedQueue,
+    val songCount: Int,
+)
+
 // ---- Query result holders ----
 
 data class StatsTotals(val plays: Int, val seconds: Long)

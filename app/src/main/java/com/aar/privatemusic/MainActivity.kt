@@ -45,6 +45,7 @@ import com.aar.privatemusic.ui.screens.PlayerScreen
 import com.aar.privatemusic.ui.screens.PlaylistDetailScreen
 import com.aar.privatemusic.ui.screens.PlaylistsScreen
 import com.aar.privatemusic.ui.screens.QueueScreen
+import com.aar.privatemusic.ui.screens.SavedQueuesScreen
 import com.aar.privatemusic.ui.screens.SearchScreen
 import com.aar.privatemusic.ui.screens.SettingsScreen
 import com.aar.privatemusic.ui.screens.SmartPlaylistDetailScreen
@@ -271,7 +272,16 @@ private fun MainScaffold(app: PrivateMusicApp) {
                     },
                 )
             }
-            composable("queue") { QueueScreen(app, onBack = { navController.popBackStack() }) }
+            composable("queue") {
+                QueueScreen(
+                    app,
+                    onBack = { navController.popBackStack() },
+                    onOpenSavedQueues = { navController.navigate("saved_queues") },
+                )
+            }
+            composable("saved_queues") {
+                SavedQueuesScreen(app, onBack = { navController.popBackStack() })
+            }
         }
     }
     }

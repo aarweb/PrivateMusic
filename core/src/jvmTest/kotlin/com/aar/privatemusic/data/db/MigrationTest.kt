@@ -12,10 +12,10 @@ import kotlin.test.assertTrue
 /**
  * Las doce migraciones, ejecutadas de verdad.
  *
- * Una base de datos nueva nace en la versión 16 y no migra nada: el camino que
+ * Una base de datos nueva nace en la versión 17 y no migra nada: el camino que
  * de verdad usa la gente —abrir una biblioteca vieja y subirla— no se prueba
  * solo. Aquí se escribe a mano el esquema de la v1, se mete música dentro, y se
- * comprueba que Room llega a la 16 sin perder una fila.
+ * comprueba que Room llega a la 17 sin perder una fila.
  *
  * Si Room aceptase la base pero el esquema resultante no coincidiera con las
  * entidades, la validación de Room al abrir la haría fallar. Esa validación
@@ -66,7 +66,7 @@ class MigrationTest {
     }
 
     @Test
-    fun `sube de la version 1 a la 16 sin perder datos`(): Unit = runBlocking {
+    fun `sube de la version 1 a la 17 sin perder datos`(): Unit = runBlocking {
         val dir = Files.createTempDirectory("pm-migration").toFile()
         createVersion1(dir)
 
@@ -104,6 +104,12 @@ class MigrationTest {
         assertEquals(0, dao.watchedSourcesOnce().size)
         assertEquals(0, dao.pendingDownloads().size)
         assertEquals(0, dao.playCountsOnce().size)
+
+        // La 16→17 crea las colas guardadas: guardar y releer una prueba que
+        // existen y respetan el orden.
+        val qid = dao.insertSavedQueue(SavedQueue(name = "Mi cola", createdAt = 3000))
+        dao.replaceSavedQueueSongs(qid, listOf("abc"))
+        assertEquals(listOf("abc"), dao.savedQueueSongs(qid).map { it.id })
 
         dir.deleteRecursively()
     }

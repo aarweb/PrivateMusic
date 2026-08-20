@@ -11,6 +11,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Bookmarks
 import androidx.compose.material.icons.filled.Casino
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DragHandle
@@ -37,7 +38,7 @@ import sh.calvin.reorderable.rememberReorderableLazyListState
 import java.io.File
 
 @Composable
-fun QueueScreen(app: PrivateMusicApp, onBack: () -> Unit) {
+fun QueueScreen(app: PrivateMusicApp, onBack: () -> Unit, onOpenSavedQueues: () -> Unit = {}) {
     val controller = app.playerController
     val queue by controller.queue.collectAsState()
     val currentIndex by controller.currentIndex.collectAsState()
@@ -63,7 +64,9 @@ fun QueueScreen(app: PrivateMusicApp, onBack: () -> Unit) {
     androidx.compose.runtime.LaunchedEffect(Unit) {
         if (currentIndex > 0) lazyListState.scrollToItem(currentIndex)
     }
-    var savingQueue by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+    // null = cerrado; "queue" o "playlist" = diálogo de nombre para ese destino.
+    var savingAs by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf<String?>(null) }
+    var saveMenu by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
     val scope = androidx.compose.runtime.rememberCoroutineScope()
 
     Column(Modifier.fillMaxSize()) {
@@ -81,25 +84,50 @@ fun QueueScreen(app: PrivateMusicApp, onBack: () -> Unit) {
                 style = MaterialTheme.typography.titleMedium,
                 modifier = Modifier.weight(1f),
             )
+            IconButton(onClick = onOpenSavedQueues) {
+                Icon(Icons.Filled.Bookmarks, contentDescription = "Colas guardadas")
+            }
             IconButton(onClick = { controller.reshuffleUpcoming() }) {
                 Icon(Icons.Filled.Casino, contentDescription = "Rebarajar lo siguiente")
             }
-            IconButton(onClick = { savingQueue = true }) {
-                Icon(Icons.Filled.PlaylistAdd, contentDescription = "Guardar cola como playlist")
+            Box {
+                IconButton(onClick = { saveMenu = true }, enabled = queue.isNotEmpty()) {
+                    Icon(Icons.Filled.PlaylistAdd, contentDescription = "Guardar cola")
+                }
+                androidx.compose.material3.DropdownMenu(
+                    expanded = saveMenu,
+                    onDismissRequest = { saveMenu = false },
+                ) {
+                    androidx.compose.material3.DropdownMenuItem(
+                        text = { Text("Guardar como cola") },
+                        onClick = { saveMenu = false; savingAs = "queue" },
+                    )
+                    androidx.compose.material3.DropdownMenuItem(
+                        text = { Text("Guardar como playlist") },
+                        onClick = { saveMenu = false; savingAs = "playlist" },
+                    )
+                }
             }
         }
 
-        if (savingQueue) {
+        savingAs?.let { target ->
+            val asQueue = target == "queue"
             var name by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf("") }
             androidx.compose.material3.AlertDialog(
-                onDismissRequest = { savingQueue = false },
-                title = { Text("Guardar cola como playlist") },
+                onDismissRequest = { savingAs = null },
+                title = { Text(if (asQueue) "Guardar como cola" else "Guardar como playlist") },
                 text = {
                     androidx.compose.material3.OutlinedTextField(
                         value = name,
                         onValueChange = { name = it },
                         placeholder = { Text("Nombre") },
                         singleLine = true,
+                        supportingText = {
+                            Text(
+                                if (asQueue) "Podrás restaurarla luego sin perder la cola actual"
+                                else "Se copiarán las ${queue.size} canciones actuales"
+                            )
+                        },
                     )
                 },
                 confirmButton = {
@@ -108,15 +136,21 @@ fun QueueScreen(app: PrivateMusicApp, onBack: () -> Unit) {
                         if (trimmed.isNotEmpty()) {
                             val ids = queue.map { it.mediaId }
                             scope.launch {
-                                val plId = app.repository.createPlaylist(trimmed)
-                                ids.forEach { app.repository.addToPlaylist(plId, it) }
+                                if (asQueue) {
+                                    app.repository.saveQueue(trimmed, ids)
+                                    com.aar.privatemusic.util.Feedback.show("Cola \"$trimmed\" guardada")
+                                } else {
+                                    val plId = app.repository.createPlaylist(trimmed)
+                                    ids.forEach { app.repository.addToPlaylist(plId, it) }
+                                    com.aar.privatemusic.util.Feedback.show("Playlist \"$trimmed\" creada")
+                                }
                             }
                         }
-                        savingQueue = false
+                        savingAs = null
                     }) { Text("Guardar") }
                 },
                 dismissButton = {
-                    androidx.compose.material3.TextButton(onClick = { savingQueue = false }) { Text("Cancelar") }
+                    androidx.compose.material3.TextButton(onClick = { savingAs = null }) { Text("Cancelar") }
                 },
             )
         }

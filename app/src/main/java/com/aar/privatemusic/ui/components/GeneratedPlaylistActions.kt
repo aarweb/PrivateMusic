@@ -1,5 +1,6 @@
 package com.aar.privatemusic.ui.components
 
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -42,6 +43,7 @@ fun GeneratedPlaylistActions(
 ) {
     val scope = rememberCoroutineScope()
     var saving by remember { mutableStateOf(false) }
+    var savingQueue by remember { mutableStateOf(false) }
 
     if (songs.isEmpty()) return
 
@@ -64,9 +66,38 @@ fun GeneratedPlaylistActions(
             Icon(Icons.Filled.Shuffle, contentDescription = null)
             Text("Aleatorio", Modifier.padding(start = 6.dp))
         }
-        OutlinedButton(onClick = { saving = true }, modifier = Modifier.padding(start = 12.dp)) {
-            Icon(Icons.Filled.Save, contentDescription = "Guardar como playlist")
+        Box {
+            var menu by remember { mutableStateOf(false) }
+            OutlinedButton(onClick = { menu = true }, modifier = Modifier.padding(start = 12.dp)) {
+                Icon(Icons.Filled.Save, contentDescription = "Guardar")
+            }
+            androidx.compose.material3.DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                androidx.compose.material3.DropdownMenuItem(
+                    text = { Text("Guardar como playlist") },
+                    onClick = { menu = false; saving = true },
+                )
+                androidx.compose.material3.DropdownMenuItem(
+                    text = { Text("Guardar como cola") },
+                    onClick = { menu = false; savingQueue = true },
+                )
+            }
         }
+    }
+
+    if (savingQueue) {
+        SaveAsPlaylistDialog(
+            defaultName = defaultName,
+            count = songs.size,
+            title = "Guardar como cola",
+            onDismiss = { savingQueue = false },
+            onConfirm = { name ->
+                savingQueue = false
+                scope.launch {
+                    app.repository.saveQueue(name, songs.map { it.id })
+                    Feedback.show("Cola \"$name\" guardada")
+                }
+            },
+        )
     }
 
     if (saving) {
@@ -92,18 +123,19 @@ private fun SaveAsPlaylistDialog(
     count: Int,
     onDismiss: () -> Unit,
     onConfirm: (String) -> Unit,
+    title: String = "Guardar como playlist",
 ) {
     var name by remember { mutableStateOf(defaultName) }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Guardar como playlist") },
+        title = { Text(title) },
         text = {
             OutlinedTextField(
                 value = name,
                 onValueChange = { name = it },
                 singleLine = true,
                 label = { Text("Nombre") },
-                supportingText = { Text("Se copiarán las $count canciones actuales") },
+                supportingText = { Text("Se guardarán las $count canciones actuales") },
             )
         },
         confirmButton = {

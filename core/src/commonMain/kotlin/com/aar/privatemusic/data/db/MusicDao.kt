@@ -535,4 +535,49 @@ interface MusicDao {
     /** Loosen every playlist inside a folder (used before deleting the folder). */
     @Query("UPDATE playlists SET folderId = NULL WHERE folderId = :folderId")
     suspend fun clearFolder(folderId: Long)
+    // ---- Saved queues (foto de la cola de reproducción con nombre) ----
+
+    @Insert
+    suspend fun insertSavedQueue(queue: SavedQueue): Long
+
+    @Insert
+    suspend fun addToSavedQueue(ref: SavedQueueSongCrossRef)
+
+    @Query("UPDATE saved_queues SET name = :name WHERE id = :id")
+    suspend fun renameSavedQueue(id: Long, name: String)
+
+    @Query("DELETE FROM saved_queues WHERE id = :id")
+    suspend fun deleteSavedQueue(id: Long)
+
+    @Query("DELETE FROM saved_queue_songs WHERE queueId = :queueId")
+    suspend fun clearSavedQueue(queueId: Long)
+
+    @Transaction
+    suspend fun replaceSavedQueueSongs(queueId: Long, songIds: List<String>) {
+        clearSavedQueue(queueId)
+        songIds.forEachIndexed { i, songId -> addToSavedQueue(SavedQueueSongCrossRef(queueId, songId, i)) }
+    }
+
+    /** Colas guardadas con su número de canciones, la más reciente primero. */
+    @Query(
+        """
+        SELECT q.*, (SELECT COUNT(*) FROM saved_queue_songs sq WHERE sq.queueId = q.id) AS songCount
+        FROM saved_queues q ORDER BY q.createdAt DESC
+        """
+    )
+    fun observeSavedQueues(): Flow<List<SavedQueueWithCount>>
+
+    /**
+     * Las canciones de una cola guardada, en orden. INNER JOIN: si una canción se
+     * borró de la biblioteca, su hueco en la cola se cae solo (no revienta).
+     */
+    @Query(
+        """
+        SELECT s.* FROM songs s
+        INNER JOIN saved_queue_songs sq ON sq.songId = s.id
+        WHERE sq.queueId = :queueId
+        ORDER BY sq.position ASC
+        """
+    )
+    suspend fun savedQueueSongs(queueId: Long): List<Song>
 }

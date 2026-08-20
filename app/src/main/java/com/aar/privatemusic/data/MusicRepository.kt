@@ -70,6 +70,34 @@ class MusicRepository(
         return dao.insertPlaylist(Playlist(name = name, createdAt = now, updatedAt = now))
     }
 
+    // ---- Colas guardadas ----
+
+    fun observeSavedQueues(): Flow<List<com.aar.privatemusic.data.db.SavedQueueWithCount>> =
+        dao.observeSavedQueues()
+
+    /** Guarda [songIds] como una cola con nombre; devuelve su id. */
+    suspend fun saveQueue(name: String, songIds: List<String>): Long {
+        val clean = name.trim().ifEmpty { "Cola" }
+        val id = dao.insertSavedQueue(
+            com.aar.privatemusic.data.db.SavedQueue(name = clean, createdAt = System.currentTimeMillis())
+        )
+        dao.replaceSavedQueueSongs(id, songIds)
+        return id
+    }
+
+    /** Las canciones de una cola guardada, en su orden. */
+    suspend fun savedQueueSongs(queueId: Long): List<Song> = dao.savedQueueSongs(queueId)
+
+    suspend fun renameSavedQueue(id: Long, name: String) {
+        val clean = name.trim()
+        if (clean.isNotEmpty()) dao.renameSavedQueue(id, clean)
+    }
+
+    suspend fun deleteSavedQueue(id: Long) {
+        dao.clearSavedQueue(id)
+        dao.deleteSavedQueue(id)
+    }
+
     suspend fun renamePlaylist(id: Long, name: String, description: String?) {
         val clean = name.trim()
         if (clean.isEmpty()) return

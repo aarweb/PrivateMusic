@@ -9,8 +9,8 @@ import androidx.sqlite.SQLiteConnection
 import androidx.sqlite.execSQL
 
 @Database(
-    entities = [Song::class, Playlist::class, PlaylistSongCrossRef::class, PlayEvent::class, SmartPlaylist::class, WatchedSource::class, PlaylistFolder::class, PendingDownload::class],
-    version = 16,
+    entities = [Song::class, Playlist::class, PlaylistSongCrossRef::class, PlayEvent::class, SmartPlaylist::class, WatchedSource::class, PlaylistFolder::class, PendingDownload::class, SavedQueue::class, SavedQueueSongCrossRef::class],
+    version = 17,
     exportSchema = false,
 )
 @ConstructedBy(MusicDatabaseConstructor::class)
@@ -186,6 +186,26 @@ internal val MUSIC_MIGRATIONS: Array<Migration> = arrayOf(
             listOf("moodHappy", "moodSad", "moodAggressive", "moodRelaxed", "danceability", "vocalness").forEach {
                 connection.execSQL("ALTER TABLE songs ADD COLUMN $it REAL")
             }
+        }
+    },
+    // Colas guardadas: una foto de la cola de reproducción con nombre, para
+    // restaurarla más tarde sin convertirla en playlist.
+    object : Migration(16, 17) {
+        override fun migrate(connection: SQLiteConnection) {
+            connection.execSQL(
+                """CREATE TABLE IF NOT EXISTS saved_queues (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    name TEXT NOT NULL,
+                    createdAt INTEGER NOT NULL)"""
+            )
+            connection.execSQL(
+                """CREATE TABLE IF NOT EXISTS saved_queue_songs (
+                    queueId INTEGER NOT NULL,
+                    songId TEXT NOT NULL,
+                    position INTEGER NOT NULL,
+                    PRIMARY KEY(queueId, position))"""
+            )
+            connection.execSQL("CREATE INDEX IF NOT EXISTS index_saved_queue_songs_songId ON saved_queue_songs(songId)")
         }
     },
 )
