@@ -62,6 +62,7 @@ import com.aar.privatemusic.downloader.DeezerSource
 import com.aar.privatemusic.downloader.DeezerTrack
 import com.aar.privatemusic.downloader.DownloadState
 import com.aar.privatemusic.downloader.SearchResult
+import com.aar.privatemusic.downloader.PlaylistLinkResolver
 import com.aar.privatemusic.downloader.SpotifyResolver
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -229,7 +230,7 @@ fun SearchScreen(app: PrivateMusicApp) {
                 return@launch
             }
             if ((source == "deezer" || source == "deezerhq") && !query.trim().startsWith("http") &&
-                !SpotifyResolver.isSpotifyUrl(query.trim())
+                !PlaylistLinkResolver.isSupportedLink(query.trim())
             ) {
                 if (source == "deezerhq" && app.settings.deezerArl.value.isBlank()) {
                     error = "Inicia sesión en Deezer en Ajustes para descargar en HQ"
@@ -242,21 +243,27 @@ fun SearchScreen(app: PrivateMusicApp) {
                 searching = false
                 return@launch
             }
-            if (SpotifyResolver.isSpotifyUrl(query.trim())) {
-                runCatching { SpotifyResolver.resolve(query.trim()) }
+            if (PlaylistLinkResolver.isSupportedLink(query.trim())) {
+                val svc = PlaylistLinkResolver.serviceOf(query.trim())
+                val svcName = when (svc) {
+                    com.aar.privatemusic.downloader.LinkService.DEEZER -> "Deezer"
+                    com.aar.privatemusic.downloader.LinkService.APPLE_MUSIC -> "Apple Music"
+                    com.aar.privatemusic.downloader.LinkService.TIDAL -> "Tidal"
+                    else -> "Spotify"
+                }
+                runCatching { PlaylistLinkResolver.resolve(query.trim()) }
                     .onSuccess { pl ->
                         results = emptyList()
                         spotifyTracks = pl.tracks
                         playlistTitle = pl.name
                         playlistUrl = query.trim()
-                        // Nunca truncar en silencio: Spotify no sirve más de 100
-                        // pistas por playlist y el usuario creería tenerlas todas.
-                        if (pl.truncated) {
+                        // Sólo Spotify tiene el tope de 100 del embed; avisar sin engañar.
+                        if (pl.truncated && svc == com.aar.privatemusic.downloader.LinkService.SPOTIFY) {
                             actionMessage = "Spotify sólo deja leer ${pl.tracks.size} pistas por " +
                                 "playlist; si tiene más, el resto se quedará fuera"
                         }
                     }
-                    .onFailure { error = "Error al leer Spotify: ${it.message}" }
+                    .onFailure { error = "Error al leer $svcName: ${it.message}" }
             } else if (isPlaylistUrl(query.trim())) {
                 runCatching { app.downloader.resolvePlaylist(query.trim()) }
                     .onSuccess { (title, entries) ->

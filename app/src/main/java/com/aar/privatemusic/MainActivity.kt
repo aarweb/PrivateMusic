@@ -8,6 +8,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.lifecycle.lifecycleScope
+import com.aar.privatemusic.downloader.PlaylistLinkResolver
 import com.aar.privatemusic.downloader.SpotifyResolver
 import com.aar.privatemusic.util.UpdateGate
 import com.aar.privatemusic.widget.ACTION_PLAY_DAILY_MIX
@@ -93,9 +94,9 @@ class MainActivity : ComponentActivity() {
                 Regex("""https?://\S+""").find(text)?.value?.let { url ->
                     when {
                         "youtu" in url -> app.downloader.enqueueUrl(url)
-                        SpotifyResolver.isSpotifyUrl(url) -> app.appScope.launch {
+                        PlaylistLinkResolver.isSupportedLink(url) -> app.appScope.launch {
                             runCatching {
-                                val (title, tracks) = SpotifyResolver.resolve(url)
+                                val (title, tracks) = PlaylistLinkResolver.resolve(url)
                                 val playlistId = if (tracks.size > 1)
                                     app.repository.createPlaylist(title.take(40)) else null
                                 tracks.forEach { track ->
