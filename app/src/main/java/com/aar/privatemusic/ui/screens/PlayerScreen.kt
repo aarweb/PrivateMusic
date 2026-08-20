@@ -899,6 +899,7 @@ private fun formatSemitones(semitones: Int): String =
  * tempo no cambia), cada uno con su deslizador. Se aplica al soltar, no en
  * cada pixel: reconfigurar Sonic en cada movimiento hace saltar el audio.
  */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 private fun TempoPitchDialog(
     speed: Float,
@@ -923,7 +924,8 @@ private fun TempoPitchDialog(
                     valueRange = 0.5f..2f,
                     steps = 29,
                 )
-                Row(
+                // Cinco chips no caben en una fila en un móvil estrecho: que salten.
+                androidx.compose.foundation.layout.FlowRow(
                     Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
