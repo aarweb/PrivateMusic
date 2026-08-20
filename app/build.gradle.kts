@@ -12,12 +12,14 @@ android {
         applicationId = "com.aar.privatemusic"
         minSdk = 26
         targetSdk = 35
-        versionCode = 79
-        versionName = "1.78"
+        versionCode = 80
+        versionName = "1.79"
 
         ndk {
             // arm64 only: every phone since ~2016. Halves the APK (yt-dlp/ffmpeg per ABI).
+            // `-Pemulator` añade x86_64 para poder probar en el emulador de Android Studio.
             abiFilters += listOf("arm64-v8a")
+            if (project.hasProperty("emulator")) abiFilters += "x86_64"
         }
 
         // AcoustID application key (audio-fingerprint identify). Kept out of the
@@ -97,4 +99,6 @@ dependencies {
     implementation(libs.nanohttpd)
     implementation(libs.mediarouter)
     implementation(libs.libtorrent4j)
+    // El motor de torrents trae un .so por ABI; el de x86_64 sólo hace falta en el emulador.
+    if (project.hasProperty("emulator")) implementation(libs.libtorrent4j.x86)
 }
