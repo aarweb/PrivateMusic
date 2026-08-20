@@ -39,6 +39,8 @@ data class Song(
     val isrc: String? = null,        // international standard recording code
     // True once the online identify pipeline ran (avoids re-running forever).
     val metadataResolved: Boolean = false,
+    // Nota personal del usuario ("la de la boda", "versión del directo de 2019").
+    val note: String? = null,
 )
 
 /** Rule-based playlist evaluated live against the library. */

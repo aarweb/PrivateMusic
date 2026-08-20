@@ -220,6 +220,9 @@ interface MusicDao {
     @Query("UPDATE songs SET title = :title, artist = :artist WHERE id = :id")
     suspend fun updateSongMeta(id: String, title: String, artist: String)
 
+    @Query("UPDATE songs SET note = :note WHERE id = :id")
+    suspend fun updateSongNote(id: String, note: String?)
+
     @Query("UPDATE songs SET artPath = :artPath WHERE id = :id")
     suspend fun updateSongArt(id: String, artPath: String)
 

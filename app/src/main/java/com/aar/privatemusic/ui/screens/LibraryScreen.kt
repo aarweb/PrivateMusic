@@ -167,7 +167,8 @@ fun LibraryScreen(app: PrivateMusicApp, onOpenArtist: (String) -> Unit = {}) {
             .filter {
                 query.isBlank() ||
                     it.title.contains(query, ignoreCase = true) ||
-                    it.artist.contains(query, ignoreCase = true)
+                    it.artist.contains(query, ignoreCase = true) ||
+                    it.note?.contains(query, ignoreCase = true) == true
             }
             .let { list ->
                 when (sortMode) {
@@ -532,6 +533,7 @@ fun LibraryScreen(app: PrivateMusicApp, onOpenArtist: (String) -> Unit = {}) {
     songForEdit?.let { song ->
         var title by remember(song.id) { mutableStateOf(song.title) }
         var artist by remember(song.id) { mutableStateOf(song.artist) }
+        var note by remember(song.id) { mutableStateOf(song.note.orEmpty()) }
         AlertDialog(
             onDismissRequest = { songForEdit = null },
             title = { Text("Editar metadatos") },
@@ -549,12 +551,20 @@ fun LibraryScreen(app: PrivateMusicApp, onOpenArtist: (String) -> Unit = {}) {
                         label = { Text("Artista") },
                         singleLine = true,
                     )
+                    OutlinedTextField(
+                        value = note,
+                        onValueChange = { note = it },
+                        label = { Text("Nota (opcional)") },
+                        modifier = Modifier.padding(top = 8.dp),
+                        maxLines = 3,
+                    )
                 }
             },
             confirmButton = {
                 TextButton(onClick = {
-                    if (title.isNotBlank()) {
-                        scope.launch { app.repository.updateSongMeta(song.id, title, artist) }
+                    scope.launch {
+                        if (title.isNotBlank()) app.repository.updateSongMeta(song.id, title, artist)
+                        if (note != song.note.orEmpty()) app.repository.updateSongNote(song.id, note)
                     }
                     songForEdit = null
                 }) { Text("Guardar") }

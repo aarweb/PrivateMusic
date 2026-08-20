@@ -53,7 +53,7 @@ object BackupManager {
                         // Full library as CSV
                         zip.putNextEntry(ZipEntry("library.csv"))
                         val csv = buildString {
-                            appendLine("id,title,artist,durationSec,favorite,filePath")
+                            appendLine("id,title,artist,durationSec,favorite,filePath,note")
                             songs.forEach { s ->
                                 appendLine(
                                     listOf(
@@ -61,6 +61,7 @@ object BackupManager {
                                         s.durationSec.toString(),
                                         if (s.isFavorite) "1" else "0",
                                         csvEscape(relativize(s.filePath, roots)),
+                                        csvEscape(s.note.orEmpty()),
                                     ).joinToString(",")
                                 )
                             }
@@ -77,6 +78,7 @@ object BackupManager {
                                 pl.description?.takeIf { it.isNotBlank() }?.let { appendLine("#PLAYLIST-DESC:$it") }
                                 plSongs.forEach { s ->
                                     appendLine("#EXTINF:${s.durationSec},${s.artist} - ${s.title}")
+                                    s.note?.takeIf { it.isNotBlank() }?.let { appendLine("#EXTNOTE:${it.replace('\n', ' ')}") }
                                     appendLine(relativize(s.filePath, roots))
                                 }
                             }

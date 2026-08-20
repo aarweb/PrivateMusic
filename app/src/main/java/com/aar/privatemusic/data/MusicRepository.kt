@@ -195,6 +195,9 @@ class MusicRepository(
     suspend fun updateSongMeta(id: String, title: String, artist: String) =
         dao.updateSongMeta(id, title.trim(), artist.trim())
 
+    suspend fun updateSongNote(id: String, note: String?) =
+        dao.updateSongNote(id, note?.trim()?.ifBlank { null })
+
     /** Copies the picked image into the music dir and points the song at it. */
     suspend fun setSongArt(context: android.content.Context, song: Song, uri: android.net.Uri): Boolean {
         val file = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {

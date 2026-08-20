@@ -70,6 +70,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.media3.common.Player
 import androidx.palette.graphics.Palette
@@ -418,6 +419,17 @@ fun PlayerScreen(
             style = MaterialTheme.typography.bodyLarge,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        song?.note?.takeIf { it.isNotBlank() }?.let { note ->
+            Text(
+                "📝 $note",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(top = 4.dp, start = 24.dp, end = 24.dp),
+            )
+        }
 
         // Calidad real del fichero. Plegado dice sólo el formato; el resto de la
         // ficha técnica (bitrate, BPM, tonalidad) se despliega al tocarlo.
