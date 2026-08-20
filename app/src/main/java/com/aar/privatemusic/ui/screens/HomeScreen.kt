@@ -19,6 +19,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.DirectionsRun
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Favorite
@@ -205,6 +206,8 @@ fun HomeScreen(
 
         // Segunda fila: lo que no es "dale al play", sino "dime qué quieres".
         var customMixOpen by remember { mutableStateOf(false) }
+        var runningOpen by remember { mutableStateOf(false) }
+        val runState by app.runningMode.state.collectAsState()
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 4.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -218,9 +221,23 @@ fun HomeScreen(
                 modifier = Modifier.weight(1f),
                 onClick = { customMixOpen = true },
             )
+            PlayCard(
+                title = "Correr",
+                subtitle = runState?.let { "${it.targetSpm} pasos/min" } ?: "Al ritmo de tus pasos",
+                icon = Icons.AutoMirrored.Filled.DirectionsRun,
+                container = if (runState != null) MaterialTheme.colorScheme.primaryContainer
+                else MaterialTheme.colorScheme.surfaceVariant,
+                onContainer = if (runState != null) MaterialTheme.colorScheme.onPrimaryContainer
+                else MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f),
+                onClick = { runningOpen = true },
+            )
         }
         if (customMixOpen) {
             CustomMixDialog(app, onDismiss = { customMixOpen = false })
+        }
+        if (runningOpen) {
+            RunningDialog(app, onDismiss = { runningOpen = false })
         }
 
         // --- Seguir escuchando ---

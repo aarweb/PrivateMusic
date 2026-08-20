@@ -102,8 +102,23 @@ class PlaybackService : MediaLibraryService() {
                 // would otherwise fail silently forever from the notification.
                 if (player.currentMediaItem?.mediaId?.startsWith("preview:") == true) {
                     player.clearMediaItems()
+                    android.util.Log.w("Playback", "player error", error)
+                    return
                 }
                 android.util.Log.w("Playback", "player error", error)
+                // Media3 1.5: al cambiar el tempo a mitad de canción (tempo manual,
+                // AutoMix, modo correr) el sink vacía la cadena de procesadores y
+                // `Sonic.queueEndOfStream` puede lanzar ArrayIndexOutOfBounds. El
+                // reproductor se queda en ERROR con la cola intacta: se vuelve a
+                // preparar y se sigue donde iba, con los parámetros nuevos ya puestos.
+                if (error.cause is ArrayIndexOutOfBoundsException && player.mediaItemCount > 0) {
+                    val index = player.currentMediaItemIndex
+                    val position = player.currentPosition
+                    android.util.Log.w("Playback", "recovering from audio processor error at $index/$position")
+                    player.prepare()
+                    player.seekTo(index, position)
+                    player.play()
+                }
             }
 
             override fun onIsPlayingChanged(isPlaying: Boolean) {

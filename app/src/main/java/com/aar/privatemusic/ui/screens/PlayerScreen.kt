@@ -436,6 +436,20 @@ fun PlayerScreen(
             style = MaterialTheme.typography.bodyLarge,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        // Modo correr: cadencia objetivo y cuánto se está estirando el tempo.
+        val runState by app.runningMode.state.collectAsState()
+        runState?.let { r ->
+            Text(
+                buildString {
+                    append("🏃 ${r.targetSpm} pasos/min")
+                    r.measuredSpm?.let { append(" (midiendo $it)") }
+                    r.songBpm?.let { append(" · ${it.toInt()} BPM × ${"%.2f".format(r.speed)}") }
+                },
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.tertiary,
+                modifier = Modifier.padding(top = 4.dp),
+            )
+        }
         // Rasgos de ánimo (modelos locales): una línea discreta, sólo si hay alguno claro.
         val moods = remember(song) { com.aar.privatemusic.data.MoodLabels.of(song) }
         if (moods.isNotEmpty()) {

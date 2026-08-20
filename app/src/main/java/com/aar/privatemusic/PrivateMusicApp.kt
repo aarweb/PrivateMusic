@@ -46,6 +46,8 @@ class PrivateMusicApp : Application() {
         private set
     lateinit var libraryShare: com.aar.privatemusic.sync.LibraryShare
         private set
+    lateinit var runningMode: com.aar.privatemusic.player.RunningMode
+        private set
     lateinit var musicDao: com.aar.privatemusic.data.db.MusicDao
         private set
 
@@ -95,6 +97,7 @@ class PrivateMusicApp : Application() {
                 }
             }
         }
+        runningMode = com.aar.privatemusic.player.RunningMode(this, dao, playerController, appScope)
         // 80/20: downloads throttle themselves while audio is actually playing.
         downloader.isPlayingProvider = { playerController.isPlaying.value }
         // Restore the last session's queue (paused) after a cold start.
