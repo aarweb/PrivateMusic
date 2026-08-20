@@ -551,16 +551,7 @@ class YtDownloader(
             }
             val out = ytdl().execute(request).out
             val json = out.lineSequence().firstOrNull { it.trim().startsWith("{") } ?: return@runCatching emptyList()
-            val chapters = JSONObject(json).optJSONArray("chapters") ?: return@runCatching emptyList<Chapter>()
-            (0 until chapters.length()).mapNotNull { i ->
-                val c = chapters.optJSONObject(i) ?: return@mapNotNull null
-                Chapter(
-                    index = i + 1,
-                    title = c.optString("title").ifBlank { "Capítulo ${i + 1}" },
-                    startSec = c.optDouble("start_time", 0.0),
-                    endSec = c.optDouble("end_time", 0.0),
-                )
-            }
+            Chapter.parseFrom(json)
         }.getOrElse {
             Log.w("YtDownloader", "no se pudieron leer los capítulos de $videoId", it)
             emptyList()

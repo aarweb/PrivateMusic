@@ -115,8 +115,10 @@ fun SearchScreen(app: PrivateMusicApp) {
     var playlistTitle by remember { mutableStateOf(SearchCache.playlistTitle) }
     var playlistUrl by remember { mutableStateOf(SearchCache.playlistUrl) }
     var actionMessage by remember { mutableStateOf<String?>(null) }
-    // Non-null when the URL was a Spotify playlist/album/track.
+    // Non-null when the URL was a Spotify/Deezer/Apple/Tidal playlist/album/track.
     var spotifyTracks by remember { mutableStateOf(SearchCache.spotifyTracks) }
+    // Nombre del servicio de origen del enlace ("Spotify", "Deezer"…), para la cabecera.
+    var linkServiceName by remember { mutableStateOf<String?>(null) }
     // Selected source ("yt", "deezer"...); null shows the sources grid.
     var source by remember { mutableStateOf(SearchCache.source) }
     var deezerTracks by remember { mutableStateOf(SearchCache.deezerTracks) }
@@ -206,6 +208,7 @@ fun SearchScreen(app: PrivateMusicApp) {
         playlistUrl = null
         actionMessage = null
         spotifyTracks = null
+        linkServiceName = null
         deezerTracks = null
         scope.launch {
             if (source == "1337x") {
@@ -255,6 +258,7 @@ fun SearchScreen(app: PrivateMusicApp) {
                     .onSuccess { pl ->
                         results = emptyList()
                         spotifyTracks = pl.tracks
+                        linkServiceName = svcName
                         playlistTitle = pl.name
                         playlistUrl = query.trim()
                         // Sólo Spotify tiene el tope de 100 del embed; avisar sin engañar.
@@ -496,7 +500,7 @@ fun SearchScreen(app: PrivateMusicApp) {
                             val count = spotifyTracks?.size ?: results.size
                             Text(
                                 "$title · $count " + (if (count == 1) "canción" else "canciones") +
-                                    if (spotifyTracks != null) " · Spotify" else "",
+                                    (linkServiceName?.let { " · $it" } ?: ""),
                                 style = MaterialTheme.typography.titleMedium,
                             )
                             Row(
