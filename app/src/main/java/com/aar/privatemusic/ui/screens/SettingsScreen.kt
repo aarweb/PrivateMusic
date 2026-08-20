@@ -694,6 +694,7 @@ private fun DeezerSettings(app: PrivateMusicApp) {
     val user by app.settings.deezerUser.collectAsState()
     val quality by app.settings.deezerQuality.collectAsState()
     var loginOpen by remember { mutableStateOf(false) }
+    var arlOpen by remember { mutableStateOf(false) }
     val connected = arl.isNotBlank()
 
     Text(
@@ -748,10 +749,17 @@ private fun DeezerSettings(app: PrivateMusicApp) {
             title = "Iniciar sesión en Deezer",
             subtitle = "🔴 No conectado — descarga FLAC/MP3 directo con tu cuenta",
         ) { loginOpen = true }
+        SettingsAction(
+            title = "Pegar ARL a mano",
+            subtitle = "Si el inicio de sesión falla: copia la cookie «arl» desde el navegador de tu PC",
+        ) { arlOpen = true }
     }
 
     if (loginOpen) {
         DeezerLoginDialog(app) { loginOpen = false }
+    }
+    if (arlOpen) {
+        DeezerArlDialog(app, onDismiss = { arlOpen = false }, onDone = {})
     }
 }
 

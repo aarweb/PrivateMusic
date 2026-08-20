@@ -27,6 +27,21 @@ data class DeezerUserInfo(
     val hasHq: Boolean,
 )
 
+/** Resultado de comprobar un ARL contra Deezer. */
+sealed class ArlCheck {
+    /** Sesión real: Deezer reconoce al usuario. */
+    class Valid internal constructor(
+        val info: DeezerUserInfo,
+        internal val session: DeezerDownloader.Session,
+    ) : ArlCheck()
+
+    /** Deezer respondió, pero el ARL no corresponde a ninguna sesión (USER_ID 0). */
+    data object Rejected : ArlCheck()
+
+    /** No se pudo preguntar a Deezer: red, TLS, HTTP de error o respuesta ilegible. */
+    class Unreachable(val reason: String, val cause: Throwable? = null) : ArlCheck()
+}
+
 /**
  * Descarga directa desde Deezer (FLAC / MP3 320 / 128) usando la sesión (cookie
  * ARL) del propio usuario. El audio de Deezer viaja cifrado (BF_CBC_STRIPE); se
@@ -53,7 +68,7 @@ class DeezerDownloader(
 
     /** Sesión gw-light cacheada (token CSRF + license token), se refresca sola. */
     @Volatile private var session: Session? = null
-    private data class Session(val apiToken: String, val licenseToken: String, val sid: String, val ts: Long)
+    internal data class Session(val apiToken: String, val licenseToken: String, val sid: String, val ts: Long)
 
     fun stateKey(trackId: Long) = "dz_$trackId"
 
@@ -250,7 +265,16 @@ class DeezerDownloader(
          * Valida el ARL y obtiene el plan del usuario. Devuelve también la sesión
          * (token CSRF + license token + sid) para reutilizarla en las descargas.
          */
-        private fun fetchSession(arl: String): Pair<DeezerUserInfo, Session>? = runCatching {
+        private fun fetchSession(arl: String): Pair<DeezerUserInfo, Session>? =
+            (checkArl(arl) as? ArlCheck.Valid)?.let { it.info to it.session }
+
+        /**
+         * Como [fetchSession], pero distinguiendo por qué falla: un ARL que Deezer
+         * rechaza (caducado, mal copiado) no es lo mismo que no poder llegar a
+         * Deezer (sin red, TLS, 403 del antibot). El login necesita esa diferencia
+         * para decirle algo útil al usuario en vez de quedarse esperando.
+         */
+        fun checkArl(arl: String): ArlCheck = try {
             val conn = URL(
                 "https://www.deezer.com/ajax/gw-light.php" +
                     "?method=deezer.getUserData&input=3&api_version=1.0&api_token="
@@ -267,26 +291,38 @@ class DeezerDownloader(
             val sid = conn.headerFields["Set-Cookie"].orEmpty()
                 .mapNotNull { it.split(";").firstOrNull()?.trim() }
                 .firstOrNull { it.startsWith("sid=") }?.removePrefix("sid=").orEmpty()
-            val body = conn.inputStream.bufferedReader().readText().also { conn.disconnect() }
-            val results = JSONObject(body).optJSONObject("results")
-                ?: return@runCatching null
-            val user = results.optJSONObject("USER") ?: return@runCatching null
-            // USER_ID 0 => el ARL no es válido / caducó.
-            if (user.optLong("USER_ID", 0L) == 0L) return@runCatching null
-            val options = user.optJSONObject("OPTIONS")
-            val apiToken = results.optString("checkForm")
-            val licenseToken = options?.optString("license_token").orEmpty()
-            val info = DeezerUserInfo(
-                name = user.optString("BLOG_NAME").ifBlank { user.optString("EMAIL", "Deezer") },
-                // El país viene en results.COUNTRY (no dentro de USER).
-                country = results.optString("COUNTRY").ifBlank { user.optString("COUNTRY") },
-                hasFlac = options?.optBoolean("web_lossless", false) == true ||
-                    options?.optBoolean("mobile_lossless", false) == true,
-                hasHq = options?.optBoolean("web_hq", false) == true ||
-                    options?.optBoolean("mobile_hq", false) == true,
-            )
-            info to Session(apiToken, licenseToken, sid, System.currentTimeMillis())
-        }.getOrNull()
+            val status = conn.responseCode
+            if (status >= 400) {
+                conn.disconnect()
+                ArlCheck.Unreachable("Deezer ha respondido HTTP $status")
+            } else {
+                val body = conn.inputStream.bufferedReader().readText().also { conn.disconnect() }
+                val results = JSONObject(body).optJSONObject("results")
+                val user = results?.optJSONObject("USER")
+                if (results == null || user == null) {
+                    ArlCheck.Unreachable("Respuesta de Deezer sin datos de usuario")
+                } else if (user.optLong("USER_ID", 0L) == 0L) {
+                    // USER_ID 0 => el ARL no es válido / caducó.
+                    ArlCheck.Rejected
+                } else {
+                    val options = user.optJSONObject("OPTIONS")
+                    val apiToken = results.optString("checkForm")
+                    val licenseToken = options?.optString("license_token").orEmpty()
+                    val info = DeezerUserInfo(
+                        name = user.optString("BLOG_NAME").ifBlank { user.optString("EMAIL", "Deezer") },
+                        // El país viene en results.COUNTRY (no dentro de USER).
+                        country = results.optString("COUNTRY").ifBlank { user.optString("COUNTRY") },
+                        hasFlac = options?.optBoolean("web_lossless", false) == true ||
+                            options?.optBoolean("mobile_lossless", false) == true,
+                        hasHq = options?.optBoolean("web_hq", false) == true ||
+                            options?.optBoolean("mobile_hq", false) == true,
+                    )
+                    ArlCheck.Valid(info, Session(apiToken, licenseToken, sid, System.currentTimeMillis()))
+                }
+            }
+        } catch (e: Exception) {
+            ArlCheck.Unreachable(e.javaClass.simpleName + (e.message?.let { ": $it" } ?: ""), e)
+        }
 
         /** Sólo la info del usuario, para el flujo de login. */
         fun fetchUserInfo(arl: String): DeezerUserInfo? = fetchSession(arl)?.first
