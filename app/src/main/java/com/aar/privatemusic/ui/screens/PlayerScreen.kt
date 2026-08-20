@@ -151,6 +151,7 @@ fun PlayerScreen(
     var castDialogOpen by remember { mutableStateOf(false) }
     var qualityExpanded by remember { mutableStateOf(false) }
     val playbackSpeed by controller.playbackSpeed.collectAsState()
+    val pitchSemitones by controller.pitchSemitones.collectAsState()
 
     val lyrics by produceState<com.aar.privatemusic.lyrics.Lyrics?>(initialValue = null, song?.id) {
         // produceState recuerda su valor SIN clave: al cambiar de canción sólo
@@ -250,7 +251,10 @@ fun PlayerScreen(
                         },
                     )
                     DropdownMenuItem(
-                        text = { Text(if (playbackSpeed == 1f) "Velocidad" else "Velocidad (${playbackSpeed}x)") },
+                        text = {
+                            val state = tempoPitchLabel(playbackSpeed, pitchSemitones)
+                            Text(if (state == null) "Tempo y tono" else "Tempo y tono ($state)")
+                        },
                         onClick = {
                             playerMenuOpen = false
                             speedDialogOpen = true
@@ -348,35 +352,13 @@ fun PlayerScreen(
             com.aar.privatemusic.cast.CastRouteDialog(onDismiss = { castDialogOpen = false })
         }
         if (speedDialogOpen) {
-            AlertDialog(
-                onDismissRequest = { speedDialogOpen = false },
-                title = { Text("Velocidad de reproducción") },
-                text = {
-                    Column {
-                        listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f).forEach { speed ->
-                            Text(
-                                if (speed == 1f) "1x (normal)" else "${speed}x",
-                                style = MaterialTheme.typography.bodyLarge,
-                                color = if (playbackSpeed == speed) MaterialTheme.colorScheme.primary
-                                else MaterialTheme.colorScheme.onSurface,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable {
-                                        controller.setPlaybackSpeed(speed)
-                                        speedDialogOpen = false
-                                    }
-                                    .padding(vertical = 12.dp),
-                            )
-                        }
-                        Text(
-                            "El tono no cambia (time-stretch).",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                },
-                confirmButton = {},
-                dismissButton = { TextButton(onClick = { speedDialogOpen = false }) { Text("Cerrar") } },
+            TempoPitchDialog(
+                speed = playbackSpeed,
+                semitones = pitchSemitones,
+                onSpeed = { controller.setPlaybackSpeed(it) },
+                onSemitones = { controller.setPitchSemitones(it) },
+                onReset = { controller.resetPlaybackParameters() },
+                onDismiss = { speedDialogOpen = false },
             )
         }
 
@@ -862,5 +844,99 @@ private fun PlayerActionChip(
             selectedLabelColor = accent,
             selectedLeadingIconColor = accent,
         ),
+    )
+}
+
+/** "1,25× · +2 st", o null si todo está en su sitio. */
+private fun tempoPitchLabel(speed: Float, semitones: Int): String? {
+    val parts = buildList {
+        if (speed != 1f) add(formatSpeed(speed))
+        if (semitones != 0) add(formatSemitones(semitones))
+    }
+    return parts.takeIf { it.isNotEmpty() }?.joinToString(" · ")
+}
+
+private fun formatSpeed(speed: Float): String {
+    // "1,50" → "1,5×", "1,00" → "1×", "0,75" se queda.
+    val txt = String.format(java.util.Locale.getDefault(), "%.2f", speed).trimEnd('0').trimEnd(',', '.')
+    return "$txt×"
+}
+
+private fun formatSemitones(semitones: Int): String =
+    (if (semitones > 0) "+$semitones" else "$semitones") + " st"
+
+/**
+ * Tempo (0,5×–2×, time-stretch: el tono no cambia) y tono (±12 semitonos: el
+ * tempo no cambia), cada uno con su deslizador. Se aplica al soltar, no en
+ * cada pixel: reconfigurar Sonic en cada movimiento hace saltar el audio.
+ */
+@Composable
+private fun TempoPitchDialog(
+    speed: Float,
+    semitones: Int,
+    onSpeed: (Float) -> Unit,
+    onSemitones: (Int) -> Unit,
+    onReset: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var speedDraft by remember(speed) { mutableFloatStateOf(speed) }
+    var semitonesDraft by remember(semitones) { mutableFloatStateOf(semitones.toFloat()) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Tempo y tono") },
+        text = {
+            Column {
+                Text("Tempo: ${formatSpeed(speedDraft)}", style = MaterialTheme.typography.bodyLarge)
+                Slider(
+                    value = speedDraft,
+                    onValueChange = { speedDraft = (Math.round(it * 20f) / 20f) },
+                    onValueChangeFinished = { onSpeed(speedDraft) },
+                    valueRange = 0.5f..2f,
+                    steps = 29,
+                )
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    listOf(0.75f, 1f, 1.25f, 1.5f, 2f).forEach { preset ->
+                        AssistChip(
+                            onClick = { speedDraft = preset; onSpeed(preset) },
+                            label = { Text(formatSpeed(preset)) },
+                            colors = if (speedDraft == preset) {
+                                androidx.compose.material3.AssistChipDefaults.assistChipColors(
+                                    containerColor = MaterialTheme.colorScheme.primaryContainer,
+                                )
+                            } else {
+                                androidx.compose.material3.AssistChipDefaults.assistChipColors()
+                            },
+                        )
+                    }
+                }
+                Text(
+                    "Tono: ${formatSemitones(semitonesDraft.toInt())}",
+                    style = MaterialTheme.typography.bodyLarge,
+                    modifier = Modifier.padding(top = 16.dp),
+                )
+                Slider(
+                    value = semitonesDraft,
+                    onValueChange = { semitonesDraft = Math.round(it).toFloat() },
+                    onValueChangeFinished = { onSemitones(semitonesDraft.toInt()) },
+                    valueRange = -12f..12f,
+                    steps = 23,
+                )
+                Text(
+                    "El tempo no cambia el tono y el tono no cambia el tempo.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Cerrar") } },
+        dismissButton = {
+            TextButton(
+                onClick = { speedDraft = 1f; semitonesDraft = 0f; onReset() },
+                enabled = speedDraft != 1f || semitonesDraft != 0f,
+            ) { Text("Restablecer") }
+        },
     )
 }

@@ -5,6 +5,7 @@ import android.content.Context
 import android.net.Uri
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
+import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
@@ -90,6 +91,9 @@ class PlayerController(
         future.addListener({
             val c = future.get()
             controller = c
+            // El servicio arranca en 1×/0 st: si el usuario ya había tocado el
+            // tempo o el tono antes de reconectar, se vuelve a aplicar.
+            if (_playbackSpeed.value != 1f || _pitchSemitones.value != 0) applyPlaybackParameters()
             pendingRestore?.let { restore ->
                 pendingRestore = null
                 if (c.mediaItemCount == 0) restore()
@@ -456,13 +460,33 @@ class PlayerController(
         if (at >= 0) orderBeforeShuffle = snapshot.toMutableList().apply { removeAt(at) }
     }
 
-    // User-facing playback speed (pitch preserved by the Sonic processor).
+    // Tempo (time-stretch, el tono no cambia) y tono (semitonos, el tempo no
+    // cambia), independientes: Sonic acepta velocidad y pitch por separado.
     private val _playbackSpeed = MutableStateFlow(1f)
     val playbackSpeed: StateFlow<Float> = _playbackSpeed
 
+    private val _pitchSemitones = MutableStateFlow(0)
+    val pitchSemitones: StateFlow<Int> = _pitchSemitones
+
     fun setPlaybackSpeed(speed: Float) {
-        controller?.setPlaybackSpeed(speed)
-        _playbackSpeed.value = speed
+        _playbackSpeed.value = speed.coerceIn(0.5f, 2f)
+        applyPlaybackParameters()
+    }
+
+    fun setPitchSemitones(semitones: Int) {
+        _pitchSemitones.value = semitones.coerceIn(-12, 12)
+        applyPlaybackParameters()
+    }
+
+    fun resetPlaybackParameters() {
+        _playbackSpeed.value = 1f
+        _pitchSemitones.value = 0
+        applyPlaybackParameters()
+    }
+
+    private fun applyPlaybackParameters() {
+        val pitch = Math.pow(2.0, _pitchSemitones.value / 12.0).toFloat()
+        controller?.playbackParameters = PlaybackParameters(_playbackSpeed.value, pitch)
     }
 
     fun cycleRepeatMode() {
