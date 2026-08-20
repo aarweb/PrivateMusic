@@ -38,6 +38,7 @@ import androidx.compose.ui.unit.dp
 import com.aar.privatemusic.PrivateMusicApp
 import com.aar.privatemusic.data.BackupManager
 import com.aar.privatemusic.data.FullBackup
+import com.aar.privatemusic.data.HistoryImport
 import com.aar.privatemusic.data.MusicRepository
 import com.aar.privatemusic.downloader.SpotifySync
 import com.aar.privatemusic.util.AppUpdater
@@ -128,6 +129,17 @@ fun SettingsScreen(app: PrivateMusicApp, onOpenStats: () -> Unit, onOpenEq: () -
     ) { uri -> if (uri != null) restoreCandidate = uri }
     val backupProgress by FullBackup.progress.collectAsState()
     val backupOutcome by FullBackup.outcome.collectAsState()
+    val historyLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri -> if (uri != null) HistoryImport.start(context, uri, app.musicDao, app.appScope) }
+    val historyProgress by HistoryImport.progress.collectAsState()
+    val historyOutcome by HistoryImport.outcome.collectAsState()
+    historyOutcome?.let { msg ->
+        LaunchedEffect(msg) {
+            operationResult = msg
+            HistoryImport.clearOutcome()
+        }
+    }
 
     val exportLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/zip")
@@ -471,6 +483,12 @@ fun SettingsScreen(app: PrivateMusicApp, onOpenStats: () -> Unit, onOpenEq: () -
             title = "Importar playlist o reglas",
             subtitle = "M3U, CSV o smart-playlists.json; si la playlist ya existe, se fusiona",
         ) { importLauncher.launch(arrayOf("*/*")) }
+
+        SettingsAction(
+            title = "Importar historial de escucha",
+            subtitle = historyProgress ?: "Spotify (StreamingHistory*.json), Last.fm (CSV) o YouTube Takeout " +
+                "(watch-history.json): tu Recap y tus playlists automáticas con memoria desde el primer día",
+        ) { if (historyProgress == null) historyLauncher.launch(arrayOf("*/*")) }
 
         SettingsAction(
             title = "Escanear música del dispositivo",
