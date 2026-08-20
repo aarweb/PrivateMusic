@@ -19,6 +19,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.PlayArrow
@@ -200,6 +201,26 @@ fun HomeScreen(
                     }
                 },
             )
+        }
+
+        // Segunda fila: lo que no es "dale al play", sino "dime qué quieres".
+        var customMixOpen by remember { mutableStateOf(false) }
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            PlayCard(
+                title = "Mix a medida",
+                subtitle = "Descríbelo con palabras",
+                icon = Icons.Filled.AutoAwesome,
+                container = MaterialTheme.colorScheme.tertiaryContainer,
+                onContainer = MaterialTheme.colorScheme.onTertiaryContainer,
+                modifier = Modifier.weight(1f),
+                onClick = { customMixOpen = true },
+            )
+        }
+        if (customMixOpen) {
+            CustomMixDialog(app, onDismiss = { customMixOpen = false })
         }
 
         // --- Seguir escuchando ---

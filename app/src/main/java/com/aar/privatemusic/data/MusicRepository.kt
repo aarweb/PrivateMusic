@@ -504,6 +504,15 @@ class MusicRepository(
     suspend fun sonicReorderPlaylist(playlistId: Long): Boolean {
         val songs = dao.playlistSongsOnce(playlistId)
         if (songs.size < 3) return false
+        val ordered = sonicOrder(songs)
+        dao.reorderPlaylist(playlistId, ordered.map { it.id })
+        touch(playlistId)
+        return true
+    }
+
+    /** Orden "de DJ": cada canción sigue a la más cercana en tonalidad (Camelot) y BPM. */
+    fun sonicOrder(songs: List<Song>): List<Song> {
+        if (songs.size < 3) return songs
         val remaining = songs.toMutableList()
         val ordered = mutableListOf(remaining.removeAt(0))
         while (remaining.isNotEmpty()) {
@@ -521,9 +530,65 @@ class MusicRepository(
             remaining.remove(next)
             ordered.add(next)
         }
-        dao.reorderPlaylist(playlistId, ordered.map { it.id })
-        touch(playlistId)
-        return true
+        return ordered
+    }
+
+    // ---- Mix a medida ----
+
+    data class CustomMix(val songs: List<Song>, val matched: Int, val moodPending: Int)
+
+    /** Cuántas canciones cumplen [parsed] ahora mismo, sin construir la cola. */
+    suspend fun countCustomMix(parsed: MixPromptParser.Parsed): Int {
+        val now = System.currentTimeMillis()
+        val songs = dao.songsOnce().filter { it.snoozedUntil < now }
+        val ctx = RuleContext(
+            playCounts = dao.playCountsOnce().associate { it.songId to it.plays },
+            lastPlayed = dao.lastPlayedOnce().associate { it.songId to it.lastPlayed },
+        )
+        return SmartRuleEngine.evaluate(parsed.rules, songs, ctx).size
+    }
+
+    /**
+     * Cola de ~[size] canciones a partir de una frase: las reglas filtran, el
+     * orden es aleatorio (o por cercanía a "parecido a X", o de DJ si pide
+     * mezclar) y nunca suenan más de dos seguidas del mismo artista.
+     */
+    suspend fun buildCustomMix(parsed: MixPromptParser.Parsed, size: Int = 40): CustomMix {
+        val now = System.currentTimeMillis()
+        val songs = dao.songsOnce().filter { it.snoozedUntil < now }
+        val ctx = RuleContext(
+            playCounts = dao.playCountsOnce().associate { it.songId to it.plays },
+            lastPlayed = dao.lastPlayedOnce().associate { it.songId to it.lastPlayed },
+        )
+        var matched = SmartRuleEngine.evaluate(parsed.rules, songs, ctx)
+        val moodPending = dao.countMissingMood()
+        if (matched.isEmpty()) return CustomMix(emptyList(), 0, moodPending)
+
+        parsed.similarTo?.let { needle ->
+            val n = com.aar.privatemusic.stats.HistoryImporter.normalize(needle)
+            val seed = songs.firstOrNull { com.aar.privatemusic.stats.HistoryImporter.normalize(it.title) == n }
+                ?: songs.firstOrNull { com.aar.privatemusic.stats.HistoryImporter.normalize(it.title).contains(n) }
+                ?: songs.firstOrNull { com.aar.privatemusic.stats.HistoryImporter.normalize(it.artist).contains(n) }
+            val seedFeatures = seed?.sonicFeatures?.let { AnalysisResult.parseFeatures(it) }
+            if (seed != null && seedFeatures != null) {
+                matched = matched.sortedByDescending { s ->
+                    s.sonicFeatures?.let { AnalysisResult.parseFeatures(it) }
+                        ?.let { AudioAnalyzer.cosineSimilarity(seedFeatures, it) } ?: -1f
+                }
+                if (matched.none { it.id == seed.id }) matched = listOf(seed) + matched
+            }
+        }
+
+        // Variedad: como mucho dos seguidas del mismo artista.
+        val picked = mutableListOf<Song>()
+        val pool = matched.toMutableList()
+        while (picked.size < size && pool.isNotEmpty()) {
+            val lastTwo = picked.takeLast(2).map { it.artist.lowercase() }
+            val idx = pool.indexOfFirst { c -> lastTwo.size < 2 || lastTwo.any { it != c.artist.lowercase() } }
+            picked.add(pool.removeAt(if (idx >= 0) idx else 0))
+        }
+        val ordered = if (parsed.sortForMixing) sonicOrder(picked) else picked
+        return CustomMix(ordered, matched.size, moodPending)
     }
 
     // ---- Watched sources ----
