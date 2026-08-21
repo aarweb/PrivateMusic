@@ -162,7 +162,10 @@ class PlaybackService : MediaLibraryService() {
         val dao = castDao ?: return
         val session = mediaSession ?: return
         val ids = (0 until local.mediaItemCount).map { local.getMediaItemAt(it).mediaId }
-        if (ids.isEmpty()) return
+        if (ids.isEmpty()) {
+            android.util.Log.w("Cast", "no se pasa a la TV: la cola local está vacía")
+            return
+        }
         val index = local.currentMediaItemIndex
         val position = local.currentPosition
         val wasPlaying = local.isPlaying
@@ -171,8 +174,13 @@ class PlaybackService : MediaLibraryService() {
             runCatching {
                 httpServer?.stop()
                 httpServer = com.aar.privatemusic.cast.MediaHttpServer(dao).also { it.start() }
+            }.onFailure { android.util.Log.e("Cast", "el servidor HTTP no arrancó", it) }
+            val ip = com.aar.privatemusic.cast.MediaHttpServer.localIp()
+            if (ip == null) {
+                android.util.Log.w("Cast", "no se pasa a la TV: sin IP local en la red")
+                return@launch
             }
-            val ip = com.aar.privatemusic.cast.MediaHttpServer.localIp() ?: return@launch
+            android.util.Log.d("Cast", "sirviendo desde $ip:${com.aar.privatemusic.cast.MediaHttpServer.PORT}")
             val items = ids.mapNotNull { id ->
                 dao.getSong(id)?.let { song ->
                     val ext = java.io.File(song.filePath).extension.lowercase()
@@ -203,16 +211,27 @@ class PlaybackService : MediaLibraryService() {
                         .build()
                 }
             }
-            if (items.isEmpty()) return@launch
+            if (items.isEmpty()) {
+                android.util.Log.w("Cast", "no se pasa a la TV: ninguna canción de la cola está en la biblioteca")
+                return@launch
+            }
             withContext(Dispatchers.Main) {
+                // El orden importa desde Media3 1.9: `setMediaItems` construye el
+                // LOAD del receptor leyendo `playWhenReady` EN ESE INSTANTE para
+                // rellenar su `autoplay`. Si se deja para después, la TV recibe
+                // "carga pero no reproduzcas" y se queda muda: `prepare()` es un
+                // no-op en Cast y `play()` se ignora mientras el MediaStatus sea
+                // null (justo tras el load). Por eso esto va ANTES.
+                cast.playWhenReady = wasPlaying
                 cast.setMediaItems(items, index.coerceIn(0, items.size - 1), position)
-                cast.prepare()
-                if (wasPlaying) cast.play()
                 session.player = cast
                 com.aar.privatemusic.cast.CastState.castDeviceName.value = runCatching {
                     castContext?.sessionManager?.currentCastSession?.castDevice?.friendlyName
                 }.getOrNull() ?: "TV"
-                android.util.Log.d("Cast", "session moved to cast: ${items.size} items @$position")
+                android.util.Log.d(
+                    "Cast",
+                    "session moved to cast: ${items.size} items @$position playWhenReady=$wasPlaying",
+                )
             }
         }
     }
