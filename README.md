@@ -25,6 +25,8 @@ Requiere Android 8.0+ (arm64).
 - Pega una URL de **playlist de YouTube** → descárgala entera u **obsérvala** (lo nuevo se baja solo cada 6 h).
 - Pega un enlace de **Spotify** (playlist/álbum/canción) → lee los metadatos públicos y empareja cada pista en YouTube filtrando por duración. También sincronizable.
 - Importa CSV de Spotify (Exportify) buscando y descargando cada canción.
+- Conecta tu servidor **Subsonic / Navidrome / Jellyfin**: busca, preescucha y descarga tu propia biblioteca a este dispositivo.
+- Busca y descarga en **Bandcamp** (MP3-128 público) y en **Internet Archive** (FLAC libre).
 - Comparte cualquier enlace desde otra app hacia PrivateMusic.
 
 **Biblioteca y playlists**
