@@ -118,11 +118,10 @@ class DesktopPlayer(
         if (!file.canRead()) return
         // AutoMix: la saliente se lleva al tempo de la entrante mientras se apaga,
         // así el cruce no suena a dos canciones a destiempo. Nunca más de un 10%:
-        // pasado ahí, el cambio de tono se nota.
-        val outBpm = outgoing.bpm
-        val inBpm = song.bpm
-        val rateOut = if (settings.autoMix.value && outBpm != null && inBpm != null && outBpm > 0f) {
-            (inBpm / outBpm).coerceIn(0.9f, 1.1f)
+        // aquí el motor cambia el rate y con él el tono, así que pasado ahí se
+        // nota (en el móvil el time-stretch conserva el tono y se permite más).
+        val rateOut = if (settings.autoMix.value) {
+            com.aar.privatemusic.player.chooseTempoRatio(outgoing.bpm, song.bpm, 0.10f)
         } else 1f
 
         _index.value = position

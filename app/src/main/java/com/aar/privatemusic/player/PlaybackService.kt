@@ -326,6 +326,8 @@ class PlaybackService : MediaLibraryService() {
             // Modo de normalización (RMS medido o ReplayGain del tag); se relee
             // cada iteración. Sólo atenúa (nunca sube) para no saturar sin peak.
             var normalizeMode = "rms"
+            // Ajuste máximo de tempo del AutoMix, releído cada iteración.
+            var maxStretch = 0.10f
             fun gainOf(loudness: Float?, replayGain: Float?, normalize: Boolean): Float {
                 if (!normalize) return 1f
                 val gainDb = if (normalizeMode == "replaygain" && replayGain != null) {
@@ -468,8 +470,7 @@ class PlaybackService : MediaLibraryService() {
                                 val ba = dao.getBpm(curId)
                                 val bb = dao.getBpm(nextId)
                                 val ts = dao.getTailSilence(curId) ?: 0L
-                                val r = if (ba != null && bb != null && ba > 0f)
-                                    (bb / ba).coerceIn(0.9f, 1.1f) else 1f
+                                val r = chooseTempoRatio(ba, bb, maxStretch)
                                 Triple(listOf(la, lb, rga, rgb), r, ts)
                             }.getOrDefault(Triple(listOf<Float?>(null, null, null, null), 1f, 0L))
                         }
