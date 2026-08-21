@@ -32,6 +32,10 @@ data class Song(
     val bpm: Float? = null,
     val camelot: String? = null,
     val sonicFeatures: String? = null,
+    // Veces que se ha intentado analizar. El análisis puede terminar sin sacar
+    // el BPM (percusión rara, mucho sub-bajo); se reintenta un par de veces más
+    // en vez de darla por analizada para siempre y dejarla sin AutoMix.
+    val analysisTries: Int = 0,
     // Canonical tags resolved from online services (iTunes/Deezer/MusicBrainz).
     val album: String? = null,
     val albumArtist: String? = null, // band/group or album artist when it differs

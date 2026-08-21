@@ -10,7 +10,7 @@ import androidx.sqlite.execSQL
 
 @Database(
     entities = [Song::class, Playlist::class, PlaylistSongCrossRef::class, PlayEvent::class, SmartPlaylist::class, WatchedSource::class, PlaylistFolder::class, PendingDownload::class, SavedQueue::class, SavedQueueSongCrossRef::class],
-    version = 18,
+    version = 19,
     exportSchema = false,
 )
 @ConstructedBy(MusicDatabaseConstructor::class)
@@ -212,6 +212,15 @@ internal val MUSIC_MIGRATIONS: Array<Migration> = arrayOf(
     object : Migration(17, 18) {
         override fun migrate(connection: SQLiteConnection) {
             connection.execSQL("ALTER TABLE songs ADD COLUMN replayGainDb REAL")
+        }
+    },
+    // Intentos de análisis. Una canción cuyo análisis terminaba sin sacar el BPM
+    // quedaba marcada como analizada para siempre (el backfill sólo miraba
+    // sonicFeatures) y nunca podía tener AutoMix: ahora se reintenta un par de
+    // veces más, con contador para no repetir en bucle las indetectables.
+    object : Migration(18, 19) {
+        override fun migrate(connection: SQLiteConnection) {
+            connection.execSQL("ALTER TABLE songs ADD COLUMN analysisTries INTEGER NOT NULL DEFAULT 0")
         }
     },
 )

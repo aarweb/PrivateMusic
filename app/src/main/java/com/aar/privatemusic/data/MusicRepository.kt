@@ -470,9 +470,15 @@ class MusicRepository(
     suspend fun backfillAnalysis() {
         dao.songsMissingAnalysis().chunked(BACKFILL_CHUNK).forEach { chunk ->
             val rows = chunk.mapNotNull { song ->
-                AudioAnalyzer.analyze(song.filePath, song.durationSec)?.let {
+                val result = AudioAnalyzer.analyze(song.filePath, song.durationSec)
+                if (result == null) {
+                    // Ni siquiera se pudo decodificar: cuenta el intento igual, o
+                    // una canción rota volvería a intentarlo en cada arranque.
+                    dao.bumpAnalysisTries(song.id)
+                    null
+                } else {
                     com.aar.privatemusic.data.db.AnalysisUpdate(
-                        song.id, it.bpm, it.camelot, it.featuresJson(),
+                        song.id, result.bpm, result.camelot, result.featuresJson(),
                     )
                 }
             }

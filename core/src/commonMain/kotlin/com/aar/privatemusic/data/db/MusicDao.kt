@@ -155,10 +155,22 @@ interface MusicDao {
     @Query("SELECT * FROM songs WHERE loudnessDb IS NULL")
     suspend fun songsMissingLoudness(): List<Song>
 
-    @Query("UPDATE songs SET bpm = :bpm, camelot = :camelot, sonicFeatures = :features WHERE id = :id")
+    @Query(
+        "UPDATE songs SET bpm = :bpm, camelot = :camelot, sonicFeatures = :features, " +
+            "analysisTries = analysisTries + 1 WHERE id = :id"
+    )
     suspend fun updateAnalysis(id: String, bpm: Float?, camelot: String?, features: String?)
 
-    @Query("SELECT * FROM songs WHERE sonicFeatures IS NULL")
+    /** Suma un intento aunque el análisis no diera nada, para no reintentar en bucle. */
+    @Query("UPDATE songs SET analysisTries = analysisTries + 1 WHERE id = :id")
+    suspend fun bumpAnalysisTries(id: String)
+
+    /**
+     * Pendientes de analizar: las que no tienen huella, y también las que la
+     * tienen pero se quedaron sin BPM (sin él no hay AutoMix). Estas últimas se
+     * reintentan sólo un par de veces: hay percusión que no se deja medir.
+     */
+    @Query("SELECT * FROM songs WHERE sonicFeatures IS NULL OR (bpm IS NULL AND analysisTries < 3)")
     suspend fun songsMissingAnalysis(): List<Song>
 
     @Query("SELECT loudnessDb FROM songs WHERE id = :id")
