@@ -342,8 +342,15 @@ class PlaybackService : MediaLibraryService() {
                 val normalize = AppSettings.readNormalizeVolume(this@PlaybackService)
                 val autoMix = AppSettings.readAutoMix(this@PlaybackService)
                 val xfActive = xfEndsAt != 0L
+                // Fundido del temporizador de apagado (0..1): multiplicador global
+                // que se aplica a TODA escritura de volumen, para que no se pelee con
+                // el crossfade/normalización escribiendo controller.volume por fuera.
+                val fade = SleepFade.level
 
-                if (crossfadeMs == 0L && !normalize && !xfActive) {
+                // Con el fade activo (fade < 1) NO hacemos el early-return: hay que
+                // seguir aplicando el multiplicador al volumen aunque no haya crossfade
+                // ni normalización.
+                if (crossfadeMs == 0L && !normalize && !xfActive && fade >= 1f) {
                     if (touchedVolume) {
                         player.volume = 1f
                         touchedVolume = false
@@ -377,16 +384,17 @@ class PlaybackService : MediaLibraryService() {
                         tail.clearMediaItems()
                         tail.setPlaybackSpeed(1f)
                         xfEndsAt = 0L
-                        player.volume = gainFactor
+                        player.volume = gainFactor * fade
                         android.util.Log.d("Crossfade", "overlap end aborted=$aborted")
                     } else {
                         val t = (1f - remainingXf.toFloat() / xfDurationMs).coerceIn(0f, 1f)
                         // Different tracks here (A on tail, B on main) → uncorrelated
                         // → equal-power (sqrt) keeps perceived loudness flat; headroom
                         // guards the mixer against midpoint peak clipping.
-                        player.volume = xfHeadroom * gainFactor * kotlin.math.sqrt(t)
-                        tail.volume = xfHeadroom * xfGainA * kotlin.math.sqrt(1f - t)
+                        player.volume = xfHeadroom * gainFactor * kotlin.math.sqrt(t) * fade
+                        tail.volume = xfHeadroom * xfGainA * kotlin.math.sqrt(1f - t) * fade
                         android.util.Log.d("Crossfade", "overlap t=$t mainVol=${player.volume} tailVol=${tail.volume}")
+                        if (fade < 1f) android.util.Log.d("SleepFade", "overlap fade=$fade mainVol=${player.volume} tailVol=${tail.volume}")
                     }
                     touchedVolume = true
                     delay(100)
@@ -568,7 +576,7 @@ class PlaybackService : MediaLibraryService() {
                             tail.setPlaybackSpeed(1f)
                             armedForId = null
                             skipXfForId = curId
-                            player.volume = gainFactor
+                            player.volume = gainFactor * fade
                             android.util.Log.w(
                                 "Crossfade",
                                 "overlap skipped advancing=$tailAudioAdvancing driftMs=$drift waitedMs=$waited",
@@ -588,7 +596,7 @@ class PlaybackService : MediaLibraryService() {
                             tail.clearMediaItems()
                             tail.setPlaybackSpeed(1f)
                             armedForId = null
-                            player.volume = gainFactor
+                            player.volume = gainFactor * fade
                             touchedVolume = true
                             android.util.Log.d("Crossfade", "fire cancelado: el usuario navegó fuera de A")
                             delay(100)
@@ -606,8 +614,8 @@ class PlaybackService : MediaLibraryService() {
                             // deja de ser A, paramos de tocar SU volumen en el acto.
                             if (player.currentMediaItem?.mediaId != curId) break
                             val s = step / 5f
-                            tail.volume = xfGainA * s
-                            player.volume = gainFactor * (1f - s)
+                            tail.volume = xfGainA * s * fade
+                            player.volume = gainFactor * (1f - s) * fade
                             delay(20)
                         }
                         // Última comprobación antes de avanzar nosotros: si navegó
@@ -618,13 +626,13 @@ class PlaybackService : MediaLibraryService() {
                             tail.clearMediaItems()
                             tail.setPlaybackSpeed(1f)
                             armedForId = null
-                            player.volume = gainFactor
+                            player.volume = gainFactor * fade
                             touchedVolume = true
                             android.util.Log.d("Crossfade", "fire cancelado durante el fundido: el usuario navegó fuera de A")
                             delay(100)
                             continue
                         }
-                        tail.volume = xfGainA
+                        tail.volume = xfGainA * fade
                         player.volume = 0f
                         player.seekToNextMediaItem()
                         gainFactor = armedGainB
@@ -642,7 +650,8 @@ class PlaybackService : MediaLibraryService() {
                     }
                 }
 
-                player.volume = gainFactor
+                player.volume = gainFactor * fade
+                if (fade < 1f) android.util.Log.d("SleepFade", "normal fade=$fade mainVol=${player.volume}")
                 touchedVolume = true
                 delay(200)
             }

@@ -502,20 +502,23 @@ class PlayerController(
     /** Starts (or restarts) the sleep timer; fades out during the last 10 seconds. */
     fun startSleepTimer(minutes: Int) {
         sleepJob?.cancel()
-        controller?.volume = 1f
+        // El fundido de apagado NO escribe controller.volume: lo hace el bucle de
+        // volumen del servicio, que también gestiona crossfade y normalización. Sólo
+        // dejamos aquí el nivel objetivo (0..1) y el bucle lo aplica. Ver [SleepFade].
+        SleepFade.level = 1f
         sleepJob = mainScope.launch {
             val endAt = android.os.SystemClock.elapsedRealtime() + minutes * 60_000L
             while (true) {
                 val remaining = endAt - android.os.SystemClock.elapsedRealtime()
                 if (remaining <= 0) break
                 _sleepRemainingMs.value = remaining
-                if (remaining < 10_000) {
-                    controller?.volume = (remaining / 10_000f).coerceIn(0f, 1f)
-                }
-                delay(250)
+                SleepFade.level = if (remaining < 10_000) {
+                    (remaining / 10_000f).coerceIn(0f, 1f)
+                } else 1f
+                delay(200)
             }
             controller?.pause()
-            controller?.volume = 1f
+            SleepFade.level = 1f
             _sleepRemainingMs.value = null
         }
     }
@@ -524,7 +527,7 @@ class PlayerController(
         sleepJob?.cancel()
         sleepJob = null
         _sleepRemainingMs.value = null
-        controller?.volume = 1f
+        SleepFade.level = 1f
     }
 
     /** Alternative sleep mode: stop when the current track finishes. */
