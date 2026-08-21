@@ -55,7 +55,12 @@ object AudioAnalyzer {
         if (frameCount < 8) return null
 
         val window = FloatArray(FRAME) { 0.5f - 0.5f * cos(2.0 * PI * it / FRAME).toFloat() }
-        val energies = FloatArray(frameCount)
+        // Fuerza de ataque por frame para el tempo. Antes era la subida de energía
+        // de banda ancha, y en trap/reggaetón el 808 tapaba la caja y el hi-hat:
+        // el detector enganchaba el patrón del bajo y devolvía medio tempo (152 →
+        // 76 en el caso que lo destapó). El flujo espectral por encima de 200 Hz
+        // mira dónde vive la percusión que marca el pulso.
+        val flux = FloatArray(frameCount)
         val chroma = FloatArray(12)
         var centroidSum = 0.0
         var rolloffSum = 0.0
@@ -64,7 +69,13 @@ object AudioAnalyzer {
 
         val re = FloatArray(FRAME)
         val im = FloatArray(FRAME)
-        // Analyze the spectrum on a subset of frames (every 4th) to save CPU.
+        val mags = FloatArray(FRAME / 2)
+        // Magnitudes comprimidas del frame anterior, para el flujo espectral.
+        val prevMags = FloatArray(FRAME / 2)
+        // Primer bin por encima de 200 Hz: por debajo manda el sub-bajo.
+        val fluxFromBin = (200.0 * FRAME / sampleRate).toInt().coerceAtLeast(1)
+        // Chroma/centroide/rolloff siguen midiéndose en 1 de cada 4 frames (la
+        // huella sónica no cambia); el flujo necesita todos.
         var spectralFrames = 0
 
         for (f in 0 until frameCount) {
@@ -76,25 +87,34 @@ object AudioAnalyzer {
                 energy += (s * s).toDouble()
                 if (i > 0 && (s >= 0) != (pcm[offset + i - 1] >= 0)) zc++
             }
-            energies[f] = energy.toFloat()
             rmsSum += sqrt(energy / FRAME)
             zcrSum += zc.toDouble() / FRAME
 
+            for (i in 0 until FRAME) {
+                re[i] = pcm[offset + i] * window[i]
+                im[i] = 0f
+            }
+            fft(re, im)
+            var magSum = 0.0
+            var weighted = 0.0
+            var fluxSum = 0f
+            for (k in 1 until FRAME / 2) {
+                val mag = sqrt((re[k] * re[k] + im[k] * im[k]).toDouble()).toFloat()
+                mags[k] = mag
+                magSum += mag
+                weighted += mag * k
+                if (k >= fluxFromBin) {
+                    // Comprimir antes de restar: si no, un bombo fuerte vale por
+                    // veinte hi-hats y volvemos al problema del principio.
+                    val comp = ln(1f + mag * 100f)
+                    val rise = comp - prevMags[k]
+                    if (rise > 0f) fluxSum += rise
+                    prevMags[k] = comp
+                }
+            }
+            flux[f] = fluxSum
+
             if (f % 4 == 0) {
-                for (i in 0 until FRAME) {
-                    re[i] = pcm[offset + i] * window[i]
-                    im[i] = 0f
-                }
-                fft(re, im)
-                var magSum = 0.0
-                var weighted = 0.0
-                val mags = FloatArray(FRAME / 2)
-                for (k in 1 until FRAME / 2) {
-                    val mag = sqrt((re[k] * re[k] + im[k] * im[k]).toDouble()).toFloat()
-                    mags[k] = mag
-                    magSum += mag
-                    weighted += mag * k
-                }
                 if (magSum > 0) {
                     centroidSum += weighted / magSum * sampleRate / FRAME
                     var cum = 0.0
@@ -119,7 +139,7 @@ object AudioAnalyzer {
             }
         }
 
-        val bpm = estimateBpm(energies, sampleRate)
+        val bpm = estimateBpm(flux, sampleRate)
         val camelot = estimateCamelot(chroma)
 
         // Fingerprint: normalized chroma (12) + tempo + energy + brightness + rolloff + zcr
@@ -137,13 +157,11 @@ object AudioAnalyzer {
 
     // ---- tempo ----
 
-    private fun estimateBpm(energies: FloatArray, sampleRate: Int): Float? {
-        val n = energies.size
-        // Onset strength: positive energy increments.
-        val onset = FloatArray(n)
-        for (i in 1 until n) onset[i] = maxOf(0f, energies[i] - energies[i - 1])
-        val mean = onset.average().toFloat()
-        for (i in onset.indices) onset[i] -= mean
+    /** @param strength fuerza de ataque por frame (ya es una diferencia positiva). */
+    private fun estimateBpm(strength: FloatArray, sampleRate: Int): Float? {
+        val n = strength.size
+        val mean = strength.average().toFloat()
+        val onset = FloatArray(n) { strength[it] - mean }
 
         val framesPerSec = sampleRate.toFloat() / HOP
         val minLag = (framesPerSec * 60f / 180f).toInt().coerceAtLeast(1) // 180 BPM

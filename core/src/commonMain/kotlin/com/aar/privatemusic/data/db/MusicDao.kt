@@ -197,6 +197,10 @@ interface MusicDao {
     @Query("UPDATE songs SET tailSilenceMs = NULL")
     suspend fun resetTailSilence()
 
+    /** Borra el tempo medido para que el backfill lo recalcule con el detector nuevo. */
+    @Query("UPDATE songs SET bpm = NULL, sonicFeatures = NULL, analysisTries = 0")
+    suspend fun resetAnalysis()
+
     @Query("SELECT * FROM songs WHERE danceability IS NULL")
     suspend fun songsMissingMood(): List<Song>
 

@@ -225,6 +225,14 @@ class PrivateMusicApp : Application() {
             prefs.edit().putInt("tail_silence_v", 2).apply()
         }
 
+        // v2: el tempo pasó a medirse por flujo espectral (el 808 ya no tapa la
+        // caja). Los BPM guardados con el detector viejo se recalculan, que si no
+        // el AutoMix seguiría mezclando con medios tempos.
+        if (prefs.getInt("analysis_v", 1) < 2) {
+            repository.resetAnalysis()
+            prefs.edit().putInt("analysis_v", 2).apply()
+        }
+
         if (repository.pendingBackfills() > 0) {
             repository.backfillQuality()
             repository.backfillLoudness()

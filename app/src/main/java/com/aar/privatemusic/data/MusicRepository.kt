@@ -415,6 +415,8 @@ class MusicRepository(
 
     suspend fun resetTailSilence() = dao.resetTailSilence()
 
+    suspend fun resetAnalysis() = dao.resetAnalysis()
+
     /** Indexes device music (MediaStore) into the library, in place. */
     suspend fun importLocal(context: android.content.Context): Int =
         com.aar.privatemusic.util.LocalImporter.scan(context, dao, musicDir)
