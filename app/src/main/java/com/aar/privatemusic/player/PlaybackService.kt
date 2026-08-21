@@ -311,6 +311,10 @@ class PlaybackService : MediaLibraryService() {
             var armedGainA = 1f
             var armedGainB = 1f
             var armedNextId: String? = null
+            // Tempo del AutoMix resuelto al pre-armar. Hay que recordarlo: la vía
+            // de respaldo re-prepara el tail y antes lo dejaba SIEMPRE a 1.0, así
+            // que había fundido pero el AutoMix desaparecía en silencio.
+            var armedRatio = 1f
             // Effective end of the outgoing track (production fade-outs and
             // trailing silence trimmed): crossfading INTO a dying tail sounds
             // like a cut no matter how seamless the engine is.
@@ -478,6 +482,7 @@ class PlaybackService : MediaLibraryService() {
                             armedGainA = gainOf(gains[0], gains[2], normalize)
                             armedGainB = gainOf(gains[1], gains[3], normalize)
                             armedNextId = nextId
+                            armedRatio = ratio
                             if (armedAtPos > player.currentPosition + 100) {
                                 tail.playWhenReady = false
                                 tail.volume = 0f
@@ -504,7 +509,11 @@ class PlaybackService : MediaLibraryService() {
                             // seconds late and replayed part of A.
                             tail.playWhenReady = false
                             tail.volume = 0f
-                            tail.setPlaybackSpeed(1f)
+                            // El ratio del pre-armado sigue siendo el bueno (esta
+                            // rama sólo entra con armedForId == curId): reponerlo,
+                            // o el AutoMix se perdía justo en las transiciones que
+                            // más lo necesitan.
+                            tail.setPlaybackSpeed(if (autoMix) armedRatio else 1f)
                             tail.setMediaItem(
                                 MediaItem.Builder().setUri(curUri).build(),
                                 player.currentPosition,
