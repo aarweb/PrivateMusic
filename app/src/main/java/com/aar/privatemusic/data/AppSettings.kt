@@ -45,6 +45,10 @@ class AppSettings(context: Context) {
     private val _autoMix = MutableStateFlow(prefs.getBoolean(KEY_AUTOMIX, false))
     val autoMix: StateFlow<Boolean> = _autoMix
 
+    /** Ajuste máximo de tempo del AutoMix, en porcentaje (10, 15 o 20). */
+    private val _autoMixMaxPct = MutableStateFlow(prefs.getInt(KEY_AUTOMIX_MAX, 20))
+    val autoMixMaxPct: StateFlow<Int> = _autoMixMaxPct
+
     /** Publicar la biblioteca en la red local para que el PC la lea. */
     private val _shareWithPc = MutableStateFlow(prefs.getBoolean(KEY_SHARE_PC, false))
     val shareWithPc: StateFlow<Boolean> = _shareWithPc
@@ -145,6 +149,11 @@ class AppSettings(context: Context) {
         _autoMix.value = value
     }
 
+    fun setAutoMixMaxPct(value: Int) {
+        prefs.edit().putInt(KEY_AUTOMIX_MAX, value).apply()
+        _autoMixMaxPct.value = value
+    }
+
     fun setShareWithPc(value: Boolean) {
         prefs.edit().putBoolean(KEY_SHARE_PC, value).apply()
         _shareWithPc.value = value
@@ -191,6 +200,7 @@ class AppSettings(context: Context) {
         private const val KEY_SPONSORBLOCK = "sponsorblock"
         private const val KEY_LISTENBRAINZ = "listenbrainz_token"
         private const val KEY_AUTOMIX = "automix"
+        private const val KEY_AUTOMIX_MAX = "automix_max_pct"
         private const val KEY_SHARE_PC = "share_with_pc"
         private const val KEY_ROMANIZE = "romanize_lyrics"
         private const val KEY_YT_CLIENT = "youtube_client"
@@ -251,6 +261,17 @@ class AppSettings(context: Context) {
 
         fun readAutoMix(context: Context): Boolean =
             context.getSharedPreferences("settings", Context.MODE_PRIVATE).getBoolean(KEY_AUTOMIX, false)
+
+        /**
+         * Ajuste máximo de tempo del AutoMix, como fracción (0,20 = ±20%).
+         *
+         * En Android el time-stretch de Sonic conserva el tono, así que se puede
+         * estirar bastante más que en el escritorio, donde cambiar la velocidad
+         * arrastra el tono y por eso allí el tope sigue siendo del 10%.
+         */
+        fun readAutoMixMaxStretch(context: Context): Float =
+            context.getSharedPreferences("settings", Context.MODE_PRIVATE)
+                .getInt(KEY_AUTOMIX_MAX, 20).coerceIn(5, 30) / 100f
 
         // --- EQ paramétrico / DSP propio ---
         fun readEqMode(context: Context): String =

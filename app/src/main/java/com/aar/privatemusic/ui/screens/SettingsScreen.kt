@@ -224,6 +224,33 @@ fun SettingsScreen(app: PrivateMusicApp, onOpenStats: () -> Unit, onOpenEq: () -
             )
         }
 
+        if (autoMix && crossfade > 0) {
+            val autoMixMax by app.settings.autoMixMaxPct.collectAsState()
+            Column(Modifier.fillMaxWidth().padding(start = 16.dp, bottom = 8.dp)) {
+                Text(
+                    "Ajuste máximo de tempo: ±$autoMixMax%",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Text(
+                    "Cuánto puede estirarse la canción saliente para cuadrar con la " +
+                        "siguiente. Más margen cuadra más parejas; pasado el 20% el " +
+                        "time-stretch empieza a notarse.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Row(Modifier.padding(top = 4.dp)) {
+                    listOf(10, 15, 20).forEach { pct ->
+                        androidx.compose.material3.FilterChip(
+                            selected = autoMixMax == pct,
+                            onClick = { app.settings.setAutoMixMaxPct(pct) },
+                            label = { Text("±$pct%") },
+                            modifier = Modifier.padding(end = 8.dp),
+                        )
+                    }
+                }
+            }
+        }
+
         Row(
             Modifier
                 .fillMaxWidth()

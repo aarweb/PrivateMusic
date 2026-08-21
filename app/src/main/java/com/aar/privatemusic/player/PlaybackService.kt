@@ -357,6 +357,7 @@ class PlaybackService : MediaLibraryService() {
                 val crossfadeMs = AppSettings.readCrossfadeSec(this@PlaybackService) * 1000L
                 val normalize = AppSettings.readNormalizeVolume(this@PlaybackService)
                 normalizeMode = AppSettings.readNormalizeMode(this@PlaybackService)
+                maxStretch = AppSettings.readAutoMixMaxStretch(this@PlaybackService)
                 val autoMix = AppSettings.readAutoMix(this@PlaybackService)
                 val xfActive = xfEndsAt != 0L
                 // Fundido del temporizador de apagado (0..1): multiplicador global
