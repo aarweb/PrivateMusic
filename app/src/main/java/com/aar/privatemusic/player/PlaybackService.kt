@@ -554,6 +554,10 @@ class PlaybackService : MediaLibraryService() {
                         // longer costs nothing: A keeps sounding on the main.
                         tail.volume = 0f
                         tailAudioAdvancing = false
+                        // Punto de referencia para descontar el tempo del AutoMix
+                        // del cálculo de deriva (ver `realDrift`): aún parado, la
+                        // posición del tail ES el destino del último seek.
+                        var refTailPos = tail.currentPosition
                         tail.play()
                         // AutoMix routes the tail through Sonic (tempo bend), which
                         // lengthens the pipeline and delays real audio.
@@ -578,20 +582,38 @@ class PlaybackService : MediaLibraryService() {
                         // Measure how far the tail's CONTENT is from the main's
                         // and re-seek predicting the restart latency, so both A
                         // streams line up when the tail becomes audible.
-                        var drift = player.currentPosition - tail.currentPosition
+                        // El tail corre al tempo del AutoMix, así que se separa del
+                        // principal a propósito: con ratio 1.1 y 2.6s de calentamiento
+                        // son 260ms de "deriva" que no es tal, y que bastaban para
+                        // saltarse el fundido (activar AutoMix hacía MENOS probable
+                        // que hubiera fundido). Lo que el tail ha avanzado de más por
+                        // el tempo es exactamente `avance * (1 - 1/ratio)`: se descuenta
+                        // para decidir si el relevo está sano. El seek, en cambio, sigue
+                        // usando la deriva REAL: hay que alinearlos de verdad.
+                        val speed = if (autoMix) armedRatio else 1f
+                        fun realDrift(rawDrift: Long, tailPos: Long): Long {
+                            if (speed == 1f) return rawDrift
+                            val advanced = (tailPos - refTailPos).coerceAtLeast(0L)
+                            return rawDrift + (advanced * (1f - 1f / speed)).toLong()
+                        }
+                        var tailPos = tail.currentPosition
+                        var drift = player.currentPosition - tailPos
                         if (tailAudioAdvancing && kotlin.math.abs(drift) > 60) {
                             val restartLatency = if (drift > 0) drift + 40 else 120L
                             tailAudioAdvancing = false
-                            tail.seekTo(player.currentPosition + restartLatency)
+                            val target = player.currentPosition + restartLatency
+                            tail.seekTo(target)
+                            refTailPos = target
                             var rewait = 0
                             while (!tailAudioAdvancing && rewait < 600) {
                                 delay(20)
                                 rewait += 20
                             }
                             delay(120)
-                            drift = player.currentPosition - tail.currentPosition
+                            tailPos = tail.currentPosition
+                            drift = player.currentPosition - tailPos
                         }
-                        if (!tailAudioAdvancing || kotlin.math.abs(drift) > 250) {
+                        if (!tailAudioAdvancing || kotlin.math.abs(realDrift(drift, tailPos)) > 250) {
                             // No real audio (cold pipeline) or still misaligned:
                             // a blind handover replays part of A. Skip this
                             // crossfade — plain gapless beats an audible glitch.
@@ -603,7 +625,8 @@ class PlaybackService : MediaLibraryService() {
                             player.volume = gainFactor * fade
                             android.util.Log.w(
                                 "Crossfade",
-                                "overlap skipped advancing=$tailAudioAdvancing driftMs=$drift waitedMs=$waited",
+                                "overlap skipped advancing=$tailAudioAdvancing driftMs=$drift " +
+                                    "realDriftMs=${realDrift(drift, tailPos)} waitedMs=$waited",
                             )
                             touchedVolume = true
                             delay(100)
