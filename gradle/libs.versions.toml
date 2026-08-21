@@ -7,7 +7,7 @@ lifecycle = "2.8.7"
 activityCompose = "1.9.3"
 composeBom = "2024.12.01"
 navigationCompose = "2.8.5"
-media3 = "1.5.0"
+media3 = "1.11.0"
 room = "2.6.1"
 # Room multiplataforma para :core. Convive con el 2.6.1 de :app hasta que
 # :app pase a depender de :core (no se pueden mezclar en un mismo módulo).
