@@ -319,11 +319,18 @@ class PlaybackService : MediaLibraryService() {
             // the crossfade for THAT track: gapless is better than replaying A.
             var skipXfForId: String? = null
 
-            fun gainOf(loudness: Float?, normalize: Boolean): Float =
-                if (normalize && loudness != null) {
-                    val gainDb = (AppSettings.TARGET_LOUDNESS_DB - loudness).coerceIn(-12f, 0f)
-                    10.0.pow(gainDb / 20.0).toFloat()
-                } else 1f
+            // Modo de normalización (RMS medido o ReplayGain del tag); se relee
+            // cada iteración. Sólo atenúa (nunca sube) para no saturar sin peak.
+            var normalizeMode = "rms"
+            fun gainOf(loudness: Float?, replayGain: Float?, normalize: Boolean): Float {
+                if (!normalize) return 1f
+                val gainDb = if (normalizeMode == "replaygain" && replayGain != null) {
+                    replayGain
+                } else if (loudness != null) {
+                    AppSettings.TARGET_LOUDNESS_DB - loudness
+                } else return 1f
+                return 10.0.pow(gainDb.coerceIn(-12f, 0f) / 20.0).toFloat()
+            }
 
             while (isActive) {
                 // En pausa no hay volumen que gestionar, y el servicio sigue vivo
@@ -343,6 +350,7 @@ class PlaybackService : MediaLibraryService() {
                 val tail = tailPlayer
                 val crossfadeMs = AppSettings.readCrossfadeSec(this@PlaybackService) * 1000L
                 val normalize = AppSettings.readNormalizeVolume(this@PlaybackService)
+                normalizeMode = AppSettings.readNormalizeMode(this@PlaybackService)
                 val autoMix = AppSettings.readAutoMix(this@PlaybackService)
                 val xfActive = xfEndsAt != 0L
                 // Fundido del temporizador de apagado (0..1): multiplicador global
@@ -366,8 +374,10 @@ class PlaybackService : MediaLibraryService() {
                 val id = player.currentMediaItem?.mediaId
                 if (normalize && id != null && id != gainForId) {
                     gainForId = id
-                    val loudness = withContext(Dispatchers.IO) { runCatching { dao.getLoudness(id) }.getOrNull() }
-                    gainFactor = gainOf(loudness, true)
+                    val (loudness, rg) = withContext(Dispatchers.IO) {
+                        runCatching { dao.getLoudness(id) to dao.getReplayGain(id) }.getOrDefault(null to null)
+                    }
+                    gainFactor = gainOf(loudness, rg, true)
                 } else if (!normalize) {
                     gainFactor = 1f
                     gainForId = null
@@ -449,13 +459,15 @@ class PlaybackService : MediaLibraryService() {
                             runCatching {
                                 val la = dao.getLoudness(curId)
                                 val lb = dao.getLoudness(nextId)
+                                val rga = dao.getReplayGain(curId)
+                                val rgb = dao.getReplayGain(nextId)
                                 val ba = dao.getBpm(curId)
                                 val bb = dao.getBpm(nextId)
                                 val ts = dao.getTailSilence(curId) ?: 0L
                                 val r = if (ba != null && bb != null && ba > 0f)
                                     (bb / ba).coerceIn(0.9f, 1.1f) else 1f
-                                Triple(la to lb, r, ts)
-                            }.getOrDefault(Triple(null to null, 1f, 0L))
+                                Triple(listOf(la, lb, rga, rgb), r, ts)
+                            }.getOrDefault(Triple(listOf<Float?>(null, null, null, null), 1f, 0L))
                         }
                         if (player.currentMediaItem?.mediaId == curId) {
                             armedForId = curId
@@ -463,8 +475,8 @@ class PlaybackService : MediaLibraryService() {
                             armedEffDur = (duration - tailSilence)
                                 .coerceAtLeast(player.currentPosition + 500)
                             armedAtPos = armedEffDur - crossfadeMs
-                            armedGainA = gainOf(gains.first, normalize)
-                            armedGainB = gainOf(gains.second, normalize)
+                            armedGainA = gainOf(gains[0], gains[2], normalize)
+                            armedGainB = gainOf(gains[1], gains[3], normalize)
                             armedNextId = nextId
                             if (armedAtPos > player.currentPosition + 100) {
                                 tail.playWhenReady = false

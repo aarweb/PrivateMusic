@@ -186,6 +186,13 @@ class PrivateMusicApp : Application() {
         val prefs = getSharedPreferences("settings", MODE_PRIVATE)
         val now = System.currentTimeMillis()
 
+        // Lee el ReplayGain de los tags de la biblioteca existente, una sola vez.
+        if (!prefs.getBoolean("replaygain_scanned", false)) {
+            runCatching { repository.backfillReplayGainFromTags() }
+                .onSuccess { prefs.edit().putBoolean("replaygain_scanned", true).apply() }
+                .onFailure { Log.w("PrivateMusicApp", "backfillReplayGain failed", it) }
+        }
+
         // Recorre la biblioteca entera comprobando ficheros: una vez al día basta.
         // Las carátulas no desaparecen solas entre dos arranques.
         if (now - prefs.getLong("art_repaired_at", 0L) > DAY_MS) {

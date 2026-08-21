@@ -87,6 +87,7 @@ class MigrationTest {
         assertTrue(song.codec == null && song.bpm == null && song.album == null)
         assertEquals(null, song.note, "la 14→15 añade la nota vacía")
         assertTrue(song.danceability == null && song.moodHappy == null && song.vocalness == null, "la 15→16 añade los rasgos sin analizar")
+        assertEquals(null, song.replayGainDb, "la 17→18 añade el ReplayGain sin leer")
 
         // La playlist y su relación siguen en pie.
         val playlists = dao.playlistsOnce()

@@ -210,12 +210,47 @@ class MusicRepository(
     suspend fun backfillLoudness() {
         dao.songsMissingLoudness().chunked(BACKFILL_CHUNK).forEach { chunk ->
             val rows = chunk.mapNotNull { song ->
+                // Aprovecha el barrido para leer el ReplayGain del tag, si lo trae.
+                com.aar.privatemusic.util.ReplayGainTags.read(song.filePath)?.let {
+                    runCatching { dao.updateReplayGain(song.id, it) }
+                }
                 LoudnessScanner.measureRmsDb(song.filePath)?.let {
                     com.aar.privatemusic.data.db.LoudnessUpdate(song.id, it)
                 }
             }
             if (rows.isNotEmpty()) dao.updateLoudnessBatch(rows)
         }
+    }
+
+    /**
+     * Barrido único (una vez, tras actualizar): lee el ReplayGain de los tags de
+     * toda la biblioteca ya existente. Los ficheros sin tag quedan en null; el
+     * flag de "ya barrido" evita repetir el trabajo en cada arranque.
+     */
+    suspend fun backfillReplayGainFromTags() {
+        dao.songsOnce().forEach { song ->
+            com.aar.privatemusic.util.ReplayGainTags.read(song.filePath)?.let {
+                runCatching { dao.updateReplayGain(song.id, it) }
+            }
+        }
+    }
+
+    /**
+     * Escribe en cada fichero (con loudness medido) un REPLAYGAIN_TRACK_GAIN
+     * derivado de la medición, para que otros reproductores normalicen igual.
+     * Devuelve cuántos ficheros se pudieron escribir.
+     */
+    suspend fun writeReplayGainToFiles(): Int {
+        var written = 0
+        dao.songsOnce().forEach { song ->
+            val loud = song.loudnessDb ?: return@forEach
+            val gainDb = (com.aar.privatemusic.data.AppSettings.TARGET_LOUDNESS_DB - loud)
+            if (com.aar.privatemusic.util.ReplayGainTags.write(song.filePath, gainDb)) {
+                runCatching { dao.updateReplayGain(song.id, gainDb) }
+                written++
+            }
+        }
+        return written
     }
 
     // ---- Metadata / storage ----

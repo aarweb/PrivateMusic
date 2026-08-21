@@ -10,7 +10,7 @@ import androidx.sqlite.execSQL
 
 @Database(
     entities = [Song::class, Playlist::class, PlaylistSongCrossRef::class, PlayEvent::class, SmartPlaylist::class, WatchedSource::class, PlaylistFolder::class, PendingDownload::class, SavedQueue::class, SavedQueueSongCrossRef::class],
-    version = 17,
+    version = 18,
     exportSchema = false,
 )
 @ConstructedBy(MusicDatabaseConstructor::class)
@@ -206,6 +206,12 @@ internal val MUSIC_MIGRATIONS: Array<Migration> = arrayOf(
                     PRIMARY KEY(queueId, position))"""
             )
             connection.execSQL("CREATE INDEX IF NOT EXISTS index_saved_queue_songs_songId ON saved_queue_songs(songId)")
+        }
+    },
+    // ReplayGain leído de los tags del fichero (dB); null = sin tag o sin leer.
+    object : Migration(17, 18) {
+        override fun migrate(connection: SQLiteConnection) {
+            connection.execSQL("ALTER TABLE songs ADD COLUMN replayGainDb REAL")
         }
     },
 )

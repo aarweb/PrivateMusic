@@ -22,6 +22,8 @@ data class Song(
     val sampleRateHz: Int? = null,
     // Measured RMS loudness in dBFS; drives volume normalization.
     val loudnessDb: Float? = null,
+    // ReplayGain de track leído de los tags (dB); alternativa a la medida RMS.
+    val replayGainDb: Float? = null,
     // Excluded from mixes/auto-playlists until this epoch millis (snooze).
     val snoozedUntil: Long = 0,
     // Milliseconds of silent/fade tail at the end (crossfade anchors before it).

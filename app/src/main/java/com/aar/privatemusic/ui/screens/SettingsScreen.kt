@@ -15,6 +15,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -76,6 +77,7 @@ fun SettingsScreen(app: PrivateMusicApp, onOpenStats: () -> Unit, onOpenEq: () -
 
     var storage by remember { mutableStateOf<MusicRepository.StorageInfo?>(null) }
     var operationResult by remember { mutableStateOf<String?>(null) }
+    var normMode by remember { mutableStateOf(com.aar.privatemusic.data.AppSettings.readNormalizeMode(context)) }
     // Duplicate finder: null = closed, non-null (possibly empty) = dialog open.
     var dupGroups by remember { mutableStateOf<List<List<com.aar.privatemusic.data.db.Song>>?>(null) }
     LaunchedEffect(Unit) { storage = app.repository.storageInfo() }
@@ -237,6 +239,26 @@ fun SettingsScreen(app: PrivateMusicApp, onOpenStats: () -> Unit, onOpenEq: () -
                 )
             }
             Switch(checked = normalize, onCheckedChange = { app.settings.setNormalizeVolume(it) })
+        }
+
+        if (normalize) {
+            Row(
+                Modifier.fillMaxWidth().padding(start = 8.dp, bottom = 8.dp),
+                horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("Fuente:", style = MaterialTheme.typography.bodySmall)
+                FilterChip(
+                    selected = normMode == "rms",
+                    onClick = { normMode = "rms"; com.aar.privatemusic.data.AppSettings.writeNormalizeMode(context, "rms") },
+                    label = { Text("RMS medido") },
+                )
+                FilterChip(
+                    selected = normMode == "replaygain",
+                    onClick = { normMode = "replaygain"; com.aar.privatemusic.data.AppSettings.writeNormalizeMode(context, "replaygain") },
+                    label = { Text("ReplayGain (tag)") },
+                )
+            }
         }
 
         Row(
@@ -519,6 +541,19 @@ fun SettingsScreen(app: PrivateMusicApp, onOpenStats: () -> Unit, onOpenEq: () -
             scope.launch {
                 val file = BackupManager.backupDatabase(context)
                 operationResult = if (file != null) "Copia creada: ${file.name}" else "Error al crear la copia"
+            }
+        }
+
+        SettingsAction(
+            title = "Escribir ReplayGain en los archivos",
+            subtitle = "Guarda el volumen normalizado como tag REPLAYGAIN_TRACK_GAIN (FLAC/OGG/Opus)",
+        ) {
+            operationResult = "Escribiendo ReplayGain…"
+            app.appScope.launch {
+                val n = app.repository.writeReplayGainToFiles()
+                com.aar.privatemusic.util.Feedback.show(
+                    if (n > 0) "ReplayGain escrito en $n archivos" else "No se pudo escribir en ningún archivo",
+                )
             }
         }
 

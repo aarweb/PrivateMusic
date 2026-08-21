@@ -33,14 +33,17 @@ kotlin {
         // El escritorio sí lo necesita de verdad, y lo añade en jvmMain.
         val jvmCommonMain by creating {
             dependsOn(commonMain.get())
-            dependencies { compileOnly(libs.json) }
+            dependencies {
+                compileOnly(libs.json)
+                // Etiquetas de audio (ReplayGain) tanto en Android como en el escritorio.
+                implementation(libs.jaudiotagger)
+            }
         }
         androidMain.get().dependsOn(jvmCommonMain)
         jvmMain.get().dependsOn(jvmCommonMain)
 
         jvmMain.dependencies {
             implementation(libs.json)
-            implementation(libs.jaudiotagger)
         }
 
         jvmTest.dependencies {
