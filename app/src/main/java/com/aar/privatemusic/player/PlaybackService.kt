@@ -472,6 +472,11 @@ class PlaybackService : MediaLibraryService() {
                                 val bb = dao.getBpm(nextId)
                                 val ts = dao.getTailSilence(curId) ?: 0L
                                 val r = chooseTempoRatio(ba, bb, maxStretch)
+                                // Sin recortar: es lo que hace falta de verdad para
+                                // igualar, y sin ello no se puede distinguir "cuadra"
+                                // de "se ha quedado en el tope".
+                                val rawR = chooseTempoRatio(ba, bb, 10f)
+                                MixInfoHolder.publish(MixInfo(ba, bb, rawR, r, autoMix))
                                 Triple(listOf(la, lb, rga, rgb), r, ts)
                             }.getOrDefault(Triple(listOf<Float?>(null, null, null, null), 1f, 0L))
                         }
@@ -492,9 +497,12 @@ class PlaybackService : MediaLibraryService() {
                                 tail.setMediaItem(MediaItem.Builder().setUri(curUri).build(), armedAtPos)
                                 tail.prepare()
                             }
+                            val mix = MixInfoHolder.info.value
                             android.util.Log.d(
                                 "Crossfade",
-                                "pre-armed at $armedAtPos ratio=$ratio tailSilenceMs=$tailSilence",
+                                "pre-armed at $armedAtPos ratio=$ratio rawRatio=${mix?.rawRatio} " +
+                                    "autoMix=$autoMix bpm=${mix?.bpmOut}->${mix?.bpmIn} " +
+                                    "tailSilenceMs=$tailSilence",
                             )
                         }
                     }

@@ -553,6 +553,21 @@ fun PlayerScreen(
                     )
                 },
             )
+            // Con la ficha desplegada, qué hizo el AutoMix en esta transición:
+            // es la única forma de ver por qué una mezcla no cuadra (BPM sin
+            // analizar, o tempos demasiado separados para el margen permitido).
+            if (qualityExpanded) {
+                val mixInfo by com.aar.privatemusic.player.MixInfoHolder.info.collectAsState()
+                mixInfo?.describe()?.let { text ->
+                    Text(
+                        text,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.padding(top = 4.dp, start = 24.dp, end = 24.dp),
+                    )
+                }
+            }
         }
 
         Spacer(Modifier.height(6.dp))
