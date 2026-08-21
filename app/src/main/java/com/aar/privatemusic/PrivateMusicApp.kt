@@ -40,6 +40,8 @@ class PrivateMusicApp : Application() {
         private set
     lateinit var subsonic: com.aar.privatemusic.downloader.SubsonicDownloader
         private set
+    lateinit var bandcamp: com.aar.privatemusic.downloader.BandcampDownloader
+        private set
     lateinit var repository: MusicRepository
         private set
     lateinit var playerController: PlayerController
@@ -80,6 +82,7 @@ class PrivateMusicApp : Application() {
         subsonic = com.aar.privatemusic.downloader.SubsonicDownloader(
             downloaderEnv, dao, appScope,
         ) { settings.subsonicConfig() }
+        bandcamp = com.aar.privatemusic.downloader.BandcampDownloader(downloaderEnv, dao, appScope)
         repository = MusicRepository(dao, downloader)
         metadataService = com.aar.privatemusic.metadata.MetadataService(this, dao, downloader.musicDir)
         libraryShare = com.aar.privatemusic.sync.LibraryShare(this, dao)

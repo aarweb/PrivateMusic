@@ -149,6 +149,7 @@ fun SearchScreen(app: PrivateMusicApp) {
     val torrentDownloads by app.torrents.downloads.collectAsState()
     val archiveDownloads by app.archive.downloads.collectAsState()
     val subsonicDownloads by app.subsonic.downloads.collectAsState()
+    val bandcampDownloads by app.bandcamp.downloads.collectAsState()
     val deezerDownloads by app.deezerDownloader.downloads.collectAsState()
     val deezerQuality by app.settings.deezerQuality.collectAsState()
     val deezerArl by app.settings.deezerArl.collectAsState()
@@ -188,8 +189,11 @@ fun SearchScreen(app: PrivateMusicApp) {
         scope.launch {
             // Internet Archive streamea sus ficheros HTTP directamente (1ª pista
             // del ítem); el resto de fuentes resuelven el stream de YouTube.
-            val url = if (result.isArchive) app.archive.previewUrl(result.id)
-            else app.downloader.streamUrl(result.id)
+            val url = when {
+                result.isArchive -> app.archive.previewUrl(result.id)
+                result.isBandcamp -> app.bandcamp.previewUrl(result.id)
+                else -> app.downloader.streamUrl(result.id)
+            }
             if (url != null) {
                 app.playerController.playStream(result.id, result.title, result.artist, url, result.thumbnailUrl)
             } else {
@@ -223,6 +227,16 @@ fun SearchScreen(app: PrivateMusicApp) {
                     com.aar.privatemusic.downloader.Torrent1337xSource.search(query.trim(), limit = 30)
                 results = torrents
                 if (torrents.isEmpty()) error = "Sin resultados de torrents de música"
+                searching = false
+                return@launch
+            }
+            if (source == "bandcamp") {
+                runCatching { com.aar.privatemusic.downloader.BandcampSource.search(query.trim(), limit = 30) }
+                    .onSuccess {
+                        results = it
+                        if (it.isEmpty()) error = "Sin resultados en Bandcamp"
+                    }
+                    .onFailure { error = "Error al buscar en Bandcamp: ${it.message}" }
                 searching = false
                 return@launch
             }
@@ -749,6 +763,7 @@ fun SearchScreen(app: PrivateMusicApp) {
                     val state = when {
                         result.isTorrent -> torrentDownloads[result.id]
                         result.isArchive -> archiveDownloads[result.id]
+                        result.isBandcamp -> bandcampDownloads[app.bandcamp.localId(result.id)]
                         else -> downloads[result.id]
                     }
                     SearchResultRow(
@@ -756,7 +771,7 @@ fun SearchScreen(app: PrivateMusicApp) {
                         inLibrary = inLibrary,
                         state = state,
                         // Álbumes traen su calidad parseada; el resto es audio de YouTube.
-                        qualityLabel = if (result.isTorrent || result.isArchive) result.qualityLabel
+                        qualityLabel = if (result.isTorrent || result.isArchive || result.isBandcamp) result.qualityLabel
                         else YT_QUALITY,
                         previewResolving = previewLoadingId == result.id,
                         previewPlaying = nowPlaying?.songId == "preview:${result.id}" && isPlaying,
@@ -778,6 +793,10 @@ fun SearchScreen(app: PrivateMusicApp) {
                                     app.archive.enqueue(result)
                                     actionMessage = "Descargando de Internet Archive \"${result.title}\"…"
                                 }
+                                result.isBandcamp -> {
+                                    app.bandcamp.enqueue(result)
+                                    actionMessage = "Descargando de Bandcamp \"${result.title}\"…"
+                                }
                                 else -> app.downloader.enqueue(result)
                             }
                         },
@@ -785,11 +804,12 @@ fun SearchScreen(app: PrivateMusicApp) {
                             when {
                                 result.isTorrent -> app.torrents.cancel(result.id)
                                 result.isArchive -> app.archive.cancel(result.id)
+                                result.isBandcamp -> {}
                                 else -> app.downloader.cancel(result.id)
                             }
                         },
                         // Sólo YouTube tiene capítulos; long-press para dividir.
-                        onLongPress = if (!result.isTorrent && !result.isArchive) {
+                        onLongPress = if (!result.isTorrent && !result.isArchive && !result.isBandcamp && !result.isSubsonic) {
                             { checkChapters(result) }
                         } else null,
                     )
