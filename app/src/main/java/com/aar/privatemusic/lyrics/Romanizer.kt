@@ -28,6 +28,17 @@ object Romanizer {
 
     fun romanize(text: String): String = runCatching { transliterator.transliterate(text) }.getOrDefault(text)
 
-    fun romanize(lyrics: Lyrics): Lyrics =
-        lyrics.copy(lines = lyrics.lines.map { it.copy(text = romanize(it.text)) })
+    /**
+     * Romaniza sin perder el resaltado por palabra: cada palabra se translitera
+     * por separado, así que conserva su tramo de tiempo. El texto de la línea se
+     * romaniza entero (con su contexto), que para leer queda mejor.
+     */
+    fun romanize(lyrics: Lyrics): Lyrics = lyrics.copy(
+        lines = lyrics.lines.map { line ->
+            line.copy(
+                text = romanize(line.text),
+                words = line.words.map { it.copy(text = romanize(it.text)) },
+            )
+        }
+    )
 }

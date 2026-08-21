@@ -11,8 +11,21 @@ import java.net.URL
 import java.net.URLEncoder
 import kotlin.math.abs
 
-data class LyricLine(val timeMs: Long, val text: String)
-data class Lyrics(val synced: Boolean, val lines: List<LyricLine>)
+/**
+ * Una línea de la letra. [endMs] y [words] son opcionales: sin ellos se resalta
+ * la línea entera, como siempre; con ellos se puede barrer palabra a palabra.
+ */
+data class LyricLine(
+    val timeMs: Long,
+    val text: String,
+    val endMs: Long? = null,
+    val words: List<LyricWord> = emptyList(),
+)
+
+data class Lyrics(val synced: Boolean, val lines: List<LyricLine>) {
+    /** True si alguna línea trae tiempos por palabra (Enhanced LRC o TTML). */
+    val wordLevel: Boolean get() = lines.any { it.words.isNotEmpty() }
+}
 
 /**
  * Lyrics from LRCLIB (free, no API key). Synced lyrics are cached as
@@ -31,8 +44,12 @@ object LyricsFetcher {
 
     suspend fun getOrFetch(song: Song, dir: File): Lyrics? = withContext(Dispatchers.IO) {
         val lrc = File(dir, "${song.id}.lrc")
+        val ttml = File(dir, "${song.id}.ttml")
         val txt = File(dir, "${song.id}.txt")
         when {
+            // El TTML manda: si alguien lo ha puesto a mano es porque trae
+            // tiempos por palabra, que es más de lo que da LRCLIB.
+            ttml.exists() -> parseTtml(ttml.readText()) ?: parseLrcIfAny(lrc)
             lrc.exists() -> parseLrc(lrc.readText())
             txt.exists() -> plain(txt.readText())
             song.id in misses -> null
@@ -160,28 +177,67 @@ object LyricsFetcher {
         return a.isNotBlank() && b.isNotBlank() && (b.contains(a) || a.contains(b))
     }
 
+    /**
+     * LRC normal y Enhanced LRC en el mismo sitio: si la línea trae marcas
+     * `<mm:ss.xx>` se guardan como palabras y el texto va limpio; si no, queda
+     * la línea de siempre. Un mismo fichero puede mezclar ambas.
+     */
     internal fun parseLrc(text: String): Lyrics? {
-        val tag = Regex("""\[(\d{1,2}):(\d{2})(?:[.:](\d{1,3}))?]""")
         val lines = mutableListOf<LyricLine>()
         text.lines().forEach { raw ->
-            val tags = tag.findAll(raw).toList()
+            val tags = LyricFormats.lineTags(raw)
             if (tags.isEmpty()) return@forEach
             val content = raw.substring(tags.last().range.last + 1).trim()
             if (content.isBlank()) return@forEach
+            val clean = LyricFormats.stripWordTags(content)
+            if (clean.isBlank()) return@forEach
             tags.forEach { m ->
-                val min = m.groupValues[1].toLong()
-                val sec = m.groupValues[2].toLong()
-                val fracRaw = m.groupValues[3]
-                val frac = when (fracRaw.length) {
-                    0 -> 0L
-                    1 -> fracRaw.toLong() * 100
-                    2 -> fracRaw.toLong() * 10
-                    else -> fracRaw.take(3).toLong()
-                }
-                lines += LyricLine(min * 60_000 + sec * 1_000 + frac, content)
+                val timeMs = LyricFormats.toMs(m.groupValues[1], m.groupValues[2], m.groupValues[3])
+                lines += LyricLine(timeMs, clean, null, LyricFormats.parseWords(content, null))
             }
         }
-        return if (lines.isEmpty()) null else Lyrics(true, lines.sortedBy { it.timeMs })
+        if (lines.isEmpty()) return null
+        return Lyrics(true, withLineEnds(lines.sortedBy { it.timeMs }))
+    }
+
+    /**
+     * Cierra cada línea con el arranque de la siguiente. Sin esto no se sabe
+     * cuándo termina un verso, y el barrido de la última palabra se queda a
+     * medias. La última línea se deja abierta (null): no hay dato que inventar.
+     */
+    private fun withLineEnds(sorted: List<LyricLine>): List<LyricLine> =
+        sorted.mapIndexed { i, line ->
+            val end = line.endMs ?: sorted.getOrNull(i + 1)?.timeMs
+            val words = if (line.words.isEmpty()) {
+                line.words
+            } else {
+                // La última palabra hereda el final de la línea.
+                line.words.mapIndexed { w, word ->
+                    if (w == line.words.lastIndex && end != null && end > word.startMs) {
+                        word.copy(endMs = end)
+                    } else word
+                }
+            }
+            line.copy(endMs = end, words = words)
+        }
+
+    /** Lee un fichero TTML (estilo Apple Music) puesto a mano junto al audio. */
+    internal fun parseTtml(xml: String): Lyrics? = LyricFormats.parseTtml(xml)
+
+    private fun parseLrcIfAny(lrc: File): Lyrics? =
+        if (lrc.exists()) parseLrc(lrc.readText()) else null
+
+    /**
+     * Guarda una letra sincronizada como Enhanced LRC junto al audio y la
+     * devuelve ya parseada. Lo usa la alineación automática ([ForcedAligner]).
+     */
+    fun saveSynced(songId: String, dir: File, lyrics: Lyrics): Lyrics? {
+        val lrc = File(dir, "$songId.lrc")
+        lrc.writeText(LyricFormats.toEnhancedLrc(lyrics))
+        // El .txt plano ya no hace falta: la letra sincronizada lo sustituye.
+        File(dir, "$songId.txt").delete()
+        misses.remove(songId)
+        return parseLrc(lrc.readText())
     }
 
     private fun plain(text: String): Lyrics? {

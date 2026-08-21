@@ -388,6 +388,9 @@ fun PlayerScreen(
                 onSeek = { controller.seekTo(it) },
                 accent = accent,
                 onShareFrom = { lyricShareFrom = it },
+                // Para seguir una sílaba no basta el tic de medio segundo del
+                // deslizador: el resaltado por palabra pregunta la posición real.
+                livePositionMs = { controller.positionMs },
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(280.dp),
@@ -714,12 +717,26 @@ private fun LyricsPanel(
     onSeek: (Long) -> Unit,
     accent: Color,
     onShareFrom: (Int) -> Unit = {},
+    livePositionMs: () -> Long = positionMs,
     modifier: Modifier = Modifier,
 ) {
     val listState = rememberLazyListState()
     // La posición se lee aquí dentro, no en el llamante: así el tic de medio
     // segundo recompone la letra y no la pantalla entera.
     val currentIdx = if (lyrics.synced) lyrics.lines.indexOfLast { it.timeMs <= positionMs() } else -1
+
+    // Reloj fino SÓLO para el resaltado por palabra. El tic de medio segundo de
+    // la pantalla no vale para seguir una sílaba, pero tampoco se puede
+    // recomponer la letra a 60 fps: este valor se lee únicamente dentro de
+    // `graphicsLayer` (fase de dibujo), así que mover la palabra activa repinta
+    // y no recompone nada. Sólo corre si la letra trae tiempos por palabra.
+    val wordClock = remember { androidx.compose.runtime.mutableLongStateOf(0L) }
+    LaunchedEffect(lyrics) {
+        if (!lyrics.wordLevel) return@LaunchedEffect
+        while (true) {
+            androidx.compose.runtime.withFrameMillis { wordClock.longValue = livePositionMs() }
+        }
+    }
 
     // Mientras haya un dedo en la letra no se desplaza sola. Antes, cada vez que
     // cambiaba la línea activa la lista se movía bajo el dedo, y el toque acababa
@@ -769,30 +786,99 @@ private fun LyricsPanel(
                 animationSpec = spring(dampingRatio = Spring.DampingRatioLowBouncy),
                 label = "lyricScale",
             )
-            Text(
-                line.text,
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = if (active) androidx.compose.ui.text.font.FontWeight.SemiBold else null,
-                textAlign = TextAlign.Center,
-                // El mismo color de la portada que el resto de los mandos: si no,
-                // la línea que suena es la única cosa azul en una pantalla amarilla.
-                color = if (active) accent else MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .graphicsLayer {
-                        this.alpha = alpha
-                        scaleX = scale
-                        scaleY = scale
-                    }
-                    .combinedClickable(
-                        onClick = { if (lyrics.synced) onSeek(line.timeMs) },
-                        onLongClick = { onShareFrom(i) },
-                    )
-                    .padding(vertical = 6.dp),
-            )
+            val lineModifier = Modifier
+                .fillMaxWidth()
+                .graphicsLayer {
+                    this.alpha = alpha
+                    scaleX = scale
+                    scaleY = scale
+                }
+                .combinedClickable(
+                    onClick = { if (lyrics.synced) onSeek(line.timeMs) },
+                    onLongClick = { onShareFrom(i) },
+                )
+                .padding(vertical = 6.dp)
+
+            if (active && line.words.isNotEmpty()) {
+                // La línea que suena, si trae tiempos por palabra, se enciende
+                // sílaba a sílaba; las demás siguen pintándose de una pieza.
+                WordLine(words = line.words, accent = accent, clock = wordClock, modifier = lineModifier)
+            } else {
+                Text(
+                    line.text,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = if (active) androidx.compose.ui.text.font.FontWeight.SemiBold else null,
+                    textAlign = TextAlign.Center,
+                    // El mismo color de la portada que el resto de los mandos: si no,
+                    // la línea que suena es la única cosa azul en una pantalla amarilla.
+                    color = if (active) accent else MaterialTheme.colorScheme.onSurface,
+                    modifier = lineModifier,
+                )
+            }
         }
     }
 }
+
+/**
+ * La línea que se está cantando, palabra por palabra (Enhanced LRC o TTML).
+ *
+ * Cada palabra se pinta dos veces, una apagada y otra con el color de la
+ * portada encima; lo que se mueve es la opacidad de la de arriba. Ese valor se
+ * calcula dentro de `graphicsLayer`, o sea en la fase de dibujo: el reloj
+ * avanza 60 veces por segundo sin recomponer ni una vez. Pintarlo cambiando el
+ * `color` del texto obligaría a recomponer la línea entera en cada fotograma.
+ *
+ * La palabra se enciende con un pequeño degradado al entrar (no de golpe) y se
+ * queda encendida hasta el final del verso, que es como se lee un karaoke: lo
+ * ya cantado sigue visible.
+ */
+@Composable
+private fun WordLine(
+    words: List<com.aar.privatemusic.lyrics.LyricWord>,
+    accent: Color,
+    clock: androidx.compose.runtime.MutableLongState,
+    modifier: Modifier = Modifier,
+) {
+    androidx.compose.foundation.layout.FlowRow(
+        modifier = modifier,
+        horizontalArrangement = Arrangement.Center,
+    ) {
+        words.forEach { word ->
+            Box {
+                Text(
+                    word.text,
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.padding(horizontal = 3.dp),
+                )
+                Text(
+                    word.text,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                    color = accent,
+                    modifier = Modifier
+                        .padding(horizontal = 3.dp)
+                        .graphicsLayer { alpha = wordAlpha(clock.longValue, word) },
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Cuánto está encendida una palabra: 0 antes de que le toque, 1 en cuanto entra
+ * (con [FADE_IN_MS] de transición para que no dé un salto) y 1 desde entonces.
+ */
+private fun wordAlpha(positionMs: Long, word: com.aar.privatemusic.lyrics.LyricWord): Float {
+    val delta = positionMs - word.startMs
+    return when {
+        delta < 0 -> 0f
+        delta >= FADE_IN_MS -> 1f
+        else -> delta.toFloat() / FADE_IN_MS
+    }
+}
+
+private const val FADE_IN_MS = 120f
 
 /**
  * Where the audio is coming out right now: cast device, headphones or the
