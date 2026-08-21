@@ -154,6 +154,13 @@ fun PlayerScreen(
     val playbackSpeed by controller.playbackSpeed.collectAsState()
     val pitchSemitones by controller.pitchSemitones.collectAsState()
 
+    // Resultado de "Sincronizar letra": sustituye a la plana hasta cambiar de
+    // canción (en disco ya queda guardada, así que al volver se lee sola).
+    var syncedOverride by remember(song?.id) {
+        mutableStateOf<com.aar.privatemusic.lyrics.Lyrics?>(null)
+    }
+    val context = LocalContext.current
+
     val lyrics by produceState<com.aar.privatemusic.lyrics.Lyrics?>(initialValue = null, song?.id) {
         // produceState recuerda su valor SIN clave: al cambiar de canción sólo
         // relanza el productor. Sin este borrado, la letra de la canción
@@ -364,21 +371,69 @@ fun PlayerScreen(
         }
 
         Spacer(Modifier.weight(0.6f))
-        if (showLyrics && lyrics != null) {
+        // La letra recién sincronizada manda sobre la plana que se cargó al
+        // entrar; se olvida al cambiar de canción.
+        val effectiveLyrics = syncedOverride ?: lyrics
+        if (showLyrics && effectiveLyrics != null) {
+            val base = effectiveLyrics
             // Letras en hangul, kana, cirílico…: un toggle para leerlas en latino.
             val romanize by app.settings.romanizeLyrics.collectAsState()
-            val foreign = remember(lyrics) { com.aar.privatemusic.lyrics.Romanizer.needsRomanization(lyrics!!) }
-            val shown by produceState(initialValue = lyrics!!, lyrics, romanize, foreign) {
+            val foreign = remember(base) { com.aar.privatemusic.lyrics.Romanizer.needsRomanization(base) }
+            val shown by produceState(initialValue = base, base, romanize, foreign) {
                 value = if (foreign && romanize) {
-                    withContext(Dispatchers.Default) { com.aar.privatemusic.lyrics.Romanizer.romanize(lyrics!!) }
-                } else lyrics!!
+                    withContext(Dispatchers.Default) { com.aar.privatemusic.lyrics.Romanizer.romanize(base) }
+                } else base
             }
-            if (foreign) {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
+            // Letra sin tiempos: se puede cuadrar con la voz de la canción.
+            val syncState by com.aar.privatemusic.util.LyricsSyncManager
+                .stateFor(song?.id.orEmpty()).collectAsState()
+            LaunchedEffect(syncState.lyrics, song?.id) {
+                // Al terminar, la letra recién sincronizada sustituye a la plana.
+                val generated = syncState.lyrics ?: return@LaunchedEffect
+                syncedOverride = generated
+                song?.id?.let { com.aar.privatemusic.util.LyricsSyncManager.clear(it) }
+            }
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (foreign) {
                     androidx.compose.material3.FilterChip(
                         selected = romanize,
                         onClick = { app.settings.setRomanizeLyrics(!romanize) },
                         label = { Text(if (romanize) "Romanizado" else "Romanizar") },
+                    )
+                }
+                val songNow = song
+                if (!shown.synced && songNow != null) {
+                    if (foreign) Spacer(Modifier.width(8.dp))
+                    androidx.compose.material3.AssistChip(
+                        onClick = {
+                            if (!syncState.running) {
+                                com.aar.privatemusic.util.LyricsSyncManager.start(
+                                    context, songNow, app.repository.musicDir, shown.lines.map { it.text },
+                                )
+                            }
+                        },
+                        enabled = !syncState.running,
+                        label = { Text(if (syncState.running) "Sincronizando…" else "Sincronizar letra") },
+                    )
+                }
+            }
+            if (syncState.running || syncState.failed) {
+                Text(
+                    syncState.status,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (syncState.failed) MaterialTheme.colorScheme.error
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp),
+                )
+                if (syncState.running && syncState.progress > 0) {
+                    androidx.compose.material3.LinearProgressIndicator(
+                        progress = { syncState.progress / 100f },
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 48.dp, vertical = 4.dp),
                     )
                 }
             }
