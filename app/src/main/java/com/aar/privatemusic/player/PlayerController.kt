@@ -638,6 +638,10 @@ class PlayerController(
                     .setTitle(title)
                     .setArtist(artist)
                     .setArtworkUri(artPath?.let { Uri.fromFile(File(it)) })
+                    // Algunos opus/webm no traen duración en el contenedor, así que
+                    // player.duration queda en TIME_UNSET y el fundido no se armaba.
+                    // La duración real la conocemos de la BD: viaja aquí como respaldo.
+                    .setDurationMs(durationSec * 1000L)
                     .build()
             )
             .build()

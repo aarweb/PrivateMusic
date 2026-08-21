@@ -394,7 +394,15 @@ class PlaybackService : MediaLibraryService() {
                 }
 
                 // ---- Pre-arm & fire the overlap around the crossfade window. ----
-                val duration = player.duration
+                // Algunos opus/webm de YouTube no reportan duración en el contenedor
+                // (player.duration == TIME_UNSET) y sin ella el fundido nunca se
+                // armaba para esas canciones. La duración real viaja en el MediaItem
+                // (Song.durationSec) y se usa como respaldo.
+                val duration = player.duration.let { d ->
+                    if (d != androidx.media3.common.C.TIME_UNSET) d
+                    else player.currentMediaItem?.mediaMetadata?.durationMs
+                        ?: androidx.media3.common.C.TIME_UNSET
+                }
                 if (crossfadeMs > 0 && tail != null && player.isPlaying &&
                     duration != androidx.media3.common.C.TIME_UNSET &&
                     duration > crossfadeMs * 2 &&
