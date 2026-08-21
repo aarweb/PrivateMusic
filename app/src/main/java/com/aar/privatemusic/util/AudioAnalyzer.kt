@@ -150,18 +150,28 @@ object AudioAnalyzer {
         val maxLag = (framesPerSec * 60f / 60f).toInt().coerceAtMost(n / 2) // 60 BPM
         if (maxLag <= minLag) return null
 
+        val scores = FloatArray(maxLag + 1)
         var bestLag = 0
         var bestScore = 0f
         for (lag in minLag..maxLag) {
             var score = 0f
             for (i in 0 until n - lag) score += onset[i] * onset[i + lag]
+            scores[lag] = score
             if (score > bestScore) {
                 bestScore = score
                 bestLag = lag
             }
         }
         if (bestLag == 0 || bestScore <= 0f) return null
-        var bpm = 60f * framesPerSec / bestLag
+        // Los retardos son enteros y a ~43 frames/s eso cuantiza el BPM hasta un
+        // 6% en los tempos rápidos: el vértice de la parábola que pasa por el
+        // pico y sus vecinos lo afina sin coste.
+        val refinedLag = if (bestLag > minLag && bestLag < maxLag) {
+            bestLag + com.aar.privatemusic.dsp.parabolicPeakOffset(
+                scores[bestLag - 1], bestScore, scores[bestLag + 1],
+            )
+        } else bestLag.toFloat()
+        var bpm = 60f * framesPerSec / refinedLag
         while (bpm < 70f) bpm *= 2f
         while (bpm > 180f) bpm /= 2f
         return (bpm * 10).roundToInt() / 10f
