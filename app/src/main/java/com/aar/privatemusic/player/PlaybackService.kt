@@ -47,7 +47,9 @@ class PlaybackService : MediaLibraryService() {
 
     override fun onCreate() {
         super.onCreate()
+        AudioDsp.reload(this)
         val player = ExoPlayer.Builder(this)
+            .setRenderersFactory(AudioDsp.buildRenderersFactory(this))
             .setAudioAttributes(
                 AudioAttributes.Builder()
                     .setUsage(C.USAGE_MEDIA)
@@ -78,6 +80,7 @@ class PlaybackService : MediaLibraryService() {
         // track while the main player already runs the incoming one, so both
         // songs genuinely overlap. No audio focus: it rides on the main one.
         tailPlayer = ExoPlayer.Builder(this)
+            .setRenderersFactory(AudioDsp.buildRenderersFactory(this))
             .setAudioAttributes(
                 AudioAttributes.Builder()
                     .setUsage(C.USAGE_MEDIA)

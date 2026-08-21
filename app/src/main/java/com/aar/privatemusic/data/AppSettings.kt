@@ -252,6 +252,48 @@ class AppSettings(context: Context) {
         fun readAutoMix(context: Context): Boolean =
             context.getSharedPreferences("settings", Context.MODE_PRIVATE).getBoolean(KEY_AUTOMIX, false)
 
+        // --- EQ paramétrico / DSP propio ---
+        fun readEqMode(context: Context): String =
+            context.getSharedPreferences("settings", Context.MODE_PRIVATE)
+                .getString("eq_mode", "graphic") ?: "graphic"
+
+        fun writeEqMode(context: Context, mode: String) =
+            context.getSharedPreferences("settings", Context.MODE_PRIVATE)
+                .edit().putString("eq_mode", mode).apply()
+
+        fun readEqPreamp(context: Context): Float =
+            context.getSharedPreferences("settings", Context.MODE_PRIVATE)
+                .getFloat("eq_param_preamp", 0f)
+
+        fun writeEqPreamp(context: Context, value: Float) =
+            context.getSharedPreferences("settings", Context.MODE_PRIVATE)
+                .edit().putFloat("eq_param_preamp", value).apply()
+
+        fun readEqFilters(context: Context): String? =
+            context.getSharedPreferences("settings", Context.MODE_PRIVATE)
+                .getString("eq_param_filters", null)
+
+        fun writeEqFilters(context: Context, json: String) =
+            context.getSharedPreferences("settings", Context.MODE_PRIVATE)
+                .edit().putString("eq_param_filters", json).apply()
+
+        fun readCrossfeedLevel(context: Context): Int =
+            context.getSharedPreferences("settings", Context.MODE_PRIVATE)
+                .getInt("crossfeed_level", 0)
+
+        fun writeCrossfeedLevel(context: Context, level: Int) =
+            context.getSharedPreferences("settings", Context.MODE_PRIVATE)
+                .edit().putInt("crossfeed_level", level).apply()
+
+        /** Modo de normalización: "rms" (medida propia) o "replaygain" (tag). */
+        fun readNormalizeMode(context: Context): String =
+            context.getSharedPreferences("settings", Context.MODE_PRIVATE)
+                .getString("normalize_mode", "rms") ?: "rms"
+
+        fun writeNormalizeMode(context: Context, mode: String) =
+            context.getSharedPreferences("settings", Context.MODE_PRIVATE)
+                .edit().putString("normalize_mode", mode).apply()
+
         /** Spotify-style target loudness; louder tracks are attenuated down to it. */
         const val TARGET_LOUDNESS_DB = -14f
     }
