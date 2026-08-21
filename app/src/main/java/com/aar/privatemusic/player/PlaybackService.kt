@@ -180,37 +180,16 @@ class PlaybackService : MediaLibraryService() {
                 android.util.Log.w("Cast", "no se pasa a la TV: sin IP local en la red")
                 return@launch
             }
-            android.util.Log.d("Cast", "sirviendo desde $ip:${com.aar.privatemusic.cast.MediaHttpServer.PORT}")
-            val items = ids.mapNotNull { id ->
-                dao.getSong(id)?.let { song ->
-                    val ext = java.io.File(song.filePath).extension.lowercase()
-                    val mime = when (ext) {
-                        "webm" -> "audio/webm"; "m4a", "mp4" -> "audio/mp4"
-                        "mp3" -> "audio/mpeg"; "flac" -> "audio/flac"
-                        "wav" -> "audio/wav"; else -> "audio/*"
-                    }
-                    // Artwork must be an URL the TV can fetch: local art via our
-                    // server, else the original remote thumbnail.
-                    val artUri = when {
-                        song.artPath?.let { java.io.File(it).canRead() } == true ->
-                            "http://$ip:${com.aar.privatemusic.cast.MediaHttpServer.PORT}/art/${song.id}"
-                        !song.thumbnailUrl.isNullOrBlank() -> song.thumbnailUrl
-                        else -> null
-                    }
-                    MediaItem.Builder()
-                        .setMediaId(song.id)
-                        .setUri("http://$ip:${com.aar.privatemusic.cast.MediaHttpServer.PORT}/song/${song.id}")
-                        .setMimeType(mime)
-                        .setMediaMetadata(
-                            MediaMetadata.Builder()
-                                .setTitle(song.title)
-                                .setArtist(song.artist)
-                                .apply { artUri?.let { setArtworkUri(android.net.Uri.parse(it)) } }
-                                .build()
-                        )
-                        .build()
-                }
-            }
+            val base = com.aar.privatemusic.cast.CastUrls.base(
+                ip,
+                com.aar.privatemusic.cast.MediaHttpServer.PORT,
+            )
+            android.util.Log.d("Cast", "sirviendo desde $base")
+            // A partir de aquí, TODO lo que la app ponga a sonar viaja como URL:
+            // lo lee `onAddMediaItems`, que es por donde pasa cada canción y cada
+            // playlist que elijas mientras suena en la tele.
+            com.aar.privatemusic.cast.CastState.baseUrl = base
+            val items = ids.mapNotNull { id -> dao.getSong(id)?.toCastItem(base) }
             if (items.isEmpty()) {
                 android.util.Log.w("Cast", "no se pasa a la TV: ninguna canción de la cola está en la biblioteca")
                 return@launch
@@ -240,11 +219,35 @@ class PlaybackService : MediaLibraryService() {
         val local = localPlayer ?: return
         val cast = castPlayer ?: return
         val session = mediaSession ?: return
+        val castIds = (0 until cast.mediaItemCount).map { cast.getMediaItemAt(it).mediaId }
         val index = cast.currentMediaItemIndex
         val position = cast.currentPosition
+        val wasPlaying = cast.isPlaying
         cast.stop()
         session.player = local
-        if (local.mediaItemCount > index) {
+        com.aar.privatemusic.cast.CastState.baseUrl = null
+        val localIds = (0 until local.mediaItemCount).map { local.getMediaItemAt(it).mediaId }
+        val dao = castDao
+        if (castIds.isNotEmpty() && castIds != localIds && dao != null) {
+            // Si cambiaste de playlist mientras sonaba en la tele, el reproductor
+            // del móvil se quedó con la cola vieja: volver aquí sonaría a otra
+            // cosa. Se rehace con los ficheros locales de lo que estaba puesto.
+            android.util.Log.d("Cast", "la cola cambió en la tele: se rehace en local (${castIds.size})")
+            serviceScope.launch {
+                val songs = castIds.mapNotNull { dao.getSong(it) }
+                withContext(Dispatchers.Main) {
+                    if (songs.isNotEmpty()) {
+                        local.setMediaItems(
+                            songs.map { it.toPlayableItem() },
+                            index.coerceIn(0, songs.size - 1),
+                            position,
+                        )
+                        local.prepare()
+                        if (wasPlaying) local.play()
+                    }
+                }
+            }
+        } else if (local.mediaItemCount > index) {
             local.seekTo(index, position)
         }
         // While casting, Android suspends the Bluetooth A2DP link; a fresh
@@ -822,15 +825,38 @@ private class LibraryCallback(
             ?: LibraryResult.ofError(LibraryResult.RESULT_ERROR_BAD_VALUE)
     }
 
-    /** Controllers send bare mediaIds; resolve them to playable items with a real URI. */
+    /**
+     * Controllers send bare mediaIds; resolve them to playable items with a real URI.
+     *
+     * Es el embudo por el que pasa TODO lo que la app pone a sonar: elegir una
+     * canción, cambiar de playlist, encolar, restaurar la sesión... Por eso es
+     * aquí donde se decide si la pista viaja como fichero local o como URL: si
+     * está sonando en la tele, un `file://` del móvil no lo alcanza nadie y la
+     * tele se queda muda sin decir nada (era justo lo que pasaba al cambiar de
+     * canción mientras se comparte).
+     */
     override fun onAddMediaItems(
         mediaSession: MediaSession,
         controller: MediaSession.ControllerInfo,
         mediaItems: MutableList<MediaItem>,
     ): ListenableFuture<MutableList<MediaItem>> = scope.future {
+        val base = com.aar.privatemusic.cast.CastState.baseUrl
         mediaItems.map { item ->
             val requestUri = item.requestMetadata.mediaUri
             when {
+                // Sonando en la tele: la canción de la biblioteca se sirve por HTTP.
+                base != null && requestUri == null && !item.mediaId.startsWith("preview:") ->
+                    dao.getSong(item.mediaId)?.toCastItem(base) ?: item.also {
+                        android.util.Log.w(
+                            "Cast",
+                            "\"${it.mediaId}\" no está en la biblioteca: la tele no puede reproducirla",
+                        )
+                    }
+                // Karaoke: el instrumental es un fichero del móvil que la tele no
+                // alcanza. Se deja tal cual (sonará en el móvil, no en la tele).
+                base != null && requestUri != null -> item.buildUpon().setUri(requestUri).build().also {
+                    android.util.Log.w("Cast", "pista local (karaoke/preescucha): no viaja a la tele")
+                }
                 item.localConfiguration != null -> item
                 // Karaoke & co.: an explicit file travels in requestMetadata.
                 requestUri != null -> item.buildUpon().setUri(requestUri).build()
@@ -858,6 +884,38 @@ private fun Song.toBrowseItem(): MediaItem =
         .setMediaId(id)
         .setMediaMetadata(baseMetadata(this).setIsBrowsable(false).setIsPlayable(true).build())
         .build()
+
+/**
+ * La misma canción, pero como la tiene que ver la tele: servida por HTTP.
+ *
+ * Un `file://` del móvil no lo alcanza nadie desde el salón, así que audio y
+ * carátula salen por el servidor local. Lo usan los dos caminos que mandan
+ * música a la tele —empezar a compartir y cambiar de canción o de playlist
+ * mientras suena— para que no vuelvan a divergir.
+ */
+private fun Song.toCastItem(base: String): MediaItem {
+    val artUri = when {
+        artPath?.let { File(it).canRead() } == true -> com.aar.privatemusic.cast.CastUrls.art(base, id)
+        !thumbnailUrl.isNullOrBlank() -> thumbnailUrl
+        else -> null
+    }
+    return MediaItem.Builder()
+        .setMediaId(id)
+        .setUri(com.aar.privatemusic.cast.CastUrls.song(base, id))
+        .setMimeType(com.aar.privatemusic.cast.CastUrls.mimeFor(filePath))
+        .setMediaMetadata(
+            MediaMetadata.Builder()
+                .setTitle(title)
+                .setArtist(artist)
+                // Sin tipo, el receptor por defecto asume vídeo y pinta la ficha
+                // de la canción como si fuera una película.
+                .setMediaType(MediaMetadata.MEDIA_TYPE_MUSIC)
+                .setDurationMs(durationSec * 1000L)
+                .setArtworkUri(artUri?.let { Uri.parse(it) })
+                .build()
+        )
+        .build()
+}
 
 private fun Song.toPlayableItem(): MediaItem =
     MediaItem.Builder()

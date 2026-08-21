@@ -97,14 +97,20 @@ class PrivateMusicApp : Application() {
         downloader.onDownloadComplete = { id ->
             appScope.launch { dao.getSong(id)?.let { metadataService.autoIdentify(it) } }
         }
-        playerController = PlayerController(this) { songId ->
-            appScope.launch {
-                repository.recordPlay(songId)
-                dao.getSong(songId)?.let {
-                    ListenBrainz.submitListen(this@PrivateMusicApp, it.title, it.artist)
+        playerController = PlayerController(
+            context = this,
+            onSongPlayed = { songId ->
+                appScope.launch {
+                    repository.recordPlay(songId)
+                    dao.getSong(songId)?.let {
+                        ListenBrainz.submitListen(this@PrivateMusicApp, it.title, it.artist)
+                    }
                 }
-            }
-        }
+            },
+            // Compartiendo con la tele, el reproductor sólo devuelve el id: el
+            // resto de datos de la canción salen de aquí.
+            resolveSong = { songId -> dao.getSong(songId) },
+        )
         runningMode = com.aar.privatemusic.player.RunningMode(this, dao, playerController, appScope)
         // 80/20: downloads throttle themselves while audio is actually playing.
         downloader.isPlayingProvider = { playerController.isPlaying.value }

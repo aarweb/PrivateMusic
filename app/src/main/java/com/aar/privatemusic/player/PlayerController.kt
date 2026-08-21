@@ -40,6 +40,15 @@ data class QueueItem(
 class PlayerController(
     context: Context,
     private val onSongPlayed: (String) -> Unit = {},
+    /**
+     * Busca una canción por su id en la biblioteca.
+     *
+     * Hace falta porque sonando en la tele el reproductor NO devuelve los datos
+     * completos: al recuperar la cola desde Chromecast sólo sobreviven el id, el
+     * título y la URL — el artista y la carátula se pierden por el camino. Sin
+     * esto, la pantalla del reproductor se queda en blanco mientras se comparte.
+     */
+    private val resolveSong: (suspend (String) -> Song?)? = null,
 ) {
 
     private var controller: MediaController? = null
@@ -110,9 +119,15 @@ class PlayerController(
                             songId = it.mediaId,
                             title = it.mediaMetadata.title?.toString() ?: "",
                             artist = it.mediaMetadata.artist?.toString() ?: "",
-                            artPath = it.mediaMetadata.artworkUri?.path,
+                            artPath = it.mediaMetadata.artworkUri?.localFilePath(),
                             durationMs = player.duration.coerceAtLeast(0),
                         )
+                    }
+                    // Sonando en la tele llega el id y poco más: los datos que
+                    // falten se piden a la biblioteca (una vez por canción).
+                    if (item != null && needsLibraryData(item) && item.mediaId != lastEnrichedId) {
+                        lastEnrichedId = item.mediaId
+                        enrichFromLibrary(item.mediaId)
                     }
                     // Play history: record once per track start while playing.
                     // Previews are not library songs; they'd pollute the stats.
@@ -129,14 +144,20 @@ class PlayerController(
                             Player.EVENT_MEDIA_ITEM_TRANSITION,
                         )
                     ) {
-                        _queue.value = (0 until player.mediaItemCount).map { i ->
+                        val items = (0 until player.mediaItemCount).map { i ->
                             val mi = player.getMediaItemAt(i)
                             QueueItem(
                                 mediaId = mi.mediaId,
                                 title = mi.mediaMetadata.title?.toString() ?: "",
                                 artist = mi.mediaMetadata.artist?.toString() ?: "",
-                                artPath = mi.mediaMetadata.artworkUri?.path,
+                                artPath = mi.mediaMetadata.artworkUri?.localFilePath(),
                             )
+                        }
+                        _queue.value = items
+                        // Igual que arriba: la cola que vuelve de la tele viene
+                        // sin artista ni carátula.
+                        if (items.any { it.artPath == null || it.artist.isBlank() }) {
+                            enrichQueueFromLibrary(items)
                         }
                     }
                     _currentIndex.value = player.currentMediaItemIndex
@@ -199,6 +220,52 @@ class PlayerController(
     }
 
     val positionMs: Long get() = controller?.currentPosition ?: 0L
+
+    /** Última canción cuyos datos ya se completaron desde la biblioteca. */
+    private var lastEnrichedId: String? = null
+
+    /**
+     * ¿Al item le faltan datos que la pantalla necesita? Pasa con lo que vuelve
+     * de Chromecast (sólo id, título y URL) y con cualquier cola restaurada a la
+     * que le falte la carátula. En local no entra nunca: los items se construyen
+     * aquí mismo con todo puesto.
+     */
+    private fun needsLibraryData(item: MediaItem): Boolean =
+        item.mediaMetadata.artworkUri?.localFilePath() == null ||
+            item.mediaMetadata.artist.isNullOrBlank()
+
+    private fun enrichFromLibrary(songId: String) {
+        val lookup = resolveSong ?: return
+        if (songId.startsWith("preview:")) return
+        mainScope.launch {
+            val song = lookup(songId) ?: return@launch
+            val current = _nowPlaying.value ?: return@launch
+            if (current.songId != songId) return@launch
+            _nowPlaying.value = current.copy(
+                title = song.title,
+                artist = song.artist,
+                artPath = song.artPath,
+                durationMs = if (current.durationMs > 0) current.durationMs
+                else song.durationSec * 1000L,
+            )
+        }
+    }
+
+    private fun enrichQueueFromLibrary(items: List<QueueItem>) {
+        val lookup = resolveSong ?: return
+        mainScope.launch {
+            val filled = items.map { q ->
+                if (q.artPath != null && q.artist.isNotBlank()) q
+                else lookup(q.mediaId)?.let {
+                    q.copy(title = it.title, artist = it.artist, artPath = it.artPath)
+                } ?: q
+            }
+            // La cola pudo cambiar mientras se consultaba la biblioteca.
+            if (_queue.value.map { it.mediaId } == items.map { it.mediaId }) {
+                _queue.value = filled
+            }
+        }
+    }
 
     fun playQueue(songs: List<Song>, startIndex: Int) {
         val c = controller ?: return
@@ -631,6 +698,16 @@ class PlayerController(
         c.prepare()
         c.play()
     }
+
+    /**
+     * Ruta en disco de una carátula, o null si no es un fichero local.
+     *
+     * Compartiendo con la tele la carátula viaja como `http://…/art/<id>`, y
+     * `Uri.path` devolvía "/art/<id>": la pantalla intentaba abrir ese fichero
+     * inexistente y se quedaba sin imagen en vez de buscarla en la biblioteca.
+     */
+    private fun Uri.localFilePath(): String? =
+        if (scheme == null || scheme == "file") path else null
 
     private fun Song.toMediaItem(): MediaItem =
         MediaItem.Builder()
