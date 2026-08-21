@@ -156,7 +156,11 @@ class PlayerController(
                         _queue.value = items
                         // Igual que arriba: la cola que vuelve de la tele viene
                         // sin artista ni carátula.
-                        if (items.any { it.artPath == null || it.artist.isBlank() }) {
+                        if (items.any {
+                                it.artist.isBlank() ||
+                                    (com.aar.privatemusic.cast.CastState.baseUrl != null && it.artPath == null)
+                            }
+                        ) {
                             enrichQueueFromLibrary(items)
                         }
                     }
@@ -226,13 +230,18 @@ class PlayerController(
 
     /**
      * ¿Al item le faltan datos que la pantalla necesita? Pasa con lo que vuelve
-     * de Chromecast (sólo id, título y URL) y con cualquier cola restaurada a la
-     * que le falte la carátula. En local no entra nunca: los items se construyen
-     * aquí mismo con todo puesto.
+     * de Chromecast, que sólo devuelve id, título y URL.
+     *
+     * El artista en blanco es la señal fiable: sonando en el móvil siempre va
+     * puesto. La carátula NO sirve de señal por sí sola —hay canciones que
+     * simplemente no tienen— y usarla haría consultar la biblioteca en cada
+     * cambio de canción para no encontrar nada; por eso sólo cuenta mientras se
+     * comparte con la tele, que es cuando la carátula viaja como URL.
      */
     private fun needsLibraryData(item: MediaItem): Boolean =
-        item.mediaMetadata.artworkUri?.localFilePath() == null ||
-            item.mediaMetadata.artist.isNullOrBlank()
+        item.mediaMetadata.artist.isNullOrBlank() ||
+            (com.aar.privatemusic.cast.CastState.baseUrl != null &&
+                item.mediaMetadata.artworkUri?.localFilePath() == null)
 
     private fun enrichFromLibrary(songId: String) {
         val lookup = resolveSong ?: return

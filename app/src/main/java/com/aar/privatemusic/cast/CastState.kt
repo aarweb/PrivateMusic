@@ -14,11 +14,4 @@ object CastState {
      */
     @Volatile
     var baseUrl: String? = null
-
-    /**
-     * La carátula que se le manda a la tele es una URL, pero la app la quiere
-     * pintar desde el disco. La ruta local viaja aquí, en los extras, para no
-     * volver a la base de datos sólo para dibujarla.
-     */
-    const val EXTRA_LOCAL_ART = "localArtPath"
 }
