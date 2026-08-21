@@ -124,6 +124,10 @@ fun SearchScreen(app: PrivateMusicApp) {
     var deezerTracks by remember { mutableStateOf(SearchCache.deezerTracks) }
     // Deezer tracks currently being matched on YouTube before download.
     var deezerResolving by remember { mutableStateOf(setOf<String>()) }
+    // Resultados del servidor Subsonic/Navidrome del usuario.
+    var subsonicTracks by remember { mutableStateOf<List<com.aar.privatemusic.downloader.SubsonicTrack>?>(null) }
+    var subsonicPlaylistsDialog by remember { mutableStateOf<List<com.aar.privatemusic.downloader.SubsonicPlaylist>?>(null) }
+    var loadingServerPlaylists by remember { mutableStateOf(false) }
     // Importación de Spotify: progreso del emparejado y pistas a repasar a mano.
     var matching by remember { mutableStateOf<Pair<Int, Int>?>(null) }
     var review by remember { mutableStateOf<List<SpotifyReviewItem>>(emptyList()) }
@@ -144,6 +148,7 @@ fun SearchScreen(app: PrivateMusicApp) {
     val downloads by app.downloader.downloads.collectAsState()
     val torrentDownloads by app.torrents.downloads.collectAsState()
     val archiveDownloads by app.archive.downloads.collectAsState()
+    val subsonicDownloads by app.subsonic.downloads.collectAsState()
     val deezerDownloads by app.deezerDownloader.downloads.collectAsState()
     val deezerQuality by app.settings.deezerQuality.collectAsState()
     val deezerArl by app.settings.deezerArl.collectAsState()
@@ -210,6 +215,7 @@ fun SearchScreen(app: PrivateMusicApp) {
         spotifyTracks = null
         linkServiceName = null
         deezerTracks = null
+        subsonicTracks = null
         scope.launch {
             if (source == "1337x") {
                 // El scraper ya devuelve lista vacía si falla la red o el parseo.
@@ -217,6 +223,22 @@ fun SearchScreen(app: PrivateMusicApp) {
                     com.aar.privatemusic.downloader.Torrent1337xSource.search(query.trim(), limit = 30)
                 results = torrents
                 if (torrents.isEmpty()) error = "Sin resultados de torrents de música"
+                searching = false
+                return@launch
+            }
+            if (source == "subsonic") {
+                if (app.settings.subsonicConfig() == null) {
+                    error = "Configura tu servidor en Ajustes → Servidor de música"
+                    searching = false
+                    return@launch
+                }
+                runCatching { app.subsonic.search(query.trim(), limit = 40) }
+                    .onSuccess {
+                        results = emptyList()
+                        subsonicTracks = it
+                        if (it.isEmpty()) error = "Sin resultados en tu servidor"
+                    }
+                    .onFailure { error = "Error al buscar en el servidor: ${it.message}" }
                 searching = false
                 return@launch
             }
@@ -391,6 +413,12 @@ fun SearchScreen(app: PrivateMusicApp) {
         SearchSource("archive", "Internet Archive · FLAC gratis", androidx.compose.ui.graphics.Color(0xFF2C7BB6)) {
             Icon(Icons.Filled.Download, null, tint = androidx.compose.ui.graphics.Color.White)
         },
+        SearchSource("subsonic", "Tu servidor · Subsonic/Navidrome", androidx.compose.ui.graphics.Color(0xFF1DB954)) {
+            Icon(Icons.Filled.GraphicEq, null, tint = androidx.compose.ui.graphics.Color.White)
+        },
+        SearchSource("bandcamp", "Bandcamp", androidx.compose.ui.graphics.Color(0xFF1DA0C3)) {
+            Icon(Icons.Filled.Search, null, tint = androidx.compose.ui.graphics.Color.White)
+        },
     )
 
     androidx.activity.compose.BackHandler(enabled = source != null) { source = null }
@@ -421,6 +449,7 @@ fun SearchScreen(app: PrivateMusicApp) {
                         playlistUrl = null
                         spotifyTracks = null
                         deezerTracks = null
+                        subsonicTracks = null
                         error = null
                         actionMessage = null
                     }
@@ -461,6 +490,8 @@ fun SearchScreen(app: PrivateMusicApp) {
                         "ytmusic" -> "Buscar en YouTube Music…"
                         "1337x" -> "Buscar torrents de música…"
                         "archive" -> "Buscar en Internet Archive…"
+                        "subsonic" -> "Buscar en tu servidor…"
+                        "bandcamp" -> "Buscar en Bandcamp…"
                         else -> "Buscar en YouTube o pegar URL…"
                     }
                 )
@@ -474,6 +505,28 @@ fun SearchScreen(app: PrivateMusicApp) {
                 }
             },
         )
+
+        if (source == "subsonic") {
+            OutlinedButton(
+                onClick = {
+                    if (app.settings.subsonicConfig() == null) {
+                        error = "Configura tu servidor en Ajustes"
+                    } else {
+                        loadingServerPlaylists = true
+                        scope.launch {
+                            val pls = app.subsonic.playlists()
+                            loadingServerPlaylists = false
+                            if (pls.isEmpty()) actionMessage = "Tu servidor no tiene playlists"
+                            else subsonicPlaylistsDialog = pls
+                        }
+                    }
+                },
+                enabled = !loadingServerPlaylists,
+                modifier = Modifier.padding(horizontal = 16.dp),
+            ) {
+                Text(if (loadingServerPlaylists) "Cargando…" else "Playlists del servidor")
+            }
+        }
 
         if (playlistTitle == null) {
             actionMessage?.let {
@@ -650,6 +703,46 @@ fun SearchScreen(app: PrivateMusicApp) {
                         )
                     }
                 }
+                subsonicTracks?.let { tracks ->
+                    items(tracks, key = { "sub-${it.id}" }) { track ->
+                        val key = app.subsonic.localId(track.id)
+                        val coverUrl = app.subsonic.coverUrl(track.coverArtId).orEmpty()
+                        val display = SearchResult(
+                            id = track.id,
+                            title = track.title,
+                            artist = if (track.album.isBlank()) track.artist else "${track.artist} · ${track.album}",
+                            durationSec = track.durationSec,
+                            thumbnailUrl = coverUrl,
+                            isSubsonic = true,
+                        )
+                        SearchResultRow(
+                            result = display,
+                            inLibrary = key in libraryIds,
+                            state = subsonicDownloads[key],
+                            qualityLabel = track.suffix.uppercase(),
+                            previewResolving = previewLoadingId == track.id,
+                            previewPlaying = nowPlaying?.songId == "preview:${track.id}" && isPlaying,
+                            previewLoaded = nowPlaying?.songId == "preview:${track.id}",
+                            onPreview = {
+                                if (nowPlaying?.songId == "preview:${track.id}") {
+                                    app.playerController.togglePlayPause()
+                                } else {
+                                    val url = app.subsonic.streamUrl(track.id)
+                                    if (url != null) {
+                                        app.playerController.playStream(
+                                            track.id, track.title, track.artist, url, coverUrl,
+                                        )
+                                    } else actionMessage = "Servidor no configurado"
+                                }
+                            },
+                            onDownload = {
+                                app.subsonic.enqueue(track)
+                                actionMessage = "Descargando \"${track.title}\" de tu servidor…"
+                            },
+                            onCancel = {},
+                        )
+                    }
+                }
                 items(results, key = { it.id }) { result ->
                     val inLibrary = result.id in libraryIds
                     // Torrents e Internet Archive descargan por su propio motor.
@@ -707,6 +800,40 @@ fun SearchScreen(app: PrivateMusicApp) {
 
     chapterChecking?.let {
         actionMessage = "Buscando capítulos…"
+    }
+
+    subsonicPlaylistsDialog?.let { playlists ->
+        AlertDialog(
+            onDismissRequest = { subsonicPlaylistsDialog = null },
+            title = { Text("Playlists del servidor") },
+            text = {
+                LazyColumn(Modifier.heightIn(max = 420.dp)) {
+                    items(playlists, key = { it.id }) { pl ->
+                        Column(
+                            Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    app.subsonic.importPlaylist(pl)
+                                    actionMessage = "Importando \"${pl.name}\" (${pl.songCount})…"
+                                    subsonicPlaylistsDialog = null
+                                }
+                                .padding(vertical = 10.dp),
+                        ) {
+                            Text(pl.name, style = MaterialTheme.typography.bodyLarge)
+                            Text(
+                                "${pl.songCount} canciones",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = { subsonicPlaylistsDialog = null }) { Text("Cerrar") }
+            },
+        )
     }
 
     chapterPrompt?.let { (result, chapters) ->

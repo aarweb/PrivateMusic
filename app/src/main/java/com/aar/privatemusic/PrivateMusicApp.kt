@@ -38,6 +38,8 @@ class PrivateMusicApp : Application() {
         private set
     lateinit var archive: InternetArchiveDownloader
         private set
+    lateinit var subsonic: com.aar.privatemusic.downloader.SubsonicDownloader
+        private set
     lateinit var repository: MusicRepository
         private set
     lateinit var playerController: PlayerController
@@ -75,6 +77,9 @@ class PrivateMusicApp : Application() {
             appScope,
         )
         archive = InternetArchiveDownloader(downloaderEnv, dao, appScope)
+        subsonic = com.aar.privatemusic.downloader.SubsonicDownloader(
+            downloaderEnv, dao, appScope,
+        ) { settings.subsonicConfig() }
         repository = MusicRepository(dao, downloader)
         metadataService = com.aar.privatemusic.metadata.MetadataService(this, dao, downloader.musicDir)
         libraryShare = com.aar.privatemusic.sync.LibraryShare(this, dao)

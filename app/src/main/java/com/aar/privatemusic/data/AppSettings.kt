@@ -67,6 +67,34 @@ class AppSettings(context: Context) {
         _youtubeClient.value = value
     }
 
+    // --- Servidor de música propio (Subsonic / Navidrome / Jellyfin) ---
+    private val _subsonicUrl = MutableStateFlow(prefs.getString(KEY_SUB_URL, "") ?: "")
+    val subsonicUrl: StateFlow<String> = _subsonicUrl
+    private val _subsonicUser = MutableStateFlow(prefs.getString(KEY_SUB_USER, "") ?: "")
+    val subsonicUser: StateFlow<String> = _subsonicUser
+    private val _subsonicPass = MutableStateFlow(prefs.getString(KEY_SUB_PASS, "") ?: "")
+    val subsonicPass: StateFlow<String> = _subsonicPass
+
+    fun setSubsonicServer(url: String, user: String, pass: String) {
+        prefs.edit()
+            .putString(KEY_SUB_URL, url.trim())
+            .putString(KEY_SUB_USER, user.trim())
+            .putString(KEY_SUB_PASS, pass)
+            .apply()
+        _subsonicUrl.value = url.trim()
+        _subsonicUser.value = user.trim()
+        _subsonicPass.value = pass
+    }
+
+    /** Config actual del servidor, o null si no está configurado. */
+    fun subsonicConfig(): com.aar.privatemusic.downloader.SubsonicConfig? {
+        val url = _subsonicUrl.value
+        val user = _subsonicUser.value
+        return if (url.isNotBlank() && user.isNotBlank())
+            com.aar.privatemusic.downloader.SubsonicConfig(url, user, _subsonicPass.value)
+        else null
+    }
+
     private val _listenBrainzToken = MutableStateFlow(prefs.getString(KEY_LISTENBRAINZ, "") ?: "")
     val listenBrainzToken: StateFlow<String> = _listenBrainzToken
 
@@ -166,6 +194,9 @@ class AppSettings(context: Context) {
         private const val KEY_SHARE_PC = "share_with_pc"
         private const val KEY_ROMANIZE = "romanize_lyrics"
         private const val KEY_YT_CLIENT = "youtube_client"
+        private const val KEY_SUB_URL = "subsonic_url"
+        private const val KEY_SUB_USER = "subsonic_user"
+        private const val KEY_SUB_PASS = "subsonic_pass"
         private const val KEY_DZ_ARL = "deezer_arl"
         private const val KEY_DZ_USER = "deezer_user"
         private const val KEY_DZ_QUALITY = "deezer_quality"

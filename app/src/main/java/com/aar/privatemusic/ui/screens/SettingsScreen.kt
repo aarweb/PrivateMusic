@@ -368,6 +368,8 @@ fun SettingsScreen(app: PrivateMusicApp, onOpenStats: () -> Unit, onOpenEq: () -
 
         DeezerSettings(app)
 
+        SubsonicSettings(app)
+
         val watchedSources by app.repository.observeWatchedSources().collectAsState(initial = emptyList())
         if (watchedSources.isNotEmpty()) {
             Text(
@@ -959,6 +961,122 @@ private fun DeezerSettings(app: PrivateMusicApp) {
     if (arlOpen) {
         DeezerArlDialog(app, onDismiss = { arlOpen = false }, onDone = {})
     }
+}
+
+@Composable
+private fun SubsonicSettings(app: PrivateMusicApp) {
+    val scope = rememberCoroutineScope()
+    val url by app.settings.subsonicUrl.collectAsState()
+    val user by app.settings.subsonicUser.collectAsState()
+    var dialogOpen by remember { mutableStateOf(false) }
+    val configured = url.isNotBlank() && user.isNotBlank()
+
+    Text(
+        "Servidor de música (Subsonic/Navidrome/Jellyfin)",
+        style = MaterialTheme.typography.bodyLarge,
+        modifier = Modifier.padding(top = 12.dp),
+    )
+    if (configured) {
+        Text(
+            "🟢 $user @ $url",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        SettingsAction(
+            title = "Cambiar servidor",
+            subtitle = "Busca y descarga desde tu servidor en la pantalla de Búsqueda",
+        ) { dialogOpen = true }
+        SettingsAction(
+            title = "Quitar servidor",
+            subtitle = "Olvida la conexión en este dispositivo",
+        ) { app.settings.setSubsonicServer("", "", "") }
+    } else {
+        SettingsAction(
+            title = "Conectar un servidor",
+            subtitle = "🔴 Navidrome, Airsonic o Jellyfin (con endpoint Subsonic activado)",
+        ) { dialogOpen = true }
+    }
+
+    if (dialogOpen) {
+        SubsonicDialog(app, onDismiss = { dialogOpen = false }, scope = scope)
+    }
+}
+
+@Composable
+private fun SubsonicDialog(
+    app: PrivateMusicApp,
+    onDismiss: () -> Unit,
+    scope: kotlinx.coroutines.CoroutineScope,
+) {
+    var urlField by remember { mutableStateOf(app.settings.subsonicUrl.value) }
+    var userField by remember { mutableStateOf(app.settings.subsonicUser.value) }
+    var passField by remember { mutableStateOf(app.settings.subsonicPass.value) }
+    var testing by remember { mutableStateOf(false) }
+    var result by remember { mutableStateOf<String?>(null) }
+    var ok by remember { mutableStateOf(false) }
+
+    AlertDialog(
+        onDismissRequest = { if (!testing) onDismiss() },
+        title = { Text("Servidor de música") },
+        text = {
+            Column {
+                OutlinedTextField(
+                    value = urlField, onValueChange = { urlField = it; result = null },
+                    label = { Text("URL (https://mi-servidor:4533)") }, singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = userField, onValueChange = { userField = it; result = null },
+                    label = { Text("Usuario") }, singleLine = true,
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                )
+                OutlinedTextField(
+                    value = passField, onValueChange = { passField = it; result = null },
+                    label = { Text("Contraseña") }, singleLine = true,
+                    visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                )
+                result?.let {
+                    Text(
+                        it,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (ok) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                        modifier = Modifier.padding(top = 8.dp),
+                    )
+                }
+                Text(
+                    "Jellyfin necesita tener activado su endpoint OpenSubsonic.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 8.dp),
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = !testing && urlField.isNotBlank() && userField.isNotBlank(),
+                onClick = {
+                    testing = true
+                    result = null
+                    scope.launch {
+                        val cfg = com.aar.privatemusic.downloader.SubsonicConfig(
+                            urlField.trim(), userField.trim(), passField,
+                        )
+                        val ping = app.subsonic.ping(cfg)
+                        testing = false
+                        ok = ping.ok
+                        if (ping.ok) {
+                            app.settings.setSubsonicServer(urlField, userField, passField)
+                            result = "✅ ${ping.type} ${ping.serverVersion}"
+                        } else {
+                            result = "❌ ${ping.error ?: "no se pudo conectar"}"
+                        }
+                    }
+                },
+            ) { Text(if (testing) "Probando…" else "Probar y guardar") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss, enabled = !testing) { Text("Cerrar") } },
+    )
 }
 
 @Composable
