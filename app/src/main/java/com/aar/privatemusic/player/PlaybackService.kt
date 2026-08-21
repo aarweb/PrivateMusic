@@ -524,12 +524,16 @@ class PlaybackService : MediaLibraryService() {
                         tailAudioAdvancing = false
                         tail.play()
                         // AutoMix routes the tail through Sonic (tempo bend), which
-                        // lengthens the pipeline and delays real audio — the 1500ms
-                        // cap made those transitions time out and fall back to a hard
-                        // cut. Wait longer when AutoMix is on; capped to half the
-                        // window so A never runs into its own silence while muted.
-                        val warmupCap = (if (autoMix) 2600 else 1500)
-                            .coerceAtMost((crossfadeMs / 2).toInt())
+                        // lengthens the pipeline and delays real audio.
+                        // Antes esto se capaba a crossfadeMs/2: con fundidos cortos
+                        // (2-4 s) el tail no llegaba a empujar audio dentro de ~1000 ms
+                        // y se abortaba a corte seco (por eso "unas canciones funden y
+                        // otras no"). Ahora damos SIEMPRE un mínimo de calentamiento
+                        // (más con AutoMix) y sólo lo ampliamos en fundidos largos. Si
+                        // la espera se come parte del fundido corto, mejor un fundido
+                        // breve que un corte: las guardas de "el usuario navegó" y "A ya
+                        // no es la actual" (más abajo) cubren que A llegue a su fin.
+                        val warmupCap = maxOf(if (autoMix) 2600 else 1500, (crossfadeMs / 2).toInt())
                         var waited = 0
                         while (!tailAudioAdvancing && waited < warmupCap) {
                             delay(20)
