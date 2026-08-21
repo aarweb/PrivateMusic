@@ -48,6 +48,16 @@ class TempoMatchTest {
     }
 
     @Test
+    fun `el caso real, ya con el detector arreglado, cuadra sin recorte`() {
+        // BPM medidos en el aparato tras cambiar a flujo espectral:
+        // "VAMONOS 2.0" 154,9 (antes 76,8) y "Me prefieres a mí" 85,0.
+        // Media vuelta de octava y quedan a un 9,7%: dentro del margen.
+        val r = chooseTempoRatio(154.9f, 85.0f, max)
+        assertClose(1.0974f, r, tol = 0.002f)
+        assertTrue(r < 1f + max, "no debería tocar el tope")
+    }
+
+    @Test
     fun `sin bpm o con bpm invalido no se toca el tempo`() {
         assertEquals(1f, chooseTempoRatio(null, 120f, max))
         assertEquals(1f, chooseTempoRatio(120f, null, max))
