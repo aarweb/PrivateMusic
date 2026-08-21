@@ -66,6 +66,14 @@ android {
             useLegacyPackaging = true
         }
     }
+    // media3-cast 1.11 exige compileSdk 36, pero AGP 8.7.3 sólo se probó hasta 35:
+    // su lint casca al migrar los lint jars nuevos (LintJarApiMigration/ASM) durante
+    // lintVitalRelease. Es una app personal por sideload, sin Play: el lint de release
+    // no aporta aquí. Se reactivará al subir AGP (fase de plataforma).
+    lint {
+        checkReleaseBuilds = false
+        abortOnError = false
+    }
 }
 
 dependencies {
