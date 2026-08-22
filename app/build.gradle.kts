@@ -77,6 +77,7 @@ android {
 }
 
 dependencies {
+    testImplementation(kotlin("test"))
     // Audio fingerprinting (Chromaprint via MediaCodec) for the AcoustID fallback.
     implementation("com.github.cy745:fpcalc:1.3")
     implementation(libs.androidx.core.ktx)

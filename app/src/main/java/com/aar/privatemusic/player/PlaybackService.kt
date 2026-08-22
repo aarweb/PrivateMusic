@@ -448,24 +448,32 @@ class PlaybackService : MediaLibraryService() {
                 // (player.duration == TIME_UNSET) y sin ella el fundido nunca se
                 // armaba para esas canciones. La duración real viaja en el MediaItem
                 // (Song.durationSec) y se usa como respaldo.
-                val duration = player.duration.let { d ->
-                    if (d != androidx.media3.common.C.TIME_UNSET) d
-                    else player.currentMediaItem?.mediaMetadata?.durationMs
-                        ?: androidx.media3.common.C.TIME_UNSET
-                }
-                if (crossfadeMs > 0 && tail != null && player.isPlaying &&
-                    duration != androidx.media3.common.C.TIME_UNSET &&
-                    duration > crossfadeMs * 2 &&
-                    player.hasNextMediaItem() &&
-                    // Repeat-one loops the same track: no crossfade there.
-                    player.repeatMode != Player.REPEAT_MODE_ONE
+                val duration = com.aar.privatemusic.player.CrossfadeGate.effectiveDurationMs(
+                    playerDurationMs = player.duration,
+                    metadataDurationMs = player.currentMediaItem?.mediaMetadata?.durationMs,
+                    timeUnset = androidx.media3.common.C.TIME_UNSET,
+                )
+                if (tail != null && com.aar.privatemusic.player.CrossfadeGate.windowOpen(
+                        crossfadeMs = crossfadeMs,
+                        durationMs = duration,
+                        isPlaying = player.isPlaying,
+                        hasNext = player.hasNextMediaItem(),
+                        repeatOne = player.repeatMode == Player.REPEAT_MODE_ONE,
+                        timeUnset = androidx.media3.common.C.TIME_UNSET,
+                    )
                 ) {
                     val curItem = player.currentMediaItem
                     val curUri = curItem?.localConfiguration?.uri
                     val curId = curItem?.mediaId
-                    if (skipXfForId != null && skipXfForId != curId) skipXfForId = null
-                    val eligible = curUri != null && curId != null &&
-                        !curId.startsWith("preview:") && curId != skipXfForId
+                    skipXfForId = com.aar.privatemusic.player.CrossfadeGate.keepSkipMark(skipXfForId, curId)
+                    // `curId` se rescata aparte para que el compilador siga
+                    // sabiendo que no es nulo dentro del bloque.
+                    val eligible = curId != null &&
+                        com.aar.privatemusic.player.CrossfadeGate.trackEligible(
+                            hasUri = curUri != null,
+                            mediaId = curId,
+                            skipXfForId = skipXfForId,
+                        )
                     // Until armed we don't know the tail silence yet; pre-arm uses
                     // a wide window so the IO lookup happens in time either way.
                     val effDur = if (armedForId == curId) armedEffDur else duration

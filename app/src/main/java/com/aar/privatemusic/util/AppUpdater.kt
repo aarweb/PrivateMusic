@@ -63,7 +63,12 @@ object AppUpdater {
         }
     }
 
-    private fun isNewer(remote: String, local: String): Boolean {
+    /**
+     * Visible para las pruebas: si esto se equivoca, o los móviles se quedan sin
+     * actualizar o avisan de una versión que ya tienen en cada arranque.
+     */
+    @androidx.annotation.VisibleForTesting
+    internal fun isNewer(remote: String, local: String): Boolean {
         val r = remote.split(".").mapNotNull { it.trim().toIntOrNull() }
         val l = local.split(".").mapNotNull { it.trim().toIntOrNull() }
         for (i in 0 until maxOf(r.size, l.size)) {
