@@ -424,6 +424,56 @@ fun SettingsScreen(app: PrivateMusicApp, onOpenStats: () -> Unit, onOpenEq: () -
             Switch(checked = sponsorBlock, onCheckedChange = { app.settings.setSponsorBlock(it) })
         }
 
+        val autoVideo by app.settings.autoDownloadVideo.collectAsState()
+        val videoMetered by app.settings.videoOnMetered.collectAsState()
+        Row(
+            Modifier.fillMaxWidth().padding(vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text("Descargar vídeo de fondo automáticamente", style = MaterialTheme.typography.bodyLarge)
+                Text(
+                    "Baja el videoclip de YouTube de cada canción para el fondo del reproductor",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Switch(checked = autoVideo, onCheckedChange = { app.settings.setAutoDownloadVideo(it) })
+        }
+        if (autoVideo) {
+            Row(
+                Modifier.fillMaxWidth().padding(start = 16.dp, bottom = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("Usar también datos móviles", style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        "Por defecto solo con WiFi",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(checked = videoMetered, onCheckedChange = { app.settings.setVideoOnMetered(it) })
+            }
+            val fillProgress by app.videoAuto.fillProgress.collectAsState()
+            SettingsAction(
+                title = if (fillProgress != null)
+                    "Bajando vídeos: ${fillProgress!!.done}/${fillProgress!!.total}"
+                else "Descargar los vídeos que faltan",
+                subtitle = "Busca en YouTube el vídeo de las canciones que aún no lo tienen",
+            ) {
+                if (fillProgress == null) app.videoAuto.fillMissing { got, total ->
+                    com.aar.privatemusic.util.Feedback.show(
+                        when {
+                            got < 0 -> "Necesita WiFi (o activa los datos móviles arriba)"
+                            total == 0 -> "Todas las canciones ya tienen vídeo o se intentó"
+                            else -> "Vídeos descargados: $got de $total"
+                        }
+                    )
+                }
+            }
+        }
+
         YoutubeClientSetting(app)
 
         SettingsAction(

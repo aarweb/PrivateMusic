@@ -48,6 +48,8 @@ class PrivateMusicApp : Application() {
         private set
     lateinit var metadataService: com.aar.privatemusic.metadata.MetadataService
         private set
+    lateinit var videoAuto: com.aar.privatemusic.downloader.VideoAutoManager
+        private set
     lateinit var libraryShare: com.aar.privatemusic.sync.LibraryShare
         private set
     lateinit var runningMode: com.aar.privatemusic.player.RunningMode
@@ -94,8 +96,13 @@ class PrivateMusicApp : Application() {
         }
         // Auto-resolve canonical metadata (name/artist/album/cover/lyrics) after
         // each YouTube download, applying only when the match is confident.
+        videoAuto = com.aar.privatemusic.downloader.VideoAutoManager(
+            this, downloader, dao, settings, appScope,
+        )
         downloader.onDownloadComplete = { id ->
             appScope.launch { dao.getSong(id)?.let { metadataService.autoIdentify(it) } }
+            // Baja el vídeo de fondo si el ajuste está activo y la red lo permite.
+            videoAuto.onSongDownloaded(id)
         }
         playerController = PlayerController(
             context = this,

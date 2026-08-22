@@ -522,6 +522,7 @@ fun LibraryScreen(app: PrivateMusicApp, onOpenArtist: (String) -> Unit = {}) {
                                     onClick = {
                                         menuOpen = false
                                         com.aar.privatemusic.util.Feedback.show("Buscando vídeo…")
+                                        app.videoAuto.clearNoVideoMarker(song.id)
                                         app.appScope.launch {
                                             val ok = app.downloader.downloadVideoClip(song)
                                             com.aar.privatemusic.util.Feedback.show(

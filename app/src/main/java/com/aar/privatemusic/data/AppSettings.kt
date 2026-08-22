@@ -42,6 +42,14 @@ class AppSettings(context: Context) {
     private val _sponsorBlock = MutableStateFlow(prefs.getBoolean(KEY_SPONSORBLOCK, true))
     val sponsorBlock: StateFlow<Boolean> = _sponsorBlock
 
+    private val _autoDownloadVideo = MutableStateFlow(prefs.getBoolean(KEY_AUTO_VIDEO, false))
+    /** Bajar solo el videoclip de fondo tras cada descarga. Gasta datos: por defecto off. */
+    val autoDownloadVideo: StateFlow<Boolean> = _autoDownloadVideo
+
+    private val _videoOnMetered = MutableStateFlow(prefs.getBoolean(KEY_VIDEO_METERED, false))
+    /** Permitir bajar los vídeos también con datos móviles (por defecto solo WiFi). */
+    val videoOnMetered: StateFlow<Boolean> = _videoOnMetered
+
     private val _autoMix = MutableStateFlow(prefs.getBoolean(KEY_AUTOMIX, false))
     val autoMix: StateFlow<Boolean> = _autoMix
 
@@ -153,6 +161,16 @@ class AppSettings(context: Context) {
         _sponsorBlock.value = value
     }
 
+    fun setAutoDownloadVideo(value: Boolean) {
+        prefs.edit().putBoolean(KEY_AUTO_VIDEO, value).apply()
+        _autoDownloadVideo.value = value
+    }
+
+    fun setVideoOnMetered(value: Boolean) {
+        prefs.edit().putBoolean(KEY_VIDEO_METERED, value).apply()
+        _videoOnMetered.value = value
+    }
+
     fun setAutoMix(value: Boolean) {
         prefs.edit().putBoolean(KEY_AUTOMIX, value).apply()
         _autoMix.value = value
@@ -207,6 +225,8 @@ class AppSettings(context: Context) {
         private const val KEY_THEME = "theme_mode"
         private const val KEY_NORMALIZE = "normalize_volume"
         private const val KEY_SPONSORBLOCK = "sponsorblock"
+        private const val KEY_AUTO_VIDEO = "auto_download_video"
+        private const val KEY_VIDEO_METERED = "video_on_metered"
         private const val KEY_LISTENBRAINZ = "listenbrainz_token"
         private const val KEY_AUTOMIX = "automix"
         private const val KEY_AUTOMIX_MAX = "automix_max_pct"
@@ -240,6 +260,14 @@ class AppSettings(context: Context) {
         fun readSponsorBlock(context: Context): Boolean =
             context.getSharedPreferences("settings", Context.MODE_PRIVATE)
                 .getBoolean(KEY_SPONSORBLOCK, true)
+
+        fun readAutoDownloadVideo(context: Context): Boolean =
+            context.getSharedPreferences("settings", Context.MODE_PRIVATE)
+                .getBoolean(KEY_AUTO_VIDEO, false)
+
+        fun readVideoOnMetered(context: Context): Boolean =
+            context.getSharedPreferences("settings", Context.MODE_PRIVATE)
+                .getBoolean(KEY_VIDEO_METERED, false)
 
         fun readListenBrainzToken(context: Context): String =
             context.getSharedPreferences("settings", Context.MODE_PRIVATE)

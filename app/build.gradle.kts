@@ -12,8 +12,8 @@ android {
         applicationId = "com.aar.privatemusic"
         minSdk = 26
         targetSdk = 35
-        versionCode = 92
-        versionName = "1.91"
+        versionCode = 93
+        versionName = "1.92"
 
         ndk {
             // arm64 only: every phone since ~2016. Halves the APK (yt-dlp/ffmpeg per ABI).
