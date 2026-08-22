@@ -4,6 +4,9 @@ import android.graphics.BitmapFactory
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.togetherWith
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.luminance
@@ -34,6 +37,10 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.Bedtime
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Style
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.material.icons.filled.Cast
 import androidx.compose.material.icons.filled.Lyrics
 import androidx.compose.material.icons.filled.Favorite
@@ -149,6 +156,7 @@ fun PlayerScreen(
     var karaokeOpen by remember { mutableStateOf(false) }
     var speedDialogOpen by remember { mutableStateOf(false) }
     var lyricShareFrom by remember { mutableStateOf<Int?>(null) }
+    var styleMenuOpen by remember { mutableStateOf(false) }
     var castDialogOpen by remember { mutableStateOf(false) }
     var qualityExpanded by remember { mutableStateOf(false) }
     val playbackSpeed by controller.playbackSpeed.collectAsState()
@@ -378,6 +386,7 @@ fun PlayerScreen(
             val base = effectiveLyrics
             // Letras en hangul, kana, cirílico…: un toggle para leerlas en latino.
             val romanize by app.settings.romanizeLyrics.collectAsState()
+            val lyricStyle by app.settings.lyricStyle.collectAsState()
             val foreign = remember(base) { com.aar.privatemusic.lyrics.Romanizer.needsRomanization(base) }
             val shown by produceState(initialValue = base, base, romanize, foreign) {
                 value = if (foreign && romanize) {
@@ -398,6 +407,33 @@ fun PlayerScreen(
                 horizontalArrangement = Arrangement.Center,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
+                Box {
+                    androidx.compose.material3.AssistChip(
+                        onClick = { styleMenuOpen = true },
+                        leadingIcon = {
+                            Icon(Icons.Filled.Style, contentDescription = null, tint = accent)
+                        },
+                        label = { Text(lyricStyle.label) },
+                    )
+                    DropdownMenu(
+                        expanded = styleMenuOpen,
+                        onDismissRequest = { styleMenuOpen = false },
+                    ) {
+                        com.aar.privatemusic.data.LyricStyle.entries.forEach { st ->
+                            DropdownMenuItem(
+                                text = { Text(st.label) },
+                                trailingIcon = {
+                                    if (st == lyricStyle) Icon(Icons.Filled.Check, contentDescription = null)
+                                },
+                                onClick = {
+                                    app.settings.setLyricStyle(st)
+                                    styleMenuOpen = false
+                                },
+                            )
+                        }
+                    }
+                }
+                Spacer(Modifier.width(8.dp))
                 if (foreign) {
                     androidx.compose.material3.FilterChip(
                         selected = romanize,
@@ -437,19 +473,74 @@ fun PlayerScreen(
                     )
                 }
             }
-            LyricsPanel(
-                lyrics = shown,
-                positionMs = { sliderPosition.floatValue.toLong() },
-                onSeek = { controller.seekTo(it) },
-                accent = accent,
-                onShareFrom = { lyricShareFrom = it },
-                // Para seguir una sílaba no basta el tic de medio segundo del
-                // deslizador: el resaltado por palabra pregunta la posición real.
-                livePositionMs = { controller.positionMs },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(280.dp),
-            )
+            val panelModifier = Modifier.fillMaxWidth().height(280.dp)
+            when (lyricStyle) {
+                com.aar.privatemusic.data.LyricStyle.FOCUS -> LyricsFocus(
+                    lyrics = shown,
+                    positionMs = { sliderPosition.floatValue.toLong() },
+                    onSeek = { controller.seekTo(it) },
+                    accent = accent,
+                    onShareFrom = { lyricShareFrom = it },
+                    livePositionMs = { controller.positionMs },
+                    modifier = panelModifier,
+                )
+                com.aar.privatemusic.data.LyricStyle.MINIMAL -> LyricsMinimal(
+                    lyrics = shown,
+                    positionMs = { sliderPosition.floatValue.toLong() },
+                    accent = accent,
+                    dominant = dominant,
+                    livePositionMs = { controller.positionMs },
+                    modifier = panelModifier,
+                )
+                // El clásico va también detrás del videoclip: el diálogo lo tapa.
+                else -> LyricsPanel(
+                    lyrics = shown,
+                    positionMs = { sliderPosition.floatValue.toLong() },
+                    onSeek = { controller.seekTo(it) },
+                    accent = accent,
+                    onShareFrom = { lyricShareFrom = it },
+                    // Para seguir una sílaba no basta el tic de medio segundo del
+                    // deslizador: el resaltado por palabra pregunta la posición real.
+                    livePositionMs = { controller.positionMs },
+                    modifier = panelModifier,
+                )
+            }
+            if (lyricStyle == com.aar.privatemusic.data.LyricStyle.VIDEOCLIP) {
+                val castName by com.aar.privatemusic.cast.CastState.castDeviceName.collectAsState()
+                val animatedBg by app.settings.animatedBackground.collectAsState()
+                val vcVideo = remember(np.songId, song?.videoPath) {
+                    (song?.videoPath?.let { File(it) }?.takeIf { it.canRead() })
+                        ?: app.repository.guessVideoFile(np.songId)
+                }
+                androidx.compose.ui.window.Dialog(
+                    onDismissRequest = { showLyrics = false },
+                    properties = androidx.compose.ui.window.DialogProperties(
+                        usePlatformDefaultWidth = false,
+                    ),
+                ) {
+                    VideoclipLyrics(
+                        lyrics = shown,
+                        title = np.title,
+                        artist = np.artist,
+                        song = song,
+                        videoFile = vcVideo,
+                        castActive = castName != null,
+                        animatedBgEnabled = animatedBg,
+                        dominant = dominant,
+                        accent = accent,
+                        isPlaying = isPlaying,
+                        artFile = np.artPath?.let { File(it) },
+                        positionMs = { sliderPosition.floatValue.toLong() },
+                        livePositionMs = { controller.positionMs },
+                        onSeek = { controller.seekTo(it) },
+                        onPlayPause = { controller.togglePlayPause() },
+                        onNext = { controller.next() },
+                        onPrev = { controller.previous() },
+                        onClose = { showLyrics = false },
+                        onPickStyle = { app.settings.setLyricStyle(it) },
+                    )
+                }
+            }
         } else {
             // Encoge al pausar: el disco "respira" mientras suena.
             // Sin `by`: `Modifier.scale` leía el valor durante la composición y el
@@ -1172,4 +1263,391 @@ private fun TempoPitchDialog(
             ) { Text("Restablecer") }
         },
     )
+}
+
+/**
+ * Reloj fino (60 fps, sólo fase de dibujo) para el resaltado por palabra.
+ * Igual que en [LyricsPanel]: sólo corre si la letra trae tiempos por palabra.
+ */
+@Composable
+private fun rememberWordClock(
+    lyrics: com.aar.privatemusic.lyrics.Lyrics,
+    livePositionMs: () -> Long,
+): androidx.compose.runtime.MutableLongState {
+    val clock = remember { androidx.compose.runtime.mutableLongStateOf(0L) }
+    LaunchedEffect(lyrics) {
+        if (!lyrics.wordLevel) return@LaunchedEffect
+        while (true) {
+            androidx.compose.runtime.withFrameMillis { clock.longValue = livePositionMs() }
+        }
+    }
+    return clock
+}
+
+/** Índice de la línea que suena ahora, o -1 si la letra no está sincronizada. */
+private fun activeLineIndex(lyrics: com.aar.privatemusic.lyrics.Lyrics, positionMs: Long): Int =
+    if (lyrics.synced) lyrics.lines.indexOfLast { it.timeMs <= positionMs } else -1
+
+/**
+ * Estilo "Foco": la línea que suena, grande y centrada, con una o dos líneas
+ * arriba y abajo muy apagadas. Pensado para cantar; el resaltado palabra a
+ * palabra queda bien a la vista. Con letra sin sincronizar se lee como una
+ * lista normal.
+ */
+@Composable
+private fun LyricsFocus(
+    lyrics: com.aar.privatemusic.lyrics.Lyrics,
+    positionMs: () -> Long,
+    onSeek: (Long) -> Unit,
+    accent: Color,
+    onShareFrom: (Int) -> Unit,
+    livePositionMs: () -> Long,
+    modifier: Modifier = Modifier,
+) {
+    val listState = rememberLazyListState()
+    val currentIdx = activeLineIndex(lyrics, positionMs())
+    val wordClock = rememberWordClock(lyrics, livePositionMs)
+
+    var touching by remember { mutableStateOf(false) }
+    LaunchedEffect(currentIdx, touching) {
+        if (currentIdx < 0 || touching) return@LaunchedEffect
+        delay(250)
+        // Centra la línea activa: la lista tiene relleno arriba/abajo de media
+        // pantalla, así que llevarla al principio la deja en el centro.
+        if (!touching) listState.animateScrollToItem(currentIdx)
+    }
+
+    LazyColumn(
+        state = listState,
+        modifier = modifier.pointerInput(Unit) {
+            awaitPointerEventScope {
+                while (true) {
+                    val event = awaitPointerEvent(androidx.compose.ui.input.pointer.PointerEventPass.Initial)
+                    touching = event.changes.any { it.pressed }
+                }
+            }
+        },
+        contentPadding = PaddingValues(vertical = 120.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        itemsIndexed(lyrics.lines) { i, line ->
+            val distance = if (currentIdx < 0) 0 else kotlin.math.abs(i - currentIdx)
+            val active = currentIdx >= 0 && distance == 0
+            val alpha by animateFloatAsState(
+                targetValue = when {
+                    currentIdx < 0 -> 0.85f
+                    distance == 0 -> 1f
+                    distance == 1 -> 0.35f
+                    distance == 2 -> 0.18f
+                    else -> 0f
+                },
+                label = "focusAlpha",
+            )
+            val scale by animateFloatAsState(
+                targetValue = if (active) 1f else 0.8f,
+                animationSpec = spring(dampingRatio = Spring.DampingRatioLowBouncy),
+                label = "focusScale",
+            )
+            val lineModifier = Modifier
+                .fillMaxWidth()
+                .graphicsLayer { this.alpha = alpha; scaleX = scale; scaleY = scale }
+                .combinedClickable(
+                    onClick = { if (lyrics.synced) onSeek(line.timeMs) },
+                    onLongClick = { onShareFrom(i) },
+                )
+                .padding(vertical = 10.dp, horizontal = 16.dp)
+
+            if (active && line.words.isNotEmpty()) {
+                WordLine(words = line.words, accent = accent, clock = wordClock, modifier = lineModifier)
+            } else {
+                Text(
+                    line.text,
+                    style = if (active) MaterialTheme.typography.headlineSmall
+                    else MaterialTheme.typography.titleMedium,
+                    fontWeight = if (active) androidx.compose.ui.text.font.FontWeight.Bold else null,
+                    textAlign = TextAlign.Center,
+                    color = if (active) accent else MaterialTheme.colorScheme.onSurface,
+                    modifier = lineModifier,
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Estilo "Minimalista": sólo la frase que suena, grande y centrada, sobre un
+ * fondo liso del color de la portada. Sin scroll ni distracciones. Con letra
+ * sin sincronizar cae a una lista centrada.
+ */
+@Composable
+private fun LyricsMinimal(
+    lyrics: com.aar.privatemusic.lyrics.Lyrics,
+    positionMs: () -> Long,
+    accent: Color,
+    dominant: Color,
+    livePositionMs: () -> Long,
+    modifier: Modifier = Modifier,
+) {
+    val wordClock = rememberWordClock(lyrics, livePositionMs)
+    Box(
+        modifier
+            .clip(androidx.compose.foundation.shape.RoundedCornerShape(16.dp))
+            .background(lerp(dominant, MaterialTheme.colorScheme.surface, 0.15f)),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (!lyrics.synced) {
+            LazyColumn(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                contentPadding = PaddingValues(vertical = 24.dp),
+            ) {
+                itemsIndexed(lyrics.lines) { _, line ->
+                    Text(
+                        line.text,
+                        style = MaterialTheme.typography.titleMedium,
+                        textAlign = TextAlign.Center,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp, horizontal = 20.dp),
+                    )
+                }
+            }
+            return@Box
+        }
+        // El índice se lee aquí dentro: el tic recompone sólo esta caja.
+        val idx = activeLineIndex(lyrics, positionMs())
+        androidx.compose.animation.AnimatedContent(
+            targetState = idx,
+            transitionSpec = {
+                (androidx.compose.animation.fadeIn(tween(400)) +
+                    androidx.compose.animation.scaleIn(tween(400), initialScale = 0.9f)) togetherWith
+                    androidx.compose.animation.fadeOut(tween(250))
+            },
+            label = "minimalLine",
+        ) { shownIdx ->
+            val l = lyrics.lines.getOrNull(shownIdx)
+            Box(Modifier.fillMaxWidth().padding(28.dp), contentAlignment = Alignment.Center) {
+                when {
+                    l == null -> Text(
+                        "♪",
+                        style = MaterialTheme.typography.displaySmall,
+                        color = accent,
+                    )
+                    l.words.isNotEmpty() && shownIdx == idx ->
+                        WordLineBig(words = l.words, accent = accent, clock = wordClock)
+                    else -> Text(
+                        l.text,
+                        style = MaterialTheme.typography.headlineMedium,
+                        fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                        textAlign = TextAlign.Center,
+                        color = accent,
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** Como [WordLine] pero en tipografía grande, para minimalista y videoclip. */
+@Composable
+private fun WordLineBig(
+    words: List<com.aar.privatemusic.lyrics.LyricWord>,
+    accent: Color,
+    clock: androidx.compose.runtime.MutableLongState,
+) {
+    androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.Center) {
+        words.forEach { word ->
+            Box {
+                Text(
+                    word.text,
+                    style = MaterialTheme.typography.headlineMedium,
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.35f),
+                    modifier = Modifier.padding(horizontal = 4.dp),
+                )
+                Text(
+                    word.text,
+                    style = MaterialTheme.typography.headlineMedium,
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                    color = accent,
+                    modifier = Modifier
+                        .padding(horizontal = 4.dp)
+                        .graphicsLayer { alpha = wordAlpha(clock.longValue, word) },
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Estilo "Videoclip": pantalla completa con el vídeo de fondo (o el fondo
+ * animado por mood/BPM si no hay vídeo, o con Cast activo) y la letra grande
+ * encima, con un velo oscuro para que se lea. La palabra activa se enciende
+ * sobre el vídeo. Con letra sin tiempos se muestra estática.
+ */
+@Composable
+private fun VideoclipLyrics(
+    lyrics: com.aar.privatemusic.lyrics.Lyrics,
+    title: String,
+    artist: String,
+    song: com.aar.privatemusic.data.db.Song?,
+    videoFile: File?,
+    castActive: Boolean,
+    animatedBgEnabled: Boolean,
+    dominant: Color,
+    accent: Color,
+    isPlaying: Boolean,
+    artFile: File?,
+    positionMs: () -> Long,
+    livePositionMs: () -> Long,
+    onSeek: (Long) -> Unit,
+    onPlayPause: () -> Unit,
+    onNext: () -> Unit,
+    onPrev: () -> Unit,
+    onClose: () -> Unit,
+    onPickStyle: (com.aar.privatemusic.data.LyricStyle) -> Unit,
+) {
+    val wordClock = rememberWordClock(lyrics, livePositionMs)
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(dominant),
+        contentAlignment = Alignment.Center,
+    ) {
+        // Fondo: vídeo si lo hay y no se está compartiendo con la tele; si no,
+        // fondo animado o carátula. El vídeo se queda en el móvil (fase 7).
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            when {
+                videoFile != null && !castActive && videoFile.extension.lowercase() == "gif" ->
+                    com.aar.privatemusic.ui.components.SongGif(videoFile, 1000.dp)
+                videoFile != null && !castActive ->
+                    com.aar.privatemusic.ui.components.SongVideo(videoFile, 1000.dp, isPlaying)
+                animatedBgEnabled ->
+                    com.aar.privatemusic.ui.components.AnimatedMoodBackground(
+                        1000.dp, dominant,
+                        song?.moodHappy, song?.moodSad, song?.moodAggressive,
+                        song?.moodRelaxed, song?.bpm,
+                    )
+                artFile != null -> ArtImage(artFile, 1000.dp)
+                else -> Unit
+            }
+        }
+        // Velo para contraste (más oscuro abajo, donde va la letra).
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.verticalGradient(
+                        0f to Color.Black.copy(alpha = 0.35f),
+                        0.5f to Color.Black.copy(alpha = 0.45f),
+                        1f to Color.Black.copy(alpha = 0.85f),
+                    )
+                )
+        )
+
+        // Letra
+        val currentIdx = activeLineIndex(lyrics, positionMs())
+        if (!lyrics.synced) {
+            LazyColumn(
+                Modifier.fillMaxSize().padding(horizontal = 28.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                contentPadding = PaddingValues(top = 96.dp, bottom = 120.dp),
+            ) {
+                itemsIndexed(lyrics.lines) { _, line ->
+                    Text(
+                        line.text,
+                        style = MaterialTheme.typography.titleLarge,
+                        textAlign = TextAlign.Center,
+                        color = Color.White,
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                    )
+                }
+            }
+        } else {
+            androidx.compose.animation.AnimatedContent(
+                targetState = currentIdx,
+                transitionSpec = {
+                    (androidx.compose.animation.slideInVertically(tween(450)) { it / 3 } +
+                        androidx.compose.animation.fadeIn(tween(450))) togetherWith
+                        androidx.compose.animation.fadeOut(tween(300))
+                },
+                modifier = Modifier.align(Alignment.Center).padding(horizontal = 28.dp),
+                label = "clipLine",
+            ) { idx ->
+                val line = lyrics.lines.getOrNull(idx)
+                val next = lyrics.lines.getOrNull(idx + 1)
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    when {
+                        line == null -> Text("♪", style = MaterialTheme.typography.displayMedium, color = accent)
+                        line.words.isNotEmpty() && idx == currentIdx ->
+                            WordLineBig(words = line.words, accent = Color.White, clock = wordClock)
+                        else -> Text(
+                            line.text,
+                            style = MaterialTheme.typography.displaySmall,
+                            fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                            textAlign = TextAlign.Center,
+                            color = Color.White,
+                        )
+                    }
+                    next?.let {
+                        Spacer(Modifier.height(16.dp))
+                        Text(
+                            it.text,
+                            style = MaterialTheme.typography.titleMedium,
+                            textAlign = TextAlign.Center,
+                            color = Color.White.copy(alpha = 0.5f),
+                        )
+                    }
+                }
+            }
+        }
+
+        // Barra superior: cerrar + título + elegir otro estilo.
+        Row(
+            Modifier.align(Alignment.TopCenter).fillMaxWidth().padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            IconButton(onClick = onClose) {
+                Icon(Icons.Filled.KeyboardArrowDown, contentDescription = "Cerrar", tint = Color.White)
+            }
+            Column(Modifier.weight(1f)) {
+                Text(title, color = Color.White, style = MaterialTheme.typography.titleSmall, maxLines = 1)
+                Text(artist, color = Color.White.copy(alpha = 0.7f), style = MaterialTheme.typography.labelSmall, maxLines = 1)
+            }
+            var menu by remember { mutableStateOf(false) }
+            Box {
+                IconButton(onClick = { menu = true }) {
+                    Icon(Icons.Filled.Style, contentDescription = "Estilo", tint = Color.White)
+                }
+                DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                    com.aar.privatemusic.data.LyricStyle.entries.forEach { st ->
+                        DropdownMenuItem(
+                            text = { Text(st.label) },
+                            onClick = { onPickStyle(st); menu = false },
+                        )
+                    }
+                }
+            }
+        }
+
+        // Controles mínimos abajo.
+        Row(
+            Modifier.align(Alignment.BottomCenter).padding(bottom = 28.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center,
+        ) {
+            IconButton(onClick = onPrev) {
+                Icon(Icons.Filled.SkipPrevious, contentDescription = "Anterior", tint = Color.White)
+            }
+            IconButton(onClick = onPlayPause) {
+                Icon(
+                    if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                    contentDescription = "Play/Pausa",
+                    tint = Color.White,
+                    modifier = Modifier.size(40.dp),
+                )
+            }
+            IconButton(onClick = onNext) {
+                Icon(Icons.Filled.SkipNext, contentDescription = "Siguiente", tint = Color.White)
+            }
+        }
+    }
 }

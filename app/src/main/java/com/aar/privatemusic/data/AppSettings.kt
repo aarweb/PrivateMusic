@@ -16,6 +16,14 @@ enum class ThemeMode(val label: String) {
     BLACK("Negro puro (OLED)"),
 }
 
+/** Cómo se pinta la letra en el reproductor. */
+enum class LyricStyle(val label: String) {
+    CLASSIC("Clásico"),
+    FOCUS("Foco"),
+    VIDEOCLIP("Videoclip"),
+    MINIMAL("Minimalista"),
+}
+
 /** App-wide playback preferences; read from both the UI and the playback service. */
 class AppSettings(context: Context) {
 
@@ -77,6 +85,18 @@ class AppSettings(context: Context) {
     fun setAnimatedBackground(value: Boolean) {
         prefs.edit().putBoolean(KEY_ANIM_BG, value).apply()
         _animatedBackground.value = value
+    }
+
+    private val _lyricStyle = MutableStateFlow(
+        runCatching { LyricStyle.valueOf(prefs.getString(KEY_LYRIC_STYLE, null) ?: "") }
+            .getOrDefault(LyricStyle.CLASSIC)
+    )
+    /** Estilo elegido para ver la letra; se recuerda entre sesiones. */
+    val lyricStyle: StateFlow<LyricStyle> = _lyricStyle
+
+    fun setLyricStyle(value: LyricStyle) {
+        prefs.edit().putString(KEY_LYRIC_STYLE, value.name).apply()
+        _lyricStyle.value = value
     }
 
     // "" = clientes por defecto de yt-dlp; si no, cadena para player_client.
@@ -233,6 +253,7 @@ class AppSettings(context: Context) {
         private const val KEY_SHARE_PC = "share_with_pc"
         private const val KEY_ROMANIZE = "romanize_lyrics"
         private const val KEY_ANIM_BG = "animated_background"
+        private const val KEY_LYRIC_STYLE = "lyric_style"
         private const val KEY_YT_CLIENT = "youtube_client"
         private const val KEY_SUB_URL = "subsonic_url"
         private const val KEY_SUB_USER = "subsonic_user"
