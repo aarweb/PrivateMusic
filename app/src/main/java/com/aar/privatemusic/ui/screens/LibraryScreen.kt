@@ -151,6 +151,20 @@ fun LibraryScreen(app: PrivateMusicApp, onOpenArtist: (String) -> Unit = {}) {
             scope.launch { app.repository.setSongArt(context, song, uri) }
         }
     }
+    var songForVideo by remember { mutableStateOf<Song?>(null) }
+    val videoPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        val song = songForVideo
+        songForVideo = null
+        if (uri != null && song != null) {
+            com.aar.privatemusic.util.Feedback.show("Preparando el vídeo…")
+            app.appScope.launch {
+                val ok = app.repository.setSongVideo(context, song, uri)
+                com.aar.privatemusic.util.Feedback.show(if (ok) "Vídeo añadido" else "No se pudo usar ese vídeo")
+            }
+        }
+    }
     // Saveable: sort/filter survive tab switches (nav restoreState only keeps rememberSaveable).
     var sortMode by androidx.compose.runtime.saveable.rememberSaveable(
         stateSaver = androidx.compose.runtime.saveable.Saver(
@@ -495,6 +509,36 @@ fun LibraryScreen(app: PrivateMusicApp, onOpenArtist: (String) -> Unit = {}) {
                                         )
                                     },
                                 )
+                                DropdownMenuItem(
+                                    text = { Text(if (song.videoPath != null) "Cambiar vídeo de fondo" else "Añadir vídeo de fondo") },
+                                    onClick = {
+                                        menuOpen = false
+                                        songForVideo = song
+                                        videoPicker.launch(arrayOf("video/*", "image/gif"))
+                                    },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Buscar vídeo en YouTube") },
+                                    onClick = {
+                                        menuOpen = false
+                                        com.aar.privatemusic.util.Feedback.show("Buscando vídeo…")
+                                        app.appScope.launch {
+                                            val ok = app.downloader.downloadVideoClip(song)
+                                            com.aar.privatemusic.util.Feedback.show(
+                                                if (ok) "Vídeo de fondo listo" else "No se encontró vídeo"
+                                            )
+                                        }
+                                    },
+                                )
+                                if (song.videoPath != null) {
+                                    DropdownMenuItem(
+                                        text = { Text("Quitar vídeo") },
+                                        onClick = {
+                                            menuOpen = false
+                                            app.appScope.launch { app.repository.clearSongVideo(song) }
+                                        },
+                                    )
+                                }
                                 DropdownMenuItem(
                                     text = { Text("Eliminar de la biblioteca") },
                                     onClick = {

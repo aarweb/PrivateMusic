@@ -47,6 +47,10 @@ data class Song(
     val metadataResolved: Boolean = false,
     // Nota personal del usuario ("la de la boda", "versión del directo de 2019").
     val note: String? = null,
+    // Ruta de un vídeo mudo en bucle (estilo "Canvas") asociado a la canción,
+    // puesto a mano o descargado de YouTube. Se guarda como <id>.mp4 junto al
+    // audio; null = sin vídeo (se muestra carátula o fondo animado).
+    val videoPath: String? = null,
     // Rasgos 0..1 de los modelos Discogs-EffNet de Essentia (null = sin analizar).
     val moodHappy: Float? = null,
     val moodSad: Float? = null,

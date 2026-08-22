@@ -276,6 +276,42 @@ class MusicRepository(
         return true
     }
 
+    /** Asocia un vídeo (mp4/webm/gif) a la canción: se guarda mudo como <id>.mp4. */
+    suspend fun setSongVideo(context: android.content.Context, song: Song, uri: android.net.Uri): Boolean {
+        val file = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            val mime = context.contentResolver.getType(uri).orEmpty()
+            val dest = java.io.File(downloader.musicDir, "${song.id}.mp4")
+            if (mime == "image/gif") {
+                // ExoPlayer no reproduce GIF: se guarda como <id>.gif y lo pinta Coil.
+                val gif = java.io.File(downloader.musicDir, "${song.id}.gif")
+                context.contentResolver.openInputStream(uri)?.use { input ->
+                    if (gif.exists()) gif.delete()
+                    gif.outputStream().use { input.copyTo(it) }
+                    gif
+                }
+            } else {
+                com.aar.privatemusic.util.VideoImport.stripAudioTo(context, uri, dest)
+            }
+        } ?: return false
+        val old = song.videoPath
+        dao.updateSongVideo(song.id, file.absolutePath)
+        if (old != null && old != file.absolutePath) {
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { java.io.File(old).delete() }
+        }
+        return true
+    }
+
+    /** Quita el vídeo de la canción y borra el fichero. */
+    suspend fun clearSongVideo(song: Song) {
+        val old = song.videoPath ?: guessVideoFile(song.id)?.absolutePath
+        dao.updateSongVideo(song.id, null)
+        old?.let { kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { java.io.File(it).delete() } }
+    }
+
+    /** Vídeo en disco de la canción (columna, o <id>.mp4/<id>.gif por robustez). */
+    fun guessVideoFile(songId: String): java.io.File? =
+        listOf("mp4", "gif").map { java.io.File(downloader.musicDir, "$songId.$it") }.firstOrNull { it.canRead() }
+
     suspend fun setPlaylistCover(context: android.content.Context, playlist: Playlist, uri: android.net.Uri): Boolean {
         val file = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
             saveCoverImage(context, uri, downloader.musicDir, "playlist_${playlist.id}")

@@ -478,7 +478,29 @@ fun PlayerScreen(
                         ) { _, amount -> dragged += amount }
                     }
             ) {
-                ArtImage(np.artPath?.let { File(it) }, 280.dp)
+                val castName by com.aar.privatemusic.cast.CastState.castDeviceName.collectAsState()
+                val animatedBg by app.settings.animatedBackground.collectAsState()
+                val videoFile = remember(np.songId, song?.videoPath) {
+                    (song?.videoPath?.let { File(it) }?.takeIf { it.canRead() })
+                        ?: app.repository.guessVideoFile(np.songId)
+                }
+                when {
+                    // El vídeo se queda en el móvil: con Cast activo, carátula/fondo.
+                    videoFile != null && castName == null && videoFile.extension.lowercase() == "gif" ->
+                        com.aar.privatemusic.ui.components.SongGif(videoFile, 280.dp)
+                    videoFile != null && castName == null ->
+                        com.aar.privatemusic.ui.components.SongVideo(videoFile, 280.dp, isPlaying)
+                    animatedBg ->
+                        Box(contentAlignment = Alignment.Center) {
+                            com.aar.privatemusic.ui.components.AnimatedMoodBackground(
+                                280.dp, cover.first,
+                                song?.moodHappy, song?.moodSad, song?.moodAggressive,
+                                song?.moodRelaxed, song?.bpm,
+                            )
+                            ArtImage(np.artPath?.let { File(it) }, 210.dp)
+                        }
+                    else -> ArtImage(np.artPath?.let { File(it) }, 280.dp)
+                }
             }
         }
         Spacer(Modifier.height(24.dp))

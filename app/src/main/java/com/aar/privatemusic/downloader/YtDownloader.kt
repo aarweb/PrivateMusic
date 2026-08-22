@@ -460,6 +460,45 @@ class YtDownloader(
         }
     }
 
+    /**
+     * Vídeo de fondo estilo "Canvas": busca el clip oficial en YouTube y guarda
+     * un bucle mudo corto como `<id>.mp4` junto al audio. Sólo vídeo (`bv*`), sin
+     * pista de audio. Devuelve true si consiguió el fichero. La misma superficie
+     * de riesgo que ya se asume para el audio de YouTube.
+     */
+    suspend fun downloadVideoClip(song: Song): Boolean = withContext(downloadDispatcher) {
+        runCatching {
+            val query = "ytsearch1:${song.artist} ${song.title} official video"
+            val request = YoutubeDLRequest(query).apply {
+                applyYoutubeClient()
+                addOption("-f", "bv*[height<=480]/bv*")
+                addOption("--no-playlist")
+                addOption("--no-mtime")
+                addOption("--no-warnings")
+                // Un bucle corto basta y pesa poco (~1-4 MB).
+                addOption("--download-sections", "*0-8")
+                addOption("--force-keyframes-at-cuts")
+                addOption("-o", "${musicDir.absolutePath}/${song.id}.video.%(ext)s")
+                if (isPlayingProvider()) addOption("--limit-rate", "1M")
+            }
+            val run = suspend { ytdl().execute(request, "${song.id}#video") { _, _, _ -> } }
+            if (isPlayingProvider()) soloWhilePlaying.withLock { run() } else run()
+
+            val raw = musicDir.listFiles()
+                ?.firstOrNull { it.name.startsWith("${song.id}.video.") }
+                ?: return@runCatching false
+            val dest = File(musicDir, "${song.id}.mp4")
+            // bv* no trae audio; aun así lo pasamos por el strip para normalizar a mp4.
+            val out = com.aar.privatemusic.util.VideoImport.stripAudioFromFile(raw, dest)
+            raw.delete()
+            if (out != null && out.length() > 0) {
+                dao.updateSongVideo(song.id, out.absolutePath)
+                true
+            } else false
+        }.onFailure { android.util.Log.w("YtDownloader", "downloadVideoClip falló", it) }
+            .getOrDefault(false)
+    }
+
     private suspend fun download(result: SearchResult) {
         val request = YoutubeDLRequest("https://www.youtube.com/watch?v=${result.id}").apply {
             applyYoutubeClient()

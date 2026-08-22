@@ -10,7 +10,7 @@ import androidx.sqlite.execSQL
 
 @Database(
     entities = [Song::class, Playlist::class, PlaylistSongCrossRef::class, PlayEvent::class, SmartPlaylist::class, WatchedSource::class, PlaylistFolder::class, PendingDownload::class, SavedQueue::class, SavedQueueSongCrossRef::class],
-    version = 19,
+    version = 20,
     exportSchema = false,
 )
 @ConstructedBy(MusicDatabaseConstructor::class)
@@ -221,6 +221,12 @@ internal val MUSIC_MIGRATIONS: Array<Migration> = arrayOf(
     object : Migration(18, 19) {
         override fun migrate(connection: SQLiteConnection) {
             connection.execSQL("ALTER TABLE songs ADD COLUMN analysisTries INTEGER NOT NULL DEFAULT 0")
+        }
+    },
+    // Ruta de un vídeo (estilo Canvas) asociado a la canción; null = sin vídeo.
+    object : Migration(19, 20) {
+        override fun migrate(connection: SQLiteConnection) {
+            connection.execSQL("ALTER TABLE songs ADD COLUMN videoPath TEXT")
         }
     },
 )

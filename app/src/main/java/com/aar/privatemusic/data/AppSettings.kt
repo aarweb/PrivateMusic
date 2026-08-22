@@ -62,6 +62,15 @@ class AppSettings(context: Context) {
         _romanizeLyrics.value = value
     }
 
+    // Fondo animado (por mood/BPM) en el reproductor cuando la canción no tiene vídeo.
+    private val _animatedBackground = MutableStateFlow(prefs.getBoolean(KEY_ANIM_BG, true))
+    val animatedBackground: StateFlow<Boolean> = _animatedBackground
+
+    fun setAnimatedBackground(value: Boolean) {
+        prefs.edit().putBoolean(KEY_ANIM_BG, value).apply()
+        _animatedBackground.value = value
+    }
+
     // "" = clientes por defecto de yt-dlp; si no, cadena para player_client.
     private val _youtubeClient = MutableStateFlow(prefs.getString(KEY_YT_CLIENT, "") ?: "")
     val youtubeClient: StateFlow<String> = _youtubeClient
@@ -203,6 +212,7 @@ class AppSettings(context: Context) {
         private const val KEY_AUTOMIX_MAX = "automix_max_pct"
         private const val KEY_SHARE_PC = "share_with_pc"
         private const val KEY_ROMANIZE = "romanize_lyrics"
+        private const val KEY_ANIM_BG = "animated_background"
         private const val KEY_YT_CLIENT = "youtube_client"
         private const val KEY_SUB_URL = "subsonic_url"
         private const val KEY_SUB_USER = "subsonic_user"

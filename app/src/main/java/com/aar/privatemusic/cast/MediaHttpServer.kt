@@ -26,6 +26,7 @@ class MediaHttpServer(
         if (path == "/library") return serveLibrary()
         if (path == "/playlists" && session.method == Method.POST) return receivePlaylists(session)
         if (path.startsWith("/art/")) return serveArt(path.removePrefix("/art/").substringBefore('.'))
+        if (path.startsWith("/video/")) return serveVideo(path.removePrefix("/video/").substringBefore('.'))
         if (!path.startsWith("/song/")) return notFound()
         val songId = path.removePrefix("/song/").substringBefore('.')
         val song = runBlocking { runCatching { dao.getSong(songId) }.getOrNull() }
@@ -114,6 +115,7 @@ class MediaHttpServer(
                     put("addedAt", song.addedAt)
                     put("isFavorite", song.isFavorite)
                     put("hasArt", song.artPath?.let { File(it).canRead() } == true)
+                    put("hasVideo", song.videoPath?.let { File(it).canRead() } == true)
                     putOpt("codec", song.codec)
                     song.bitrateKbps?.let { put("bitrateKbps", it) }
                     song.sampleRateHz?.let { put("sampleRateHz", it) }
@@ -245,6 +247,14 @@ class MediaHttpServer(
         newFixedLengthResponse(Response.Status.BAD_REQUEST, "text/plain", "bad request")
 
     /** Album art for the receiver's now-playing screen. */
+    private fun serveVideo(songId: String): Response {
+        val song = runBlocking { runCatching { dao.getSong(songId) }.getOrNull() }
+            ?: return notFound()
+        val file = song.videoPath?.let(::File)?.takeIf { it.canRead() } ?: return notFound()
+        val mime = if (file.extension.lowercase() == "gif") "image/gif" else "video/mp4"
+        return newFixedLengthResponse(Response.Status.OK, mime, FileInputStream(file), file.length())
+    }
+
     private fun serveArt(songId: String): Response {
         val song = runBlocking { runCatching { dao.getSong(songId) }.getOrNull() }
             ?: return notFound()

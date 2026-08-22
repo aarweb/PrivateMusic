@@ -268,6 +268,22 @@ fun SettingsScreen(app: PrivateMusicApp, onOpenStats: () -> Unit, onOpenEq: () -
             Switch(checked = normalize, onCheckedChange = { app.settings.setNormalizeVolume(it) })
         }
 
+        val animatedBg by app.settings.animatedBackground.collectAsState()
+        Row(
+            Modifier.fillMaxWidth().padding(vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text("Fondo animado del reproductor", style = MaterialTheme.typography.bodyLarge)
+                Text(
+                    "Cuando la canción no tiene vídeo, anima el fondo con su color y su ritmo",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Switch(checked = animatedBg, onCheckedChange = { app.settings.setAnimatedBackground(it) })
+        }
+
         if (normalize) {
             Row(
                 Modifier.fillMaxWidth().padding(start = 8.dp, bottom = 8.dp),
