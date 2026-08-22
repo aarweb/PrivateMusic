@@ -580,7 +580,7 @@ fun PlayerScreen(
                     videoFile != null && castName == null && videoFile.extension.lowercase() == "gif" ->
                         com.aar.privatemusic.ui.components.SongGif(videoFile, 280.dp)
                     videoFile != null && castName == null ->
-                        com.aar.privatemusic.ui.components.SongVideo(videoFile, 280.dp, isPlaying)
+                        com.aar.privatemusic.ui.components.SongVideo(videoFile, 280.dp, isPlaying, np.artPath?.let { File(it) })
                     animatedBg ->
                         Box(contentAlignment = Alignment.Center) {
                             com.aar.privatemusic.ui.components.AnimatedMoodBackground(
@@ -1519,7 +1519,7 @@ private fun VideoclipLyrics(
                 videoFile != null && !castActive && videoFile.extension.lowercase() == "gif" ->
                     com.aar.privatemusic.ui.components.SongGif(videoFile, 1000.dp)
                 videoFile != null && !castActive ->
-                    com.aar.privatemusic.ui.components.SongVideo(videoFile, 1000.dp, isPlaying)
+                    com.aar.privatemusic.ui.components.SongVideo(videoFile, 1000.dp, isPlaying, artFile)
                 animatedBgEnabled ->
                     com.aar.privatemusic.ui.components.AnimatedMoodBackground(
                         1000.dp, dominant,

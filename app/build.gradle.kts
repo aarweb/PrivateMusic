@@ -92,6 +92,7 @@ dependencies {
     implementation(libs.androidx.navigation.compose)
     implementation(libs.media3.exoplayer)
     implementation(libs.media3.session)
+    implementation(libs.media3.ui)
     // El esquema y las consultas viven en :core, compartidos con el escritorio.
     implementation(project(":core"))
     implementation(libs.coil.compose)

@@ -2,8 +2,6 @@ package com.aar.privatemusic.ui.components
 
 import android.graphics.ImageDecoder
 import android.os.Build
-import android.view.SurfaceHolder
-import android.view.SurfaceView
 import android.widget.ImageView
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
@@ -16,6 +14,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
@@ -43,20 +42,51 @@ import kotlin.math.sin
  * el foco de audio ni cree un AudioTrack — así no se pelea con los dos
  * reproductores de audio ni con el crossfade. Se pausa con la app en segundo
  * plano / pantalla apagada y con el audio en pausa, y se suelta al salir.
+ *
+ * Un ÚNICO ExoPlayer para toda la vida del composable: al cambiar de canción se
+ * le hace `setMediaItem`+`prepare` (no se recrea), porque recrearlo dejaba la
+ * superficie atada al player viejo y se veía congelado el fotograma anterior.
+ * Mientras el vídeo nuevo no ha pintado su primer fotograma se muestra la
+ * carátula por encima, para no ver un instante el vídeo de la canción de antes.
+ *
+ * `PlayerView` con `RESIZE_MODE_ZOOM`: llena el hueco recortando los bordes y
+ * conservando la proporción (un clip 16:9 en un fondo vertical se recorta, no
+ * se estira).
  */
 @Composable
-fun SongVideo(file: File, size: Dp, isAudioPlaying: Boolean) {
+fun SongVideo(file: File, size: Dp, isAudioPlaying: Boolean, artFile: File? = null) {
     val context = LocalContext.current
     val lifecycle = LocalLifecycleOwner.current.lifecycle
-    val player = remember(file.absolutePath) {
+    val player = remember {
         ExoPlayer.Builder(context).build().apply {
-            setMediaItem(MediaItem.fromUri(android.net.Uri.fromFile(file)))
             repeatMode = Player.REPEAT_MODE_ONE
             volume = 0f
             setAudioAttributes(audioAttributes, /* handleAudioFocus = */ false)
-            prepare()
             playWhenReady = true
         }
+    }
+
+    // Tapa el hueco visual hasta que el vídeo nuevo pinta su primer fotograma.
+    val firstFrameShown = remember { androidx.compose.runtime.mutableStateOf(false) }
+    DisposableEffect(player) {
+        val listener = object : androidx.media3.exoplayer.analytics.AnalyticsListener {
+            override fun onRenderedFirstFrame(
+                eventTime: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime,
+                output: Any,
+                renderTimeMs: Long,
+            ) {
+                firstFrameShown.value = true
+            }
+        }
+        player.addAnalyticsListener(listener)
+        onDispose { player.removeAnalyticsListener(listener) }
+    }
+
+    // Cambio de canción: cargar el vídeo nuevo y ocultar el viejo hasta que pinte.
+    LaunchedEffect(file.absolutePath) {
+        firstFrameShown.value = false
+        player.setMediaItem(MediaItem.fromUri(android.net.Uri.fromFile(file)))
+        player.prepare()
     }
 
     // El vídeo sólo corre si la pantalla está en primer plano Y el audio suena.
@@ -74,23 +104,27 @@ fun SongVideo(file: File, size: Dp, isAudioPlaying: Boolean) {
     }
     player.playWhenReady = resumed.value && isAudioPlaying
 
-    DisposableEffect(file.absolutePath) {
+    DisposableEffect(Unit) {
         onDispose { player.release() }
     }
 
     Box(Modifier.size(size)) {
         AndroidView(
             factory = { ctx ->
-                SurfaceView(ctx).apply {
-                    holder.addCallback(object : SurfaceHolder.Callback {
-                        override fun surfaceCreated(h: SurfaceHolder) { player.setVideoSurface(h.surface) }
-                        override fun surfaceChanged(h: SurfaceHolder, f: Int, w: Int, ht: Int) {}
-                        override fun surfaceDestroyed(h: SurfaceHolder) { player.setVideoSurface(null) }
-                    })
+                androidx.media3.ui.PlayerView(ctx).apply {
+                    useController = false
+                    resizeMode = androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                    // Sin obturador negro propio: el hueco lo tapamos con la carátula.
+                    setShutterBackgroundColor(android.graphics.Color.TRANSPARENT)
+                    this.player = player
                 }
             },
             modifier = Modifier.size(size),
         )
+        // Carátula por encima hasta el primer fotograma del vídeo nuevo.
+        if (!firstFrameShown.value && artFile != null) {
+            ArtImage(artFile, size)
+        }
     }
 }
 
