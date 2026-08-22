@@ -19,6 +19,14 @@ import java.net.URLEncoder
  *
  * Needs the free AcoustID application key in BuildConfig.ACOUSTID_KEY; when that
  * is blank the fingerprint fallback is simply disabled.
+ *
+ * `libfpcalc.so` es la única librería nativa del APK que sigue alineada a 4 KB:
+ * su proyecto está abandonado (ninguna build de JitPack, ni las de master, la
+ * alinea a 16 KB) y no hay recambio en Maven. En un móvil con páginas de 16 KB
+ * `System.loadLibrary` fallará, así que la clase se toca **sólo aquí y sólo al
+ * identificar**: el error se queda dentro de [nativeAvailable] y lo que se
+ * pierde es esta comprobación por huella, no la app ni el resto de la
+ * identificación (iTunes/Deezer/MusicBrainz siguen funcionando).
  */
 class Fingerprinter {
 
@@ -26,9 +34,28 @@ class Fingerprinter {
 
     val enabled: Boolean get() = key.isNotBlank()
 
+    /**
+     * Si la librería nativa carga en este dispositivo. Se resuelve la primera
+     * vez que se pregunta (nunca al arrancar) y se recuerda: cargar una .so mal
+     * alineada lanza `UnsatisfiedLinkError`, que es un `Error`, no una
+     * `Exception`, y hay que atraparlo explícitamente.
+     */
+    private val nativeAvailable: Boolean by lazy {
+        try {
+            Fpcalc.toString() // fuerza el <clinit>, que hace el loadLibrary
+            true
+        } catch (e: Throwable) {
+            Log.w("Fingerprinter", "fpcalc no disponible en este dispositivo: ${e.javaClass.simpleName}", e)
+            false
+        }
+    }
+
+    /** Para que quien llame pueda decírselo al usuario en vez de callar. */
+    val fingerprintSupported: Boolean get() = nativeAvailable
+
     /** Returns a reliable (artist, title, mbid, album) match, or null. */
     suspend fun identify(file: File): TrackMatch? = withContext(Dispatchers.IO) {
-        if (!enabled || !file.exists()) return@withContext null
+        if (!enabled || !file.exists() || !nativeAvailable) return@withContext null
         val res = runCatching {
             Fpcalc.calc(
                 FpcalcParams(

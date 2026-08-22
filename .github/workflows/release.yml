@@ -52,6 +52,37 @@ jobs:
           ACOUSTID_KEY: ${{ secrets.ACOUSTID_KEY }}
         run: ./gradlew assembleRelease --no-daemon
 
+      # Una .so alineada a 4 KB impide que la app arranque en los móviles con
+      # páginas de 16 KB. `zipalign -P 16` no sirve para detectarlo: con
+      # extractNativeLibs=true lo que manda es la alineación de los segmentos
+      # LOAD del propio ELF, no cómo esté guardado dentro del zip.
+      - name: Comprobar alineación de 16 KB
+        run: |
+          READELF=$(ls "$ANDROID_HOME"/ndk/*/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf | head -1)
+          TMP=$(mktemp -d)
+          unzip -qo app/build/outputs/apk/release/app-release.apk 'lib/arm64-v8a/*' -d "$TMP"
+          # libfpcalc: su proyecto está abandonado y ninguna build lo alinea; la
+          # app ya degrada esa función sola (ver Fingerprinter.kt). Quítalo de
+          # aquí en cuanto exista un recambio alineado.
+          CONOCIDAS="libfpcalc.so"
+          FALLO=0
+          for so in "$TMP"/lib/arm64-v8a/*.so; do
+            n=$(basename "$so")
+            head -c4 "$so" | grep -q ELF || continue   # los .zip.so de yt-dlp no son ELF
+            MIN=$("$READELF" -l "$so" | awk '$1=="LOAD"{print $NF}' | sort | head -1)
+            if [ "$MIN" = "0x1000" ]; then
+              if echo "$CONOCIDAS" | grep -qw "$n"; then
+                echo "::warning::$n sigue a 4 KB (excepción conocida y degradada)"
+              else
+                echo "::error::$n está alineada a 4 KB: la app no arrancaría en un móvil de 16 KB"
+                FALLO=1
+              fi
+            else
+              echo "  ok $MIN $n"
+            fi
+          done
+          exit $FALLO
+
       - name: Comprobar firma
         run: |
           BT=$(ls "$ANDROID_HOME/build-tools" | tail -1)
