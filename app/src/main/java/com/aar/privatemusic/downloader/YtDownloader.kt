@@ -469,14 +469,42 @@ class YtDownloader(
     suspend fun downloadVideoClip(song: Song): Boolean = withContext(downloadDispatcher) {
         runCatching {
             val query = "ytsearch1:${song.artist} ${song.title} official video"
-            val request = YoutubeDLRequest(query).apply {
+
+            // Sondea el vídeo concreto y su duración para (1) descargar por id fijo
+            // —no arriesgar que ytsearch resuelva otro clip en la segunda llamada—
+            // y (2) recortar por el MEDIO en vez de los primeros 8 s, que suelen
+            // ser intro/logo del sello/fundido. Si el sondeo falla, se cae al
+            // comportamiento de antes (desde el principio sobre la búsqueda).
+            val probe = runCatching {
+                YoutubeDLRequest(query).apply {
+                    applyYoutubeClient()
+                    addOption("--no-playlist")
+                    addOption("--no-warnings")
+                    addOption("--skip-download")
+                    addOption("--print", "%(id)s|%(duration)s")
+                }.let { ytdl().execute(it).out.trim().lineSequence().firstOrNull { l -> l.contains("|") } }
+            }.getOrNull()
+            val videoId = probe?.substringBefore("|")?.takeIf { it.isNotBlank() }
+            val duration = probe?.substringAfter("|")?.trim()?.toDoubleOrNull()
+            val section = if (duration != null && duration > 20) {
+                // Empieza al ~45 % y coge 8 s, sin pasarse del final.
+                val start = (duration * 0.45).coerceAtMost(duration - 9)
+                "*${start.toInt()}-${(start + 8).toInt()}"
+            } else {
+                "*0-8"
+            }
+            Log.d("YtDownloader", "vídeo ${song.id}: dur=$duration section=$section id=$videoId")
+
+            val target = videoId?.let { "https://www.youtube.com/watch?v=$it" } ?: query
+            val request = YoutubeDLRequest(target).apply {
                 applyYoutubeClient()
-                addOption("-f", "bv*[height<=480]/bv*")
+                // Altura decente para que no se pixele al ampliar de fondo (se
+                // recorta al pintar con RESIZE_MODE_ZOOM), pero sin traer 4K.
+                addOption("-f", "bv*[height<=720][height>=360]/bv*[height<=720]/bv*")
                 addOption("--no-playlist")
                 addOption("--no-mtime")
                 addOption("--no-warnings")
-                // Un bucle corto basta y pesa poco (~1-4 MB).
-                addOption("--download-sections", "*0-8")
+                addOption("--download-sections", section)
                 addOption("--force-keyframes-at-cuts")
                 addOption("-o", "${musicDir.absolutePath}/${song.id}.video.%(ext)s")
                 if (isPlayingProvider()) addOption("--limit-rate", "1M")
