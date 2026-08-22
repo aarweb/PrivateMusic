@@ -46,7 +46,14 @@ class BluetoothResumeReceiver : BroadcastReceiver() {
             runCatching {
                 val controller = future.get()
                 if (controller.mediaItemCount > 0) {
+                    // Se reanuda por la sesión, no llamando al reproductor a
+                    // pelo: desde Android 17 una orden de reproducir nacida en
+                    // segundo plano se ignora sin avisar si no pasa por aquí.
                     controller.play()
+                    android.util.Log.d(
+                        "BtResume",
+                        "reanudando ${controller.mediaItemCount} pistas (playWhenReady=${controller.playWhenReady})",
+                    )
                     controller.release()
                     pending.finish()
                 } else {

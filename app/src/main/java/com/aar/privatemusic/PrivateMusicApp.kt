@@ -187,7 +187,30 @@ class PrivateMusicApp : Application() {
      * Así que esperan a que la pantalla esté puesta, y en el caso normal —una
      * biblioteca ya analizada— esto es una cuenta en SQLite y nada más.
      */
+    /**
+     * Por qué murió el proceso la última vez. Android 17 añade un limitador de
+     * memoria por app, y esta carga modelos de IA y un motor de torrents: si el
+     * sistema la está matando por RAM, aquí se ve (`REASON_EXIT_SELF` o el
+     * motivo del limitador) en vez de parecer un cierre espontáneo.
+     */
+    private fun logLastExit() {
+        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.R) return
+        runCatching {
+            val am = getSystemService(ACTIVITY_SERVICE) as android.app.ActivityManager
+            val last = am.getHistoricalProcessExitReasons(packageName, 0, 1).firstOrNull() ?: return
+            // Un cierre normal del usuario no interesa; lo que importa es que lo
+            // matara el sistema.
+            if (last.reason == android.app.ApplicationExitInfo.REASON_USER_REQUESTED) return
+            Log.i(
+                "PrivateMusicApp",
+                "cierre anterior: reason=${last.reason} status=${last.status} " +
+                    "rss=${last.rss / 1024}MB desc=${last.description}",
+            )
+        }.onFailure { Log.w("PrivateMusicApp", "no se pudo leer el cierre anterior", it) }
+    }
+
     private suspend fun maintenance() {
+        logLastExit()
         kotlinx.coroutines.delay(SETTLE_MS)
         val prefs = getSharedPreferences("settings", MODE_PRIVATE)
         val now = System.currentTimeMillis()
