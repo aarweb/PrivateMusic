@@ -88,6 +88,9 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import com.aar.privatemusic.ui.components.AddToPlaylistDialog
 import com.aar.privatemusic.ui.components.ArtImage
+import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
 import com.aar.privatemusic.ui.components.formatDuration
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -114,6 +117,9 @@ fun PlayerScreen(
     val scope = rememberCoroutineScope()
 
     val np = nowPlaying ?: run { onBack(); return }
+
+    val djState by app.dj.state.collectAsState()
+    var djRequestOpen by remember { mutableStateOf(false) }
 
     val song by remember(np.songId) { app.repository.observeSong(np.songId) }
         .collectAsState(initial = null)
@@ -364,6 +370,37 @@ fun PlayerScreen(
             )
         }
 
+        if (djRequestOpen) {
+            var req by remember { mutableStateOf("") }
+            AlertDialog(
+                onDismissRequest = { djRequestOpen = false },
+                title = { Text("Pídele al DJ") },
+                text = {
+                    Column {
+                        Text(
+                            "Dile qué quieres y re-secuencia lo que viene: “algo más animado”, “menos lento”, “más de los 90”…",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        OutlinedTextField(
+                            value = req,
+                            onValueChange = { req = it },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
+                            placeholder = { Text("algo más animado") },
+                        )
+                    }
+                },
+                confirmButton = {
+                    TextButton(
+                        enabled = req.isNotBlank(),
+                        onClick = { app.dj.request(req.trim()); djRequestOpen = false },
+                    ) { Text("Marchando") }
+                },
+                dismissButton = { TextButton(onClick = { djRequestOpen = false }) { Text("Cancelar") } },
+            )
+        }
+
         if (castDialogOpen) {
             com.aar.privatemusic.cast.CastRouteDialog(onDismiss = { castDialogOpen = false })
         }
@@ -376,6 +413,30 @@ fun PlayerScreen(
                 onReset = { controller.resetPlaybackParameters() },
                 onDismiss = { speedDialogOpen = false },
             )
+        }
+
+        if (djState.active && djState.line != null) {
+            Surface(
+                color = accent.copy(alpha = 0.16f),
+                shape = MaterialTheme.shapes.large,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp, vertical = 6.dp),
+            ) {
+                Row(
+                    Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(Icons.Filled.GraphicEq, contentDescription = "DJ", tint = accent)
+                    Text(
+                        djState.line ?: "",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.weight(1f).padding(horizontal = 10.dp),
+                    )
+                    TextButton(onClick = { djRequestOpen = true }) { Text("Pedir") }
+                }
+            }
         }
 
         Spacer(Modifier.weight(0.6f))

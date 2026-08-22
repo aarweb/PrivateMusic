@@ -69,6 +69,10 @@ class AppSettings(context: Context) {
     private val _shareWithPc = MutableStateFlow(prefs.getBoolean(KEY_SHARE_PC, false))
     val shareWithPc: StateFlow<Boolean> = _shareWithPc
 
+    /** Voz del DJ (TTS del sistema). Off por defecto: el DJ funciona con texto. */
+    private val _djVoice = MutableStateFlow(prefs.getBoolean(KEY_DJ_VOICE, false))
+    val djVoice: StateFlow<Boolean> = _djVoice
+
     /** Mostrar las letras en otros alfabetos romanizadas (karaoke de K-pop/J-pop). */
     private val _romanizeLyrics = MutableStateFlow(prefs.getBoolean(KEY_ROMANIZE, false))
     val romanizeLyrics: StateFlow<Boolean> = _romanizeLyrics
@@ -206,6 +210,11 @@ class AppSettings(context: Context) {
         _shareWithPc.value = value
     }
 
+    fun setDjVoice(value: Boolean) {
+        prefs.edit().putBoolean(KEY_DJ_VOICE, value).apply()
+        _djVoice.value = value
+    }
+
     fun setListenBrainzToken(value: String) {
         prefs.edit().putString(KEY_LISTENBRAINZ, value.trim()).apply()
         _listenBrainzToken.value = value.trim()
@@ -251,6 +260,7 @@ class AppSettings(context: Context) {
         private const val KEY_AUTOMIX = "automix"
         private const val KEY_AUTOMIX_MAX = "automix_max_pct"
         private const val KEY_SHARE_PC = "share_with_pc"
+        private const val KEY_DJ_VOICE = "dj_voice"
         private const val KEY_ROMANIZE = "romanize_lyrics"
         private const val KEY_ANIM_BG = "animated_background"
         private const val KEY_LYRIC_STYLE = "lyric_style"

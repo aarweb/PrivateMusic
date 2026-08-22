@@ -268,6 +268,23 @@ fun SettingsScreen(app: PrivateMusicApp, onOpenStats: () -> Unit, onOpenEq: () -
             Switch(checked = normalize, onCheckedChange = { app.settings.setNormalizeVolume(it) })
         }
 
+        val djVoice by app.settings.djVoice.collectAsState()
+        Row(
+            Modifier.fillMaxWidth().padding(vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text("Voz del DJ", style = MaterialTheme.typography.bodyLarge)
+                Text(
+                    "Cuando el DJ está en directo, presenta cada bloque en voz alta " +
+                        "(voz del sistema, sin conexión). Si está apagado, solo texto.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Switch(checked = djVoice, onCheckedChange = { app.settings.setDjVoice(it) })
+        }
+
         val animatedBg by app.settings.animatedBackground.collectAsState()
         Row(
             Modifier.fillMaxWidth().padding(vertical = 8.dp),

@@ -306,6 +306,19 @@ class PlayerController(
     }
 
     /**
+     * Sustituye la parte FUTURA de la cola (todo lo posterior a lo que suena)
+     * por [songs], conservando la canción en curso. Lo usa el AI DJ al re-
+     * secuenciar tras una petición sin cortar lo que se está oyendo.
+     */
+    fun replaceUpcoming(songs: List<Song>) {
+        val c = controller ?: return
+        if (c.mediaItemCount == 0) { playQueueInOrder(songs); return }
+        val from = c.currentMediaItemIndex + 1
+        if (from < c.mediaItemCount) c.removeMediaItems(from, c.mediaItemCount)
+        if (songs.isNotEmpty()) c.addMediaItems(songs.map { it.toMediaItem() })
+    }
+
+    /**
      * Toda cola nueva empieza sin herencias: el aleatorio de antes no se pega a
      * lo siguiente que pongas, y la copia del orden original se tira.
      */

@@ -19,6 +19,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.automirrored.filled.DirectionsRun
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Close
@@ -233,6 +234,33 @@ fun HomeScreen(
                 onClick = { runningOpen = true },
             )
         }
+        // Tercera fila: el AI DJ.
+        val djState by app.dj.state.collectAsState()
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            PlayCard(
+                title = "DJ",
+                subtitle = when {
+                    djState.building -> "Preparando la sesión…"
+                    djState.active -> "En directo · toca para parar"
+                    else -> "Una sesión que se presenta sola"
+                },
+                icon = Icons.Filled.GraphicEq,
+                container = if (djState.active) MaterialTheme.colorScheme.primaryContainer
+                else MaterialTheme.colorScheme.tertiaryContainer,
+                onContainer = if (djState.active) MaterialTheme.colorScheme.onPrimaryContainer
+                else MaterialTheme.colorScheme.onTertiaryContainer,
+                modifier = Modifier.weight(1f),
+                onClick = {
+                    if (djState.active) app.dj.stop()
+                    else app.dj.start(System.currentTimeMillis())
+                },
+            )
+            Spacer(Modifier.weight(1f))
+        }
+
         if (customMixOpen) {
             CustomMixDialog(app, onDismiss = { customMixOpen = false })
         }
