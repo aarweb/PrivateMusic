@@ -18,6 +18,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
@@ -518,66 +521,72 @@ class YtDownloader(
                 720 -> 480
                 else -> 360
             }
-            val candidates = mutableListOf<File>()
-            for ((index, start) in starts.withIndex()) {
-                val prefix = "${song.id}.canvas$index."
-                cleanupCandidatePrefix(prefix)
-                val request = YoutubeDLRequest(target).apply {
-                    applyYoutubeClient()
-                    addOption(
-                        "-f",
-                        "bv*[height<=$canvasHeight][height>=$minimumHeight]/" +
-                            "bv*[height<=$canvasHeight]/bv*",
-                    )
-                    addOption("--no-playlist")
-                    addOption("--no-mtime")
-                    addOption("--no-warnings")
-                    addOption("--download-sections", "*$start-${start + 8}")
-                    addOption("--force-keyframes-at-cuts")
-                    addOption("-o", "${musicDir.absolutePath}/${song.id}.canvas$index.%(ext)s")
-                    if (isPlayingProvider()) addOption("--limit-rate", "1M")
-                }
-                val run = suspend { ytdl().execute(request, "${song.id}#canvas$index") { _, _, _ -> } }
-                val response = try {
-                    if (isPlayingProvider()) soloWhilePlaying.withLock { run() } else run()
-                } catch (e: CancellationException) {
-                    cleanupCandidatePrefix(prefix)
-                    throw e
-                } catch (e: Exception) {
-                    cleanupCandidatePrefix(prefix)
-                    Log.w(
-                        "YtDownloader",
-                        "No se pudo descargar la ventana Canvas $index; se descartan sus restos",
-                        e,
-                    )
-                    continue
-                }
-                if (response.exitCode != 0) {
-                    cleanupCandidatePrefix(prefix)
-                    Log.w(
-                        "YtDownloader",
-                        "yt-dlp rechazó la ventana Canvas $index " +
-                            "(código ${response.exitCode}); se descartan sus restos",
-                    )
-                    continue
-                }
-                val finalFile = musicDir.listFiles()
-                    ?.filter {
-                        it.name.startsWith(prefix) && !it.name.contains(".part") &&
-                            it.isFile && it.length() > 0L
+            val candidates = coroutineScope {
+                starts.mapIndexed { index, start ->
+                    async {
+                        val prefix = "${song.id}.canvas$index."
+                        cleanupCandidatePrefix(prefix)
+                        val request = YoutubeDLRequest(target).apply {
+                            applyYoutubeClient()
+                            addOption(
+                                "-f",
+                                "bv*[height<=$canvasHeight][height>=$minimumHeight]/" +
+                                    "bv*[height<=$canvasHeight]/bv*",
+                            )
+                            addOption("--no-playlist")
+                            addOption("--no-mtime")
+                            addOption("--no-warnings")
+                            addOption("--download-sections", "*$start-${start + 8}")
+                            addOption("--force-keyframes-at-cuts")
+                            addOption("-o", "${musicDir.absolutePath}/${song.id}.canvas$index.%(ext)s")
+                            if (isPlayingProvider()) addOption("--limit-rate", "1M")
+                        }
+                        val run = suspend {
+                            ytdl().execute(request, "${song.id}#canvas$index") { _, _, _ -> }
+                        }
+                        val response = try {
+                            if (isPlayingProvider()) soloWhilePlaying.withLock { run() } else run()
+                        } catch (e: CancellationException) {
+                            cleanupCandidatePrefix(prefix)
+                            throw e
+                        } catch (e: Exception) {
+                            cleanupCandidatePrefix(prefix)
+                            Log.w(
+                                "YtDownloader",
+                                "No se pudo descargar la ventana Canvas $index; " +
+                                    "se descartan sus restos",
+                                e,
+                            )
+                            return@async null
+                        }
+                        if (response.exitCode != 0) {
+                            cleanupCandidatePrefix(prefix)
+                            Log.w(
+                                "YtDownloader",
+                                "yt-dlp rechazó la ventana Canvas $index " +
+                                    "(código ${response.exitCode}); se descartan sus restos",
+                            )
+                            return@async null
+                        }
+                        val finalFile = musicDir.listFiles()
+                            ?.filter {
+                                it.name.startsWith(prefix) && !it.name.contains(".part") &&
+                                    it.isFile && it.length() > 0L
+                            }
+                            ?.sortedBy { it.name }
+                            ?.firstOrNull()
+                        if (finalFile == null) {
+                            cleanupCandidatePrefix(prefix)
+                            Log.w(
+                                "YtDownloader",
+                                "La ventana Canvas $index no produjo un archivo final válido; " +
+                                    "se descartan sus restos",
+                            )
+                            return@async null
+                        }
+                        finalFile
                     }
-                    ?.sortedBy { it.name }
-                    ?.firstOrNull()
-                if (finalFile == null) {
-                    cleanupCandidatePrefix(prefix)
-                    Log.w(
-                        "YtDownloader",
-                        "La ventana Canvas $index no produjo un archivo final válido; " +
-                            "se descartan sus restos",
-                    )
-                    continue
-                }
-                candidates.add(finalFile)
+                }.awaitAll().filterNotNull()
             }
             val raw = CanvasClipSelector.choose(candidates)
                 ?: return@withContext false
