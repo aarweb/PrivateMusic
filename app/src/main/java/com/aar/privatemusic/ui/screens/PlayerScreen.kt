@@ -60,6 +60,7 @@ import androidx.compose.material3.AssistChip
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
@@ -155,6 +156,13 @@ fun PlayerScreen(
     }
     val dominant = cover.first
     val accent = cover.second
+    val castName by com.aar.privatemusic.cast.CastState.castDeviceName.collectAsState()
+    val playerVideoFile = remember(np.songId, song?.videoPath) {
+        (song?.videoPath?.let { File(it) }?.takeIf { it.canRead() })
+            ?: app.repository.guessVideoFile(np.songId)
+    }
+    val fullCanvas = playerVideoFile != null &&
+        playerVideoFile.extension.lowercase() != "gif" && castName == null
 
     // La posición se guarda como estado, no se lee aquí: si la leyera esta
     // pantalla, el tic de medio segundo la recompondría entera, carátula incluida.
@@ -225,13 +233,51 @@ fun PlayerScreen(
         }
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Brush.verticalGradient(listOf(dominant, surface)))
-            .padding(24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
+    Box(Modifier.fillMaxSize()) {
+        if (fullCanvas) {
+            com.aar.privatemusic.ui.components.SongVideo(
+                playerVideoFile,
+                1000.dp,
+                isPlaying,
+                np.artPath?.let { File(it) },
+                Modifier.fillMaxSize(),
+            )
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .background(
+                        Brush.verticalGradient(
+                            0f to Color.Black.copy(alpha = 0.28f),
+                            0.38f to Color.Transparent,
+                            0.68f to Color.Black.copy(alpha = 0.48f),
+                            1f to Color.Black.copy(alpha = 0.94f),
+                        )
+                    )
+            )
+        }
+        val playerColors = if (fullCanvas) {
+            MaterialTheme.colorScheme.copy(
+                surface = Color.Black,
+                onSurface = Color.White,
+                onSurfaceVariant = Color.White.copy(alpha = 0.78f),
+                primary = Color.White,
+                tertiary = Color.White,
+            )
+        } else MaterialTheme.colorScheme
+        MaterialTheme(colorScheme = playerColors) {
+            androidx.compose.runtime.CompositionLocalProvider(
+                LocalContentColor provides if (fullCanvas) Color.White else MaterialTheme.colorScheme.onSurface
+            ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .then(
+                        if (fullCanvas) Modifier
+                        else Modifier.background(Brush.verticalGradient(listOf(dominant, surface)))
+                    )
+                    .padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
         Row(
             Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
@@ -713,7 +759,9 @@ fun PlayerScreen(
                 label = "cover",
             )
             var dragged by remember { mutableFloatStateOf(0f) }
-            Box(
+            if (fullCanvas) {
+                Spacer(Modifier.height(280.dp))
+            } else Box(
                 coverModifier
                     .graphicsLayer {
                         scaleX = scale.value
@@ -730,18 +778,13 @@ fun PlayerScreen(
                         ) { _, amount -> dragged += amount }
                     }
             ) {
-                val castName by com.aar.privatemusic.cast.CastState.castDeviceName.collectAsState()
                 val animatedBg by app.settings.animatedBackground.collectAsState()
-                val videoFile = remember(np.songId, song?.videoPath) {
-                    (song?.videoPath?.let { File(it) }?.takeIf { it.canRead() })
-                        ?: app.repository.guessVideoFile(np.songId)
-                }
                 when {
                     // El vídeo se queda en el móvil: con Cast activo, carátula/fondo.
-                    videoFile != null && castName == null && videoFile.extension.lowercase() == "gif" ->
-                        com.aar.privatemusic.ui.components.SongGif(videoFile, 280.dp)
-                    videoFile != null && castName == null ->
-                        com.aar.privatemusic.ui.components.SongVideo(videoFile, 280.dp, isPlaying, np.artPath?.let { File(it) })
+                    playerVideoFile != null && castName == null && playerVideoFile.extension.lowercase() == "gif" ->
+                        com.aar.privatemusic.ui.components.SongGif(playerVideoFile, 280.dp)
+                    playerVideoFile != null && castName == null ->
+                        com.aar.privatemusic.ui.components.SongVideo(playerVideoFile, 280.dp, isPlaying, np.artPath?.let { File(it) })
                     animatedBg ->
                         Box(contentAlignment = Alignment.Center) {
                             com.aar.privatemusic.ui.components.AnimatedMoodBackground(
@@ -940,6 +983,9 @@ fun PlayerScreen(
             }
         }
         Spacer(Modifier.height(8.dp))
+            }
+        }
+        }
     }
 
     if (sleepDialogOpen) {

@@ -58,7 +58,13 @@ import kotlin.math.sin
  * se estira).
  */
 @Composable
-fun SongVideo(file: File, size: Dp, isAudioPlaying: Boolean, artFile: File? = null) {
+fun SongVideo(
+    file: File,
+    size: Dp,
+    isAudioPlaying: Boolean,
+    artFile: File? = null,
+    modifier: Modifier = Modifier.size(size),
+) {
     val context = LocalContext.current
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     val player = remember {
@@ -112,7 +118,7 @@ fun SongVideo(file: File, size: Dp, isAudioPlaying: Boolean, artFile: File? = nu
         onDispose { player.release() }
     }
 
-    Box(Modifier.size(size).clipToBounds()) {
+    Box(modifier.clipToBounds()) {
         AndroidView(
             factory = { ctx ->
                 (LayoutInflater.from(ctx).inflate(
@@ -127,7 +133,7 @@ fun SongVideo(file: File, size: Dp, isAudioPlaying: Boolean, artFile: File? = nu
                     this.player = player
                 }
             },
-            modifier = Modifier.size(size).clipToBounds(),
+            modifier = Modifier.fillMaxSize().clipToBounds(),
         )
         // Separa visualmente el Canvas de la información del tema. Al usar una
         // TextureView el degradado queda realmente encima del vídeo y el clip no
