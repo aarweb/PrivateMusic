@@ -9,10 +9,12 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
@@ -34,7 +36,7 @@ enum class AutoPlaylistType(val route: String, val title: String) {
 }
 
 @Composable
-fun AutoPlaylistScreen(app: PrivateMusicApp, type: AutoPlaylistType) {
+fun AutoPlaylistScreen(app: PrivateMusicApp, type: AutoPlaylistType, onBack: () -> Unit = {}) {
     val flow = remember(type) {
         when (type) {
             AutoPlaylistType.MOST_PLAYED -> app.repository.observeMostPlayed()
@@ -47,11 +49,15 @@ fun AutoPlaylistScreen(app: PrivateMusicApp, type: AutoPlaylistType) {
     val nowPlaying by app.playerController.nowPlaying.collectAsState()
 
     Column(Modifier.fillMaxSize()) {
-        Text(
-            type.title,
-            style = MaterialTheme.typography.titleLarge,
-            modifier = Modifier.padding(16.dp),
-        )
+        Row(
+            Modifier.fillMaxWidth().padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            IconButton(onClick = onBack) {
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Volver")
+            }
+            Text(type.title, style = MaterialTheme.typography.titleLarge)
+        }
         com.aar.privatemusic.ui.components.GeneratedPlaylistActions(
             app = app,
             songs = songs,

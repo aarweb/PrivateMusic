@@ -103,6 +103,7 @@ fun LibraryScreen(app: PrivateMusicApp, onOpenArtist: (String) -> Unit = {}) {
     val trackedIds by remember(app) {
         app.downloader.downloads.map { it.keys }.distinctUntilChanged()
     }.collectAsState(initial = emptySet())
+    val manualCanvasIds by app.videoAuto.manualDownloadIds.collectAsState()
 
     // Downloads that failed (this session, or a stuck row from a past session):
     // shown in an errors section with a retry button. Active ones are excluded.
@@ -151,17 +152,24 @@ fun LibraryScreen(app: PrivateMusicApp, onOpenArtist: (String) -> Unit = {}) {
             scope.launch { app.repository.setSongArt(context, song, uri) }
         }
     }
-    var songForVideo by remember { mutableStateOf<Song?>(null) }
+    var songForVideoId by remember { mutableStateOf<String?>(null) }
     val videoPicker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument()
     ) { uri ->
-        val song = songForVideo
-        songForVideo = null
+        val song = songs.firstOrNull { it.id == songForVideoId }
+        songForVideoId = null
         if (uri != null && song != null) {
-            com.aar.privatemusic.util.Feedback.show("Preparando el vídeo…")
+            val replacing = !song.videoPath.isNullOrBlank()
+            com.aar.privatemusic.util.Feedback.show("Preparando el Canvas…")
             app.appScope.launch {
                 val ok = app.repository.setSongVideo(context, song, uri)
-                com.aar.privatemusic.util.Feedback.show(if (ok) "Vídeo añadido" else "No se pudo usar ese vídeo")
+                com.aar.privatemusic.util.Feedback.show(
+                    when {
+                        ok && replacing -> "Canvas cambiado"
+                        ok -> "Canvas añadido"
+                        else -> "No se pudo usar ese archivo como Canvas"
+                    }
+                )
             }
         }
     }
@@ -373,6 +381,8 @@ fun LibraryScreen(app: PrivateMusicApp, onOpenArtist: (String) -> Unit = {}) {
 
             items(visibleSongs, key = { it.id }, contentType = { "song" }) { song ->
                 var menuOpen by remember { mutableStateOf(false) }
+                val hasCanvas = !song.videoPath.isNullOrBlank()
+                val canvasActive = song.id in manualCanvasIds
                 SongRow(
                     song = song,
                     isCurrent = song.id == nowPlaying?.songId,
@@ -510,33 +520,66 @@ fun LibraryScreen(app: PrivateMusicApp, onOpenArtist: (String) -> Unit = {}) {
                                     },
                                 )
                                 DropdownMenuItem(
-                                    text = { Text(if (song.videoPath != null) "Cambiar vídeo de fondo" else "Añadir vídeo de fondo") },
+                                    text = {
+                                        Text(
+                                            if (hasCanvas) "Cambiar vídeo local del Canvas"
+                                            else "Elegir vídeo local para Canvas"
+                                        )
+                                    },
+                                    enabled = !canvasActive,
                                     onClick = {
                                         menuOpen = false
-                                        songForVideo = song
+                                        songForVideoId = song.id
                                         videoPicker.launch(arrayOf("video/*", "image/gif"))
                                     },
                                 )
                                 DropdownMenuItem(
-                                    text = { Text("Buscar vídeo en YouTube") },
+                                    text = {
+                                        Text(
+                                            when {
+                                                canvasActive -> "Descargando Canvas…"
+                                                hasCanvas -> "Reemplazar Canvas desde YouTube"
+                                                else -> "Descargar Canvas desde YouTube"
+                                            }
+                                        )
+                                    },
+                                    enabled = !canvasActive,
                                     onClick = {
                                         menuOpen = false
-                                        com.aar.privatemusic.util.Feedback.show("Buscando vídeo…")
-                                        app.videoAuto.clearNoVideoMarker(song.id)
+                                        val replacing = hasCanvas
+                                        com.aar.privatemusic.util.Feedback.show(
+                                            if (replacing) "Reemplazando Canvas…" else "Descargando Canvas…"
+                                        )
                                         app.appScope.launch {
-                                            val ok = app.downloader.downloadVideoClip(song)
+                                            val ok = app.videoAuto.downloadOrReplace(song)
                                             com.aar.privatemusic.util.Feedback.show(
-                                                if (ok) "Vídeo de fondo listo" else "No se encontró vídeo"
+                                                when {
+                                                    ok && replacing -> "Canvas reemplazado"
+                                                    ok -> "Canvas descargado"
+                                                    replacing -> "No se pudo reemplazar el Canvas"
+                                                    else -> "No se pudo descargar el Canvas"
+                                                }
                                             )
                                         }
                                     },
                                 )
-                                if (song.videoPath != null) {
+                                if (hasCanvas) {
                                     DropdownMenuItem(
-                                        text = { Text("Quitar vídeo") },
+                                        text = { Text("Borrar Canvas") },
+                                        enabled = !canvasActive,
                                         onClick = {
                                             menuOpen = false
-                                            app.appScope.launch { app.repository.clearSongVideo(song) }
+                                            app.appScope.launch {
+                                                runCatching { app.repository.clearSongVideo(song) }
+                                                    .onSuccess {
+                                                        com.aar.privatemusic.util.Feedback.show("Canvas borrado")
+                                                    }
+                                                    .onFailure {
+                                                        com.aar.privatemusic.util.Feedback.show(
+                                                            "No se pudo borrar el Canvas"
+                                                        )
+                                                    }
+                                            }
                                         },
                                     )
                                 }

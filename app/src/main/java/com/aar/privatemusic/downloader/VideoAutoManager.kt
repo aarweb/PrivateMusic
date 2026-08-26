@@ -46,12 +46,46 @@ class VideoAutoManager(
     /** Progreso del relleno masivo; null si no hay ninguno en curso. */
     val fillProgress: StateFlow<Progress?> = _fillProgress
 
+    private val _manualDownloadIds = MutableStateFlow<Set<String>>(emptySet())
+    /** IDs cuyo Canvas se está descargando o reemplazando por petición del usuario. */
+    val manualDownloadIds: StateFlow<Set<String>> = _manualDownloadIds
+
     private fun videoFile(id: String) = File(downloader.musicDir, "$id.mp4")
     private fun marker(id: String) = File(downloader.musicDir, "$id.novideo")
 
     /** La descarga manual reintenta siempre: borra la marca de "sin vídeo". */
-    fun clearNoVideoMarker(id: String) {
+    private fun clearNoVideoMarker(id: String) {
         runCatching { marker(id).delete() }
+    }
+
+    /**
+     * Descarga o reemplaza el Canvas de una canción. Las peticiones manuales del
+     * mismo ID no se apilan: si ya hay una activa, la segunda devuelve false.
+     * Comparte el mismo [gate] que el relleno automático y nunca deja una marca
+     * `.novideo`, porque una acción explícita siempre debe poder reintentarse.
+     */
+    suspend fun downloadOrReplace(song: Song): Boolean {
+        val accepted = synchronized(_manualDownloadIds) {
+            if (song.id in _manualDownloadIds.value) {
+                false
+            } else {
+                _manualDownloadIds.value = _manualDownloadIds.value + song.id
+                true
+            }
+        }
+        if (!accepted) return false
+
+        var ok = false
+        try {
+            clearNoVideoMarker(song.id)
+            ok = gate.withLock { downloader.downloadVideoClip(song) }
+            return ok
+        } finally {
+            if (!ok) clearNoVideoMarker(song.id)
+            synchronized(_manualDownloadIds) {
+                _manualDownloadIds.value = _manualDownloadIds.value - song.id
+            }
+        }
     }
 
     /** Ya tiene vídeo, o ya se intentó y no había: no hay nada que hacer. */

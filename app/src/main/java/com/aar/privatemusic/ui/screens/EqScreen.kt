@@ -12,6 +12,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.AlertDialog
@@ -46,14 +47,19 @@ import com.aar.privatemusic.player.AudioDsp
 import com.aar.privatemusic.player.EqHolder
 
 @Composable
-fun EqScreen(app: PrivateMusicApp) {
+fun EqScreen(app: PrivateMusicApp, onBack: () -> Unit = {}) {
     val context = LocalContext.current
     var mode by remember { mutableStateOf(AppSettings.readEqMode(context)) }
 
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
     ) {
-        Text("Ecualizador", style = MaterialTheme.typography.titleLarge)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = onBack) {
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Volver")
+            }
+            Text("Ecualizador", style = MaterialTheme.typography.titleLarge)
+        }
 
         // Selector de modo: gráfico (sistema) o paramétrico (DSP propio). Sólo uno
         // activo a la vez para no encadenar dos EQ.

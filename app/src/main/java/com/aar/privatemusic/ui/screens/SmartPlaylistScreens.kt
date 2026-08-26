@@ -10,8 +10,12 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -32,7 +36,11 @@ import com.aar.privatemusic.ui.components.SongRow
 import kotlinx.coroutines.launch
 
 @Composable
-fun SmartPlaylistDetailScreen(app: PrivateMusicApp, smartPlaylistId: Long) {
+fun SmartPlaylistDetailScreen(
+    app: PrivateMusicApp,
+    smartPlaylistId: Long,
+    onBack: () -> Unit = {},
+) {
     val sp by app.repository.observeSmartPlaylist(smartPlaylistId).collectAsState(initial = null)
     val songs by app.repository.observeSongs().collectAsState(initial = emptyList())
     val nowPlaying by app.playerController.nowPlaying.collectAsState()
@@ -56,6 +64,9 @@ fun SmartPlaylistDetailScreen(app: PrivateMusicApp, smartPlaylistId: Long) {
             Modifier.fillMaxWidth().padding(start = 16.dp, top = 16.dp, end = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            IconButton(onClick = onBack) {
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Volver")
+            }
             Text(
                 playlist.name,
                 style = MaterialTheme.typography.titleLarge,

@@ -126,6 +126,12 @@ private fun MainScaffold(app: PrivateMusicApp) {
     val navController: NavHostController = rememberNavController()
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route
+    val selectedSection = when (currentRoute) {
+        "artist/{name}" -> "library"
+        "playlist/{id}", "auto/{type}", "smart/{id}" -> "playlists"
+        "stats", "eq" -> "settings"
+        else -> currentRoute
+    }
 
     val tabs = listOf(
         Tab("home", "Inicio") { Icon(Icons.Filled.Home, null) },
@@ -186,7 +192,7 @@ private fun MainScaffold(app: PrivateMusicApp) {
                     NavigationBar {
                         tabs.forEach { tab ->
                             NavigationBarItem(
-                                selected = currentRoute == tab.route,
+                                selected = selectedSection == tab.route,
                                 onClick = {
                                     navController.navigate(tab.route) {
                                         popUpTo("home") { saveState = true }
@@ -226,7 +232,11 @@ private fun MainScaffold(app: PrivateMusicApp) {
             composable("artist/{name}") { entry ->
                 val name = entry.arguments?.getString("name")
                     ?.let { android.net.Uri.decode(it) } ?: return@composable
-                ArtistScreen(app, artistName = name)
+                ArtistScreen(
+                    app,
+                    artistName = name,
+                    onBack = { navController.popBackStack() },
+                )
             }
             composable("playlists") {
                 PlaylistsScreen(
@@ -243,21 +253,37 @@ private fun MainScaffold(app: PrivateMusicApp) {
                     onOpenEq = { navController.navigate("eq") },
                 )
             }
-            composable("stats") { StatsScreen(app) }
-            composable("eq") { EqScreen(app) }
+            composable("stats") {
+                StatsScreen(app, onBack = { navController.popBackStack() })
+            }
+            composable("eq") {
+                EqScreen(app, onBack = { navController.popBackStack() })
+            }
             composable("smart/{id}") { entry ->
                 val id = entry.arguments?.getString("id")?.toLongOrNull() ?: return@composable
-                SmartPlaylistDetailScreen(app, smartPlaylistId = id)
+                SmartPlaylistDetailScreen(
+                    app,
+                    smartPlaylistId = id,
+                    onBack = { navController.popBackStack() },
+                )
             }
             composable("playlist/{id}") { entry ->
                 val id = entry.arguments?.getString("id")?.toLongOrNull() ?: return@composable
-                PlaylistDetailScreen(app, playlistId = id)
+                PlaylistDetailScreen(
+                    app,
+                    playlistId = id,
+                    onBack = { navController.popBackStack() },
+                )
             }
             composable("auto/{type}") { entry ->
                 val type = AutoPlaylistType.entries
                     .firstOrNull { it.route == entry.arguments?.getString("type") }
                     ?: return@composable
-                AutoPlaylistScreen(app, type)
+                AutoPlaylistScreen(
+                    app,
+                    type,
+                    onBack = { navController.popBackStack() },
+                )
             }
             composable("player") {
                 val visibilityScope = this

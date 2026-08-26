@@ -8,11 +8,13 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Podcasts
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
@@ -35,7 +37,7 @@ import java.io.File
 
 /** All songs by one artist, with play-all / shuffle / sonic radio. */
 @Composable
-fun ArtistScreen(app: PrivateMusicApp, artistName: String) {
+fun ArtistScreen(app: PrivateMusicApp, artistName: String, onBack: () -> Unit = {}) {
     val allSongs by app.repository.observeSongs().collectAsState(initial = emptyList())
     val songs = remember(allSongs, artistName) {
         allSongs.filter { it.artist.equals(artistName, ignoreCase = true) }
@@ -51,6 +53,9 @@ fun ArtistScreen(app: PrivateMusicApp, artistName: String) {
                     .padding(16.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
+                IconButton(onClick = onBack) {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Volver")
+                }
                 ArtImage(songs.firstOrNull()?.artPath?.let { File(it) }, 72.dp)
                 Column(Modifier.weight(1f).padding(start = 16.dp)) {
                     Text(

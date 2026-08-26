@@ -28,6 +28,8 @@ import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.File
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 
@@ -467,7 +469,17 @@ class YtDownloader(
      * de riesgo que ya se asume para el audio de YouTube.
      */
     suspend fun downloadVideoClip(song: Song): Boolean = withContext(downloadDispatcher) {
-        runCatching {
+        val staging = File(musicDir, "${song.id}.canvas.staging.mp4")
+        val backup = File(musicDir, "${song.id}.canvas.backup.mp4")
+        val candidatePrefix = "${song.id}.canvas"
+        fun cleanupCanvasTemps() {
+            musicDir.listFiles()
+                ?.filter { it.name.startsWith(candidatePrefix) }
+                ?.forEach { runCatching { it.delete() } }
+        }
+
+        cleanupCanvasTemps()
+        try {
             val query = "ytsearch1:${song.artist} ${song.title} official video"
 
             // Sondea el vídeo concreto y su duración para descargar siempre el
@@ -492,7 +504,8 @@ class YtDownloader(
             val target = videoId?.let { "https://www.youtube.com/watch?v=$it" } ?: query
             val candidates = mutableListOf<File>()
             starts.forEachIndexed { index, start ->
-                musicDir.listFiles()?.filter { it.name.startsWith("${song.id}.canvas$index.") }?.forEach(File::delete)
+                val prefix = "${song.id}.canvas$index."
+                musicDir.listFiles()?.filter { it.name.startsWith(prefix) }?.forEach(File::delete)
                 val request = YoutubeDLRequest(target).apply {
                     applyYoutubeClient()
                     addOption("-f", "bv*[height<=720][height>=360]/bv*[height<=720]/bv*")
@@ -509,25 +522,73 @@ class YtDownloader(
                     if (isPlayingProvider()) soloWhilePlaying.withLock { run() } else run()
                 }
                 musicDir.listFiles()
-                    ?.firstOrNull { it.name.startsWith("${song.id}.canvas$index.") }
+                    ?.firstOrNull { it.name.startsWith(prefix) && !it.name.endsWith(".part") }
                     ?.takeIf { it.length() > 0 }
                     ?.let(candidates::add)
             }
             val raw = com.aar.privatemusic.util.CanvasClipSelector.choose(candidates)
-                ?: return@runCatching false
+                ?: return@withContext false
             val dest = File(musicDir, "${song.id}.mp4")
-            // bv* no trae audio; aun así lo pasamos por el strip para normalizar a mp4.
-            val out = try {
-                com.aar.privatemusic.util.VideoImport.stripAudioFromFile(raw, dest)
-            } finally {
-                candidates.forEach(File::delete)
+            // El Canvas vigente no se toca durante búsqueda, descarga ni procesado.
+            // bv* no trae audio; aun así se normaliza en un staging independiente.
+            val out = com.aar.privatemusic.util.VideoImport.stripAudioFromFile(raw, staging)
+            if (out == null || !staging.isFile || staging.length() <= 0L) {
+                return@withContext false
             }
-            if (out != null && out.length() > 0) {
-                dao.updateSongVideo(song.id, out.absolutePath)
-                true
-            } else false
-        }.onFailure { android.util.Log.w("YtDownloader", "downloadVideoClip falló", it) }
-            .getOrDefault(false)
+
+            // Conserva el destino previo para poder restaurarlo si falla el cambio
+            // de fichero o el registro en Room. El movimiento ocurre en el mismo
+            // directorio y es atómico cuando el sistema de ficheros lo permite.
+            if (dest.isFile && dest.length() > 0L) {
+                runCatching { dest.copyTo(backup, overwrite = true) }
+                    .getOrElse { return@withContext false }
+            }
+            val installed = runCatching {
+                Files.move(
+                    staging.toPath(),
+                    dest.toPath(),
+                    StandardCopyOption.ATOMIC_MOVE,
+                    StandardCopyOption.REPLACE_EXISTING,
+                )
+            }.recoverCatching {
+                Files.move(staging.toPath(), dest.toPath(), StandardCopyOption.REPLACE_EXISTING)
+            }.isSuccess && dest.isFile && dest.length() > 0L
+            if (!installed) return@withContext false
+
+            try {
+                dao.updateSongVideo(song.id, dest.absolutePath)
+            } catch (e: Exception) {
+                if (backup.isFile) {
+                    runCatching {
+                        Files.move(backup.toPath(), dest.toPath(), StandardCopyOption.REPLACE_EXISTING)
+                    }
+                } else {
+                    runCatching { dest.delete() }
+                }
+                throw e
+            }
+
+            // Sólo tras instalar y registrar el MP4 se retira el Canvas anterior.
+            val root = runCatching { musicDir.canonicalFile }.getOrNull()
+            val previous = song.videoPath?.let { runCatching { File(it).canonicalFile }.getOrNull() }
+            val audio = runCatching { File(song.filePath).canonicalFile }.getOrNull()
+            val finalFile = runCatching { dest.canonicalFile }.getOrNull()
+            if (
+                previous != null && previous != finalFile && previous != audio &&
+                root != null && previous.parentFile == root &&
+                previous.extension.lowercase() in setOf("mp4", "webm", "mkv", "gif")
+            ) {
+                runCatching { previous.delete() }
+            }
+            true
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w("YtDownloader", "downloadVideoClip falló", e)
+            false
+        } finally {
+            cleanupCanvasTemps()
+        }
     }
 
     private suspend fun download(result: SearchResult) {

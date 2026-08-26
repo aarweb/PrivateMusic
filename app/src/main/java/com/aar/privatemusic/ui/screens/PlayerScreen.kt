@@ -1,6 +1,8 @@
 package com.aar.privatemusic.ui.screens
 
 import android.graphics.BitmapFactory
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
@@ -94,6 +96,7 @@ import androidx.compose.material3.Surface
 import com.aar.privatemusic.ui.components.formatDuration
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -123,6 +126,9 @@ fun PlayerScreen(
 
     val song by remember(np.songId) { app.repository.observeSong(np.songId) }
         .collectAsState(initial = null)
+    val manualCanvasIds by app.videoAuto.manualDownloadIds.collectAsState()
+    val canvasActive = np.songId in manualCanvasIds
+    val hasCanvas = !song?.videoPath.isNullOrBlank()
 
     // Dos colores de la carátula: uno apagado para el fondo y otro vivo para
     // los mandos. Se extraen juntos porque decodificar el bitmap es lo caro.
@@ -165,6 +171,7 @@ fun PlayerScreen(
     var styleMenuOpen by remember { mutableStateOf(false) }
     var castDialogOpen by remember { mutableStateOf(false) }
     var qualityExpanded by remember { mutableStateOf(false) }
+    var songForCanvasId by remember { mutableStateOf<String?>(null) }
     val playbackSpeed by controller.playbackSpeed.collectAsState()
     val pitchSemitones by controller.pitchSemitones.collectAsState()
 
@@ -174,6 +181,31 @@ fun PlayerScreen(
         mutableStateOf<com.aar.privatemusic.lyrics.Lyrics?>(null)
     }
     val context = LocalContext.current
+    val canvasPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        val songId = songForCanvasId
+        songForCanvasId = null
+        if (uri != null && songId != null) {
+            com.aar.privatemusic.util.Feedback.show("Preparando el Canvas…")
+            app.appScope.launch {
+                val currentSong = app.repository.observeSong(songId).firstOrNull()
+                if (currentSong == null) {
+                    com.aar.privatemusic.util.Feedback.show("No se encontró la canción")
+                    return@launch
+                }
+                val replacing = !currentSong.videoPath.isNullOrBlank()
+                val ok = app.repository.setSongVideo(context, currentSong, uri)
+                com.aar.privatemusic.util.Feedback.show(
+                    when {
+                        ok && replacing -> "Canvas cambiado"
+                        ok -> "Canvas añadido"
+                        else -> "No se pudo usar ese archivo como Canvas"
+                    }
+                )
+            }
+        }
+    }
 
     val lyrics by produceState<com.aar.privatemusic.lyrics.Lyrics?>(initialValue = null, song?.id) {
         // produceState recuerda su valor SIN clave: al cambiar de canción sólo
@@ -272,6 +304,74 @@ fun PlayerScreen(
                             }
                         },
                     )
+                    DropdownMenuItem(
+                        text = {
+                            Text(
+                                when {
+                                    canvasActive -> "Descargando Canvas…"
+                                    hasCanvas -> "Reemplazar Canvas desde YouTube"
+                                    else -> "Descargar Canvas desde YouTube"
+                                }
+                            )
+                        },
+                        enabled = !canvasActive,
+                        onClick = {
+                            playerMenuOpen = false
+                            song?.let { currentSong ->
+                                val replacing = !currentSong.videoPath.isNullOrBlank()
+                                com.aar.privatemusic.util.Feedback.show(
+                                    if (replacing) "Reemplazando Canvas…" else "Descargando Canvas…"
+                                )
+                                app.appScope.launch {
+                                    val ok = app.videoAuto.downloadOrReplace(currentSong)
+                                    com.aar.privatemusic.util.Feedback.show(
+                                        when {
+                                            ok && replacing -> "Canvas reemplazado"
+                                            ok -> "Canvas descargado"
+                                            replacing -> "No se pudo reemplazar el Canvas"
+                                            else -> "No se pudo descargar el Canvas"
+                                        }
+                                    )
+                                }
+                            }
+                        },
+                    )
+                    DropdownMenuItem(
+                        text = {
+                            Text(
+                                if (hasCanvas) "Cambiar vídeo local del Canvas"
+                                else "Elegir vídeo local para Canvas"
+                            )
+                        },
+                        enabled = !canvasActive,
+                        onClick = {
+                            playerMenuOpen = false
+                            songForCanvasId = song?.id
+                            canvasPicker.launch(arrayOf("video/*", "image/gif"))
+                        },
+                    )
+                    if (hasCanvas) {
+                        DropdownMenuItem(
+                            text = { Text("Borrar Canvas") },
+                            enabled = !canvasActive,
+                            onClick = {
+                                playerMenuOpen = false
+                                song?.let { currentSong ->
+                                    app.appScope.launch {
+                                        runCatching { app.repository.clearSongVideo(currentSong) }
+                                            .onSuccess {
+                                                com.aar.privatemusic.util.Feedback.show("Canvas borrado")
+                                            }
+                                            .onFailure {
+                                                com.aar.privatemusic.util.Feedback.show(
+                                                    "No se pudo borrar el Canvas"
+                                                )
+                                            }
+                                    }
+                                }
+                            },
+                        )
+                    }
                     DropdownMenuItem(
                         text = {
                             val state = tempoPitchLabel(playbackSpeed, pitchSemitones)

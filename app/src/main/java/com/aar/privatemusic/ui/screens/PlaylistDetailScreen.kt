@@ -15,6 +15,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.filled.DragHandle
@@ -24,7 +26,6 @@ import androidx.compose.material.icons.filled.PlaylistAdd
 import androidx.compose.material.icons.filled.PlaylistRemove
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Shuffle
-import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
@@ -75,7 +76,7 @@ private enum class PlaylistSort(val label: String) {
 
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
-fun PlaylistDetailScreen(app: PrivateMusicApp, playlistId: Long) {
+fun PlaylistDetailScreen(app: PrivateMusicApp, playlistId: Long, onBack: () -> Unit = {}) {
     // `null` = todavía no ha llegado la primera emisión. Con emptyList() la
     // pantalla parpadeaba "Playlist vacía" antes de pintar las canciones.
     val loadedSongs by app.repository.observePlaylistSongs(playlistId).collectAsState(initial = null)
@@ -151,10 +152,34 @@ fun PlaylistDetailScreen(app: PrivateMusicApp, playlistId: Long) {
 
     if (loadedSongs == null) return // cargando: nada mejor que el hueco de un instante
     if (allSongs.isEmpty()) {
-        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            com.aar.privatemusic.ui.components.EmptyState(
-                "Playlist vacía.\nAñade canciones desde la Biblioteca.",
-            )
+        LazyColumn(Modifier.fillMaxSize()) {
+            item(key = "header") {
+                Row(
+                    Modifier.fillMaxWidth().padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Volver")
+                    }
+                    Text(
+                        playlist?.name ?: "Playlist",
+                        style = MaterialTheme.typography.headlineSmall,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f).padding(start = 16.dp),
+                    )
+                }
+            }
+            item(key = "empty") {
+                Box(
+                    Modifier.fillParentMaxSize(),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    com.aar.privatemusic.ui.components.EmptyState(
+                        "Playlist vacía.\nAñade canciones desde la Biblioteca.",
+                    )
+                }
+            }
         }
         return
     }
@@ -209,6 +234,11 @@ fun PlaylistDetailScreen(app: PrivateMusicApp, playlistId: Long) {
                     .padding(16.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
+                if (!selectionMode) {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Volver")
+                    }
+                }
                 val art = remember(allSongs) {
                     allSongs.mapNotNull { it.artPath }.distinct().take(4)
                 }

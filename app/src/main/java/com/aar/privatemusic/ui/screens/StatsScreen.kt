@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.Card
 import androidx.compose.material3.FilterChip
@@ -59,7 +60,7 @@ private fun Period.sinceMillis(): Long {
 }
 
 @Composable
-fun StatsScreen(app: PrivateMusicApp) {
+fun StatsScreen(app: PrivateMusicApp, onBack: () -> Unit = {}) {
     var period by remember { mutableStateOf(Period.MONTH) }
     var recap by remember { mutableStateOf<MusicRepository.Recap?>(null) }
     val context = LocalContext.current
@@ -76,6 +77,9 @@ fun StatsScreen(app: PrivateMusicApp) {
             .padding(16.dp),
     ) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = onBack) {
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Volver")
+            }
             Text("Tu Recap", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
             IconButton(
                 onClick = {
