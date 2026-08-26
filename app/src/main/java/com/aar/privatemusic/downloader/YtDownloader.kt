@@ -470,11 +470,8 @@ class YtDownloader(
         runCatching {
             val query = "ytsearch1:${song.artist} ${song.title} official video"
 
-            // Sondea el vídeo concreto y su duración para (1) descargar por id fijo
-            // —no arriesgar que ytsearch resuelva otro clip en la segunda llamada—
-            // y (2) recortar por el MEDIO en vez de los primeros 8 s, que suelen
-            // ser intro/logo del sello/fundido. Si el sondeo falla, se cae al
-            // comportamiento de antes (desde el principio sobre la búsqueda).
+            // Sondea el vídeo concreto y su duración para descargar siempre el
+            // mismo resultado y probar tres ventanas lejos de intro y créditos.
             val probe = runCatching {
                 YoutubeDLRequest(query).apply {
                     applyYoutubeClient()
@@ -486,39 +483,45 @@ class YtDownloader(
             }.getOrNull()
             val videoId = probe?.substringBefore("|")?.takeIf { it.isNotBlank() }
             val duration = probe?.substringAfter("|")?.trim()?.toDoubleOrNull()
-            val section = if (duration != null && duration > 20) {
-                // Empieza al ~45 % y coge 8 s, sin pasarse del final.
-                val start = (duration * 0.45).coerceAtMost(duration - 9)
-                "*${start.toInt()}-${(start + 8).toInt()}"
-            } else {
-                "*0-8"
-            }
-            Log.d("YtDownloader", "vídeo ${song.id}: dur=$duration section=$section id=$videoId")
+            val starts = com.aar.privatemusic.util.CanvasClipSelector.candidateStarts(
+                duration ?: 8.0,
+                song.id,
+            )
+            Log.d("YtDownloader", "vídeo ${song.id}: dur=$duration candidatos=${starts.size} id=$videoId")
 
             val target = videoId?.let { "https://www.youtube.com/watch?v=$it" } ?: query
-            val request = YoutubeDLRequest(target).apply {
-                applyYoutubeClient()
-                // Altura decente para que no se pixele al ampliar de fondo (se
-                // recorta al pintar con RESIZE_MODE_ZOOM), pero sin traer 4K.
-                addOption("-f", "bv*[height<=720][height>=360]/bv*[height<=720]/bv*")
-                addOption("--no-playlist")
-                addOption("--no-mtime")
-                addOption("--no-warnings")
-                addOption("--download-sections", section)
-                addOption("--force-keyframes-at-cuts")
-                addOption("-o", "${musicDir.absolutePath}/${song.id}.video.%(ext)s")
-                if (isPlayingProvider()) addOption("--limit-rate", "1M")
+            val candidates = mutableListOf<File>()
+            starts.forEachIndexed { index, start ->
+                musicDir.listFiles()?.filter { it.name.startsWith("${song.id}.canvas$index.") }?.forEach(File::delete)
+                val request = YoutubeDLRequest(target).apply {
+                    applyYoutubeClient()
+                    addOption("-f", "bv*[height<=720][height>=360]/bv*[height<=720]/bv*")
+                    addOption("--no-playlist")
+                    addOption("--no-mtime")
+                    addOption("--no-warnings")
+                    addOption("--download-sections", "*$start-${start + 8}")
+                    addOption("--force-keyframes-at-cuts")
+                    addOption("-o", "${musicDir.absolutePath}/${song.id}.canvas$index.%(ext)s")
+                    if (isPlayingProvider()) addOption("--limit-rate", "1M")
+                }
+                val run = suspend { ytdl().execute(request, "${song.id}#canvas$index") { _, _, _ -> } }
+                runCatching {
+                    if (isPlayingProvider()) soloWhilePlaying.withLock { run() } else run()
+                }
+                musicDir.listFiles()
+                    ?.firstOrNull { it.name.startsWith("${song.id}.canvas$index.") }
+                    ?.takeIf { it.length() > 0 }
+                    ?.let(candidates::add)
             }
-            val run = suspend { ytdl().execute(request, "${song.id}#video") { _, _, _ -> } }
-            if (isPlayingProvider()) soloWhilePlaying.withLock { run() } else run()
-
-            val raw = musicDir.listFiles()
-                ?.firstOrNull { it.name.startsWith("${song.id}.video.") }
+            val raw = com.aar.privatemusic.util.CanvasClipSelector.choose(candidates)
                 ?: return@runCatching false
             val dest = File(musicDir, "${song.id}.mp4")
             // bv* no trae audio; aun así lo pasamos por el strip para normalizar a mp4.
-            val out = com.aar.privatemusic.util.VideoImport.stripAudioFromFile(raw, dest)
-            raw.delete()
+            val out = try {
+                com.aar.privatemusic.util.VideoImport.stripAudioFromFile(raw, dest)
+            } finally {
+                candidates.forEach(File::delete)
+            }
             if (out != null && out.length() > 0) {
                 dao.updateSongVideo(song.id, out.absolutePath)
                 true
