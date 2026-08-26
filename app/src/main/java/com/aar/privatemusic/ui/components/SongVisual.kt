@@ -1,6 +1,8 @@
 package com.aar.privatemusic.ui.components
 
 import android.graphics.ImageDecoder
+import android.graphics.Bitmap
+import android.media.MediaMetadataRetriever
 import android.os.Build
 import android.view.LayoutInflater
 import android.widget.ImageView
@@ -20,8 +22,10 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.produceState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -37,6 +41,8 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import java.io.File
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlin.math.cos
 import kotlin.math.sin
 
@@ -74,6 +80,12 @@ fun SongVideo(
             setAudioAttributes(audioAttributes, /* handleAudioFocus = */ false)
             playWhenReady = true
         }
+    }
+    // Algunos videoclips traen letterbox/pillarbox codificado dentro del propio
+    // fotograma. RESIZE_MODE_ZOOM no puede distinguirlo de imagen real: medimos
+    // varias muestras y ampliamos sólo cuando el borde es negro de forma estable.
+    val embeddedBarsZoom by produceState(1f, file.absolutePath) {
+        value = withContext(Dispatchers.IO) { detectEmbeddedBarsZoom(file) }
     }
 
     // Tapa el hueco visual hasta que el vídeo nuevo pinta su primer fotograma.
@@ -133,7 +145,13 @@ fun SongVideo(
                     this.player = player
                 }
             },
-            modifier = Modifier.fillMaxSize().clipToBounds(),
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer {
+                    scaleX = embeddedBarsZoom
+                    scaleY = embeddedBarsZoom
+                }
+                .clipToBounds(),
         )
         // Separa visualmente el Canvas de la información del tema. Al usar una
         // TextureView el degradado queda realmente encima del vídeo y el clip no
@@ -154,6 +172,81 @@ fun SongVideo(
             ArtImage(artFile, size)
         }
     }
+}
+
+private fun detectEmbeddedBarsZoom(file: File): Float = runCatching {
+    val retriever = MediaMetadataRetriever()
+    try {
+        retriever.setDataSource(file.absolutePath)
+        val durationUs = (retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+            ?.toLongOrNull() ?: 8_000L) * 1_000L
+        val samples = listOf(0.2, 0.5, 0.8).mapNotNull { fraction ->
+            retriever.getFrameAtTime(
+                (durationUs * fraction).toLong(),
+                MediaMetadataRetriever.OPTION_CLOSEST_SYNC,
+            )?.let { frame ->
+                blackBorderZoom(frame).also { frame.recycle() }
+            }
+        }
+        // Las barras reales aparecen en todas las muestras. El mínimo evita que
+        // una escena oscura aislada se interprete como letterbox.
+        samples.minOrNull()?.coerceIn(1f, 1.35f) ?: 1f
+    } finally {
+        retriever.release()
+    }
+}.getOrDefault(1f)
+
+private fun blackBorderZoom(bitmap: Bitmap): Float {
+    val width = bitmap.width
+    val height = bitmap.height
+    if (width < 32 || height < 32) return 1f
+
+    fun dark(pixel: Int): Boolean {
+        val r = android.graphics.Color.red(pixel)
+        val g = android.graphics.Color.green(pixel)
+        val b = android.graphics.Color.blue(pixel)
+        return r + g + b < 54
+    }
+    fun darkRow(y: Int): Boolean {
+        var darkCount = 0
+        var count = 0
+        var x = 0
+        while (x < width) {
+            if (dark(bitmap.getPixel(x, y))) darkCount++
+            count++
+            x += maxOf(1, width / 64)
+        }
+        return darkCount >= count * 0.92f
+    }
+    fun darkColumn(x: Int): Boolean {
+        var darkCount = 0
+        var count = 0
+        var y = 0
+        while (y < height) {
+            if (dark(bitmap.getPixel(x, y))) darkCount++
+            count++
+            y += maxOf(1, height / 64)
+        }
+        return darkCount >= count * 0.92f
+    }
+
+    val maxTopBottom = height / 3
+    val maxLeftRight = width / 3
+    var top = 0
+    while (top < maxTopBottom && darkRow(top)) top++
+    var bottom = 0
+    while (bottom < maxTopBottom && darkRow(height - 1 - bottom)) bottom++
+    var left = 0
+    while (left < maxLeftRight && darkColumn(left)) left++
+    var right = 0
+    while (right < maxLeftRight && darkColumn(width - 1 - right)) right++
+
+    // Ignora bordes diminutos de compresión: ampliarlos sólo quitaría nitidez.
+    val verticalBars = (top + bottom).takeIf { it >= height * 0.035f } ?: 0
+    val horizontalBars = (left + right).takeIf { it >= width * 0.035f } ?: 0
+    val zoomY = if (verticalBars > 0) height.toFloat() / (height - verticalBars) else 1f
+    val zoomX = if (horizontalBars > 0) width.toFloat() / (width - horizontalBars) else 1f
+    return maxOf(zoomX, zoomY)
 }
 
 /** GIF animado (Coil 2.7 no lo anima solo): ImageDecoder en API 28+, estático debajo. */

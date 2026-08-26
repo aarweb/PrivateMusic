@@ -502,13 +502,23 @@ class YtDownloader(
             Log.d("YtDownloader", "vídeo ${song.id}: dur=$duration candidatos=${starts.size} id=$videoId")
 
             val target = videoId?.let { "https://www.youtube.com/watch?v=$it" } ?: query
+            val canvasHeight = AppSettings.readCanvasQuality(context)
+            val minimumHeight = when (canvasHeight) {
+                1080 -> 720
+                720 -> 480
+                else -> 360
+            }
             val candidates = mutableListOf<File>()
             starts.forEachIndexed { index, start ->
                 val prefix = "${song.id}.canvas$index."
                 musicDir.listFiles()?.filter { it.name.startsWith(prefix) }?.forEach(File::delete)
                 val request = YoutubeDLRequest(target).apply {
                     applyYoutubeClient()
-                    addOption("-f", "bv*[height<=720][height>=360]/bv*[height<=720]/bv*")
+                    addOption(
+                        "-f",
+                        "bv*[height<=$canvasHeight][height>=$minimumHeight]/" +
+                            "bv*[height<=$canvasHeight]/bv*",
+                    )
                     addOption("--no-playlist")
                     addOption("--no-mtime")
                     addOption("--no-warnings")

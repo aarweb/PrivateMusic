@@ -490,6 +490,8 @@ fun SettingsScreen(app: PrivateMusicApp, onOpenStats: () -> Unit, onOpenEq: () -
         val autoVideo by app.settings.autoDownloadVideo.collectAsState()
         val videoMetered by app.settings.videoOnMetered.collectAsState()
         val videoOnlyWhileCharging by app.settings.videoOnlyWhileCharging.collectAsState()
+        val canvasQuality by app.settings.canvasQuality.collectAsState()
+        var canvasQualityOpen by remember { mutableStateOf(false) }
         Row(
             Modifier.fillMaxWidth().padding(vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -503,6 +505,46 @@ fun SettingsScreen(app: PrivateMusicApp, onOpenStats: () -> Unit, onOpenEq: () -
                 )
             }
             Switch(checked = autoVideo, onCheckedChange = { app.settings.setAutoDownloadVideo(it) })
+        }
+        Box {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clickable { canvasQualityOpen = true }
+                    .padding(vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("Calidad de los Canvas", style = MaterialTheme.typography.bodyLarge)
+                    Text(
+                        when (canvasQuality) {
+                            1080 -> "Alta · 1080p (más espacio)"
+                            480 -> "Ahorro · 480p (menos espacio)"
+                            else -> "Equilibrada · 720p"
+                        } + " · se aplica a nuevas descargas",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            androidx.compose.material3.DropdownMenu(
+                expanded = canvasQualityOpen,
+                onDismissRequest = { canvasQualityOpen = false },
+            ) {
+                listOf(
+                    480 to "Ahorro · 480p",
+                    720 to "Equilibrada · 720p",
+                    1080 to "Alta · 1080p",
+                ).forEach { (height, label) ->
+                    androidx.compose.material3.DropdownMenuItem(
+                        text = { Text(label) },
+                        onClick = {
+                            app.settings.setCanvasQuality(height)
+                            canvasQualityOpen = false
+                        },
+                    )
+                }
+            }
         }
         if (autoVideo) {
             Row(

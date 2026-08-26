@@ -65,6 +65,10 @@ class AppSettings(context: Context) {
     /** Limitar las descargas automáticas y masivas de vídeo a cuando el móvil carga. */
     val videoOnlyWhileCharging: StateFlow<Boolean> = _videoOnlyWhileCharging
 
+    private val _canvasQuality = MutableStateFlow(prefs.getInt(KEY_CANVAS_QUALITY, 720))
+    /** Altura máxima solicitada a YouTube para los Canvas: 480, 720 o 1080. */
+    val canvasQuality: StateFlow<Int> = _canvasQuality
+
     private val _autoMix = MutableStateFlow(prefs.getBoolean(KEY_AUTOMIX, false))
     val autoMix: StateFlow<Boolean> = _autoMix
 
@@ -218,6 +222,12 @@ class AppSettings(context: Context) {
         _videoOnlyWhileCharging.value = value
     }
 
+    fun setCanvasQuality(value: Int) {
+        val safe = value.takeIf { it in setOf(480, 720, 1080) } ?: 720
+        prefs.edit().putInt(KEY_CANVAS_QUALITY, safe).apply()
+        _canvasQuality.value = safe
+    }
+
     fun setAutoMix(value: Boolean) {
         prefs.edit().putBoolean(KEY_AUTOMIX, value).apply()
         _autoMix.value = value
@@ -280,6 +290,7 @@ class AppSettings(context: Context) {
         private const val KEY_AUTO_VIDEO = "auto_download_video"
         private const val KEY_VIDEO_METERED = "video_on_metered"
         private const val KEY_VIDEO_ONLY_WHILE_CHARGING = "video_only_while_charging"
+        private const val KEY_CANVAS_QUALITY = "canvas_quality"
         private const val KEY_LISTENBRAINZ = "listenbrainz_token"
         private const val KEY_AUTOMIX = "automix"
         private const val KEY_AUTOMIX_MAX = "automix_max_pct"
@@ -327,6 +338,11 @@ class AppSettings(context: Context) {
         fun readVideoOnMetered(context: Context): Boolean =
             context.getSharedPreferences("settings", Context.MODE_PRIVATE)
                 .getBoolean(KEY_VIDEO_METERED, false)
+
+        fun readCanvasQuality(context: Context): Int =
+            context.getSharedPreferences("settings", Context.MODE_PRIVATE)
+                .getInt(KEY_CANVAS_QUALITY, 720)
+                .takeIf { it in setOf(480, 720, 1080) } ?: 720
 
         fun readListenBrainzToken(context: Context): String =
             SecretStore.read(context.getSharedPreferences("settings", Context.MODE_PRIVATE), KEY_LISTENBRAINZ)
