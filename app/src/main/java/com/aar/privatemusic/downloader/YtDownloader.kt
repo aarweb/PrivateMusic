@@ -7,6 +7,7 @@ import com.aar.privatemusic.data.db.MusicDao
 import com.aar.privatemusic.data.db.Song
 import com.aar.privatemusic.lyrics.LyricsFetcher
 import com.aar.privatemusic.util.AudioAnalyzer
+import com.aar.privatemusic.util.CanvasClipSelector
 import com.aar.privatemusic.util.LoudnessScanner
 import com.aar.privatemusic.util.readAudioQuality
 import com.yausername.ffmpeg.FFmpeg
@@ -472,36 +473,45 @@ class YtDownloader(
         val staging = File(musicDir, "${song.id}.canvas.staging.mp4")
         val backup = File(musicDir, "${song.id}.canvas.backup.mp4")
         val candidatePrefix = "${song.id}.canvas"
+        var preserveBackup = false
         fun cleanupCanvasTemps() {
             musicDir.listFiles()
-                ?.filter { it.name.startsWith(candidatePrefix) }
+                ?.filter {
+                    it.name.startsWith(candidatePrefix) && !(preserveBackup && it == backup)
+                }
+                ?.forEach { runCatching { it.delete() } }
+        }
+        fun cleanupCandidatePrefix(prefix: String) {
+            musicDir.listFiles()
+                ?.filter { it.name.startsWith(prefix) }
                 ?.forEach { runCatching { it.delete() } }
         }
 
         cleanupCanvasTemps()
         try {
-            val query = "ytsearch1:${song.artist} ${song.title} official video"
+            val results = runCatching {
+                search("${song.artist} ${song.title} official video", limit = 10)
+            }.getOrElse {
+                Log.w("YtDownloader", "No se pudieron buscar candidatos para el Canvas", it)
+                emptyList()
+            }
+            val selectedIndex = CanvasClipSelector.selectTitleIndex(results.map { it.title })
+            val selected = selectedIndex?.let { results.getOrNull(it) }
+            if (selected == null || selected.id.isBlank()) {
+                Log.w("YtDownloader", "No hay resultados admisibles para el Canvas")
+                return@withContext false
+            }
 
-            // Sondea el vídeo concreto y su duración para descargar siempre el
-            // mismo resultado y probar tres ventanas lejos de intro y créditos.
-            val probe = runCatching {
-                YoutubeDLRequest(query).apply {
-                    applyYoutubeClient()
-                    addOption("--no-playlist")
-                    addOption("--no-warnings")
-                    addOption("--skip-download")
-                    addOption("--print", "%(id)s|%(duration)s")
-                }.let { ytdl().execute(it).out.trim().lineSequence().firstOrNull { l -> l.contains("|") } }
-            }.getOrNull()
-            val videoId = probe?.substringBefore("|")?.takeIf { it.isNotBlank() }
-            val duration = probe?.substringAfter("|")?.trim()?.toDoubleOrNull()
-            val starts = com.aar.privatemusic.util.CanvasClipSelector.candidateStarts(
-                duration ?: 8.0,
+            val starts = CanvasClipSelector.candidateStarts(
+                selected.durationSec.toDouble(),
                 song.id,
             )
-            Log.d("YtDownloader", "vídeo ${song.id}: dur=$duration candidatos=${starts.size} id=$videoId")
+            Log.d(
+                "YtDownloader",
+                "Canvas ${song.id}: dur=${selected.durationSec} candidatos=${starts.size} id=${selected.id}",
+            )
 
-            val target = videoId?.let { "https://www.youtube.com/watch?v=$it" } ?: query
+            val target = "https://www.youtube.com/watch?v=${selected.id}"
             val canvasHeight = AppSettings.readCanvasQuality(context)
             val minimumHeight = when (canvasHeight) {
                 1080 -> 720
@@ -509,9 +519,9 @@ class YtDownloader(
                 else -> 360
             }
             val candidates = mutableListOf<File>()
-            starts.forEachIndexed { index, start ->
+            for ((index, start) in starts.withIndex()) {
                 val prefix = "${song.id}.canvas$index."
-                musicDir.listFiles()?.filter { it.name.startsWith(prefix) }?.forEach(File::delete)
+                cleanupCandidatePrefix(prefix)
                 val request = YoutubeDLRequest(target).apply {
                     applyYoutubeClient()
                     addOption(
@@ -528,15 +538,48 @@ class YtDownloader(
                     if (isPlayingProvider()) addOption("--limit-rate", "1M")
                 }
                 val run = suspend { ytdl().execute(request, "${song.id}#canvas$index") { _, _, _ -> } }
-                runCatching {
+                val response = try {
                     if (isPlayingProvider()) soloWhilePlaying.withLock { run() } else run()
+                } catch (e: CancellationException) {
+                    cleanupCandidatePrefix(prefix)
+                    throw e
+                } catch (e: Exception) {
+                    cleanupCandidatePrefix(prefix)
+                    Log.w(
+                        "YtDownloader",
+                        "No se pudo descargar la ventana Canvas $index; se descartan sus restos",
+                        e,
+                    )
+                    continue
                 }
-                musicDir.listFiles()
-                    ?.firstOrNull { it.name.startsWith(prefix) && !it.name.endsWith(".part") }
-                    ?.takeIf { it.length() > 0 }
-                    ?.let(candidates::add)
+                if (response.exitCode != 0) {
+                    cleanupCandidatePrefix(prefix)
+                    Log.w(
+                        "YtDownloader",
+                        "yt-dlp rechazó la ventana Canvas $index " +
+                            "(código ${response.exitCode}); se descartan sus restos",
+                    )
+                    continue
+                }
+                val finalFile = musicDir.listFiles()
+                    ?.filter {
+                        it.name.startsWith(prefix) && !it.name.contains(".part") &&
+                            it.isFile && it.length() > 0L
+                    }
+                    ?.sortedBy { it.name }
+                    ?.firstOrNull()
+                if (finalFile == null) {
+                    cleanupCandidatePrefix(prefix)
+                    Log.w(
+                        "YtDownloader",
+                        "La ventana Canvas $index no produjo un archivo final válido; " +
+                            "se descartan sus restos",
+                    )
+                    continue
+                }
+                candidates.add(finalFile)
             }
-            val raw = com.aar.privatemusic.util.CanvasClipSelector.choose(candidates)
+            val raw = CanvasClipSelector.choose(candidates)
                 ?: return@withContext false
             val dest = File(musicDir, "${song.id}.mp4")
             // El Canvas vigente no se toca durante búsqueda, descarga ni procesado.
@@ -549,10 +592,43 @@ class YtDownloader(
             // Conserva el destino previo para poder restaurarlo si falla el cambio
             // de fichero o el registro en Room. El movimiento ocurre en el mismo
             // directorio y es atómico cuando el sistema de ficheros lo permite.
-            if (dest.isFile && dest.length() > 0L) {
+            if (dest.exists() && !dest.isFile) return@withContext false
+            val hadDestination = dest.isFile
+            val previousLength = if (hadDestination) dest.length() else null
+            if (hadDestination) {
                 runCatching { dest.copyTo(backup, overwrite = true) }
                     .getOrElse { return@withContext false }
             }
+
+            fun rollbackDestination(): Boolean {
+                val restored = if (hadDestination) {
+                    val moved = runCatching {
+                        Files.move(
+                            backup.toPath(),
+                            dest.toPath(),
+                            StandardCopyOption.REPLACE_EXISTING,
+                        )
+                    }.isSuccess
+                    val copied = if (!moved && backup.isFile) {
+                        runCatching { backup.copyTo(dest, overwrite = true) }.isSuccess
+                    } else {
+                        false
+                    }
+                    (moved || copied) && dest.isFile && dest.length() == previousLength
+                } else {
+                    runCatching { !dest.exists() || dest.delete() }.getOrDefault(false) &&
+                        !dest.exists()
+                }
+                if (!restored) {
+                    preserveBackup = hadDestination && backup.isFile
+                    Log.e(
+                        "YtDownloader",
+                        "No se pudo restaurar de forma segura el Canvas anterior",
+                    )
+                }
+                return restored
+            }
+
             val installed = runCatching {
                 Files.move(
                     staging.toPath(),
@@ -563,18 +639,15 @@ class YtDownloader(
             }.recoverCatching {
                 Files.move(staging.toPath(), dest.toPath(), StandardCopyOption.REPLACE_EXISTING)
             }.isSuccess && dest.isFile && dest.length() > 0L
-            if (!installed) return@withContext false
+            if (!installed) {
+                rollbackDestination()
+                return@withContext false
+            }
 
             try {
                 dao.updateSongVideo(song.id, dest.absolutePath)
             } catch (e: Exception) {
-                if (backup.isFile) {
-                    runCatching {
-                        Files.move(backup.toPath(), dest.toPath(), StandardCopyOption.REPLACE_EXISTING)
-                    }
-                } else {
-                    runCatching { dest.delete() }
-                }
+                rollbackDestination()
                 throw e
             }
 
