@@ -2,6 +2,7 @@ package com.aar.privatemusic.ui.components
 
 import android.graphics.ImageDecoder
 import android.os.Build
+import android.view.LayoutInflater
 import android.widget.ImageView
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
@@ -10,7 +11,9 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -18,6 +21,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -108,10 +112,14 @@ fun SongVideo(file: File, size: Dp, isAudioPlaying: Boolean, artFile: File? = nu
         onDispose { player.release() }
     }
 
-    Box(Modifier.size(size)) {
+    Box(Modifier.size(size).clipToBounds()) {
         AndroidView(
             factory = { ctx ->
-                androidx.media3.ui.PlayerView(ctx).apply {
+                (LayoutInflater.from(ctx).inflate(
+                    com.aar.privatemusic.R.layout.song_video_view,
+                    null,
+                    false,
+                ) as androidx.media3.ui.PlayerView).apply {
                     useController = false
                     resizeMode = androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_ZOOM
                     // Sin obturador negro propio: el hueco lo tapamos con la carátula.
@@ -119,7 +127,21 @@ fun SongVideo(file: File, size: Dp, isAudioPlaying: Boolean, artFile: File? = nu
                     this.player = player
                 }
             },
-            modifier = Modifier.size(size),
+            modifier = Modifier.size(size).clipToBounds(),
+        )
+        // Separa visualmente el Canvas de la información del tema. Al usar una
+        // TextureView el degradado queda realmente encima del vídeo y el clip no
+        // puede escapar del marco cuando el archivo es vertical (9:16).
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.verticalGradient(
+                        0f to Color.Transparent,
+                        0.68f to Color.Transparent,
+                        1f to Color.Black.copy(alpha = 0.42f),
+                    )
+                )
         )
         // Carátula por encima hasta el primer fotograma del vídeo nuevo.
         if (!firstFrameShown.value && artFile != null) {
