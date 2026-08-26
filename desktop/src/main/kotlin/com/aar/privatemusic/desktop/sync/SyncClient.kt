@@ -43,7 +43,7 @@ class SyncClient(
 
     suspend fun sync(phone: Phone, onProgress: (String) -> Unit): SyncResult = withContext(Dispatchers.IO) {
         onProgress("Pidiendo la biblioteca a ${phone.name}…")
-        val root = JSONObject(httpGet("${phone.baseUrl}/library"))
+        val root = JSONObject(httpGet("${phone.baseUrl}/library", phone.token))
 
         val songs = root.getJSONArray("songs")
         var downloaded = 0
@@ -60,7 +60,7 @@ class SyncClient(
             val audio = File(musicDir, "$id.$ext")
             // Un fichero a medias tiene el tamaño equivocado; se vuelve a bajar.
             if (!audio.exists() || (expected > 0 && audio.length() != expected)) {
-                download("${phone.baseUrl}/song/$id", audio)
+                download("${phone.baseUrl}/song/$id", audio, phone.token)
                 downloaded++
                 bytes += audio.length()
             }
@@ -69,7 +69,7 @@ class SyncClient(
             val art: File? = if (!s.optBoolean("hasArt")) null else {
                 val target = File(artDir, "$id.jpg")
                 if (target.exists()) target
-                else runCatching { download("${phone.baseUrl}/art/$id", target); target }.getOrNull()
+                else runCatching { download("${phone.baseUrl}/art/$id", target, phone.token); target }.getOrNull()
             }
 
             dao.insertSong(
@@ -192,7 +192,7 @@ class SyncClient(
                 },
             )
         }
-        val response = httpPost("${phone.baseUrl}/playlists", payload.toString())
+        val response = httpPost("${phone.baseUrl}/playlists", payload.toString(), phone.token)
         return runCatching { JSONObject(response).optInt("applied") }.getOrDefault(0)
     }
 
@@ -245,28 +245,30 @@ class SyncClient(
         return smart.length()
     }
 
-    private fun httpPost(spec: String, body: String): String {
+    private fun httpPost(spec: String, body: String, token: String): String {
         val conn = URL(spec).openConnection() as HttpURLConnection
         conn.requestMethod = "POST"
         conn.doOutput = true
         conn.connectTimeout = 8_000
         conn.readTimeout = 30_000
         conn.setRequestProperty("Content-Type", "application/json")
+        conn.setRequestProperty("Authorization", "Bearer $token")
         try {
             conn.outputStream.use { it.write(body.toByteArray()) }
-            require(conn.responseCode == 200) { "HTTP ${conn.responseCode}" }
+            checkResponse(conn.responseCode)
             return conn.inputStream.bufferedReader().readText()
         } finally {
             conn.disconnect()
         }
     }
 
-    private fun httpGet(spec: String): String {
+    private fun httpGet(spec: String, token: String): String {
         val conn = URL(spec).openConnection() as HttpURLConnection
         conn.connectTimeout = 8_000
         conn.readTimeout = 20_000
+        conn.setRequestProperty("Authorization", "Bearer $token")
         try {
-            require(conn.responseCode in 200..299) { "HTTP ${conn.responseCode} en $spec" }
+            checkResponse(conn.responseCode)
             return conn.inputStream.bufferedReader().readText()
         } finally {
             conn.disconnect()
@@ -274,19 +276,27 @@ class SyncClient(
     }
 
     /** Baja a un temporal y renombra: una descarga cortada nunca parece completa. */
-    private fun download(spec: String, target: File) {
+    private fun download(spec: String, target: File, token: String) {
         val tmp = File(target.parentFile, "${target.name}.part")
         val conn = URL(spec).openConnection() as HttpURLConnection
         conn.connectTimeout = 8_000
         conn.readTimeout = 60_000
+        conn.setRequestProperty("Authorization", "Bearer $token")
         try {
-            require(conn.responseCode in 200..299) { "HTTP ${conn.responseCode} en $spec" }
+            checkResponse(conn.responseCode)
             conn.inputStream.use { input -> tmp.outputStream().use { input.copyTo(it, 64 * 1024) } }
         } finally {
             conn.disconnect()
         }
         if (target.exists()) target.delete()
         check(tmp.renameTo(target)) { "no se pudo renombrar ${tmp.name}" }
+    }
+
+    private fun checkResponse(code: Int) {
+        require(code != HttpURLConnection.HTTP_UNAUTHORIZED) {
+            "El móvil rechazó la clave de enlace; revísala en Ajustes"
+        }
+        require(code in 200..299) { "HTTP $code" }
     }
 }
 

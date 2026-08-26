@@ -10,6 +10,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.io.FileInputStream
+import java.security.MessageDigest
 
 /**
  * Tiny HTTP server that streams library files to the Chromecast over the
@@ -19,9 +20,11 @@ import java.io.FileInputStream
 class MediaHttpServer(
     private val dao: MusicDao,
     port: Int = PORT,
+    private val bearerToken: String? = null,
 ) : NanoHTTPD(port) {
 
     override fun serve(session: IHTTPSession): Response {
+        if (bearerToken != null && !authorized(session)) return unauthorized()
         val path = session.uri ?: return notFound()
         if (path == "/library") return serveLibrary()
         if (path == "/playlists" && session.method == Method.POST) return receivePlaylists(session)
@@ -269,6 +272,17 @@ class MediaHttpServer(
 
     private fun notFound(): Response =
         newFixedLengthResponse(Response.Status.NOT_FOUND, "text/plain", "not found")
+
+    private fun authorized(session: IHTTPSession): Boolean {
+        val actual = session.headers["authorization"] ?: return false
+        val expected = "Bearer $bearerToken"
+        return MessageDigest.isEqual(actual.toByteArray(Charsets.UTF_8), expected.toByteArray(Charsets.UTF_8))
+    }
+
+    private fun unauthorized(): Response =
+        newFixedLengthResponse(Response.Status.UNAUTHORIZED, "text/plain", "unauthorized").apply {
+            addHeader("WWW-Authenticate", "Bearer")
+        }
 
     companion object {
         const val PORT = 8965

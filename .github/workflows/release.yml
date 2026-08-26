@@ -137,18 +137,24 @@ jobs:
           ./gradlew :desktop:createDistributable -PdesktopVersion="$PM_VERSION" --no-daemon
           tar -czf "privatemusic-desktop-$PM_VERSION-linux-x64.tar.gz" \
             -C desktop/build/compose/binaries/main/app PrivateMusic
+          sha256sum "privatemusic-desktop-$PM_VERSION-linux-x64.tar.gz" \
+            > "privatemusic-desktop-$PM_VERSION-linux-x64.tar.gz.sha256"
 
       - name: Paquete .deb
         run: |
           ./gradlew :desktop:packageDeb -PdesktopVersion="$PM_VERSION" --no-daemon
           cp desktop/build/compose/binaries/main/deb/*.deb "privatemusic-desktop-$PM_VERSION.deb"
+          sha256sum "privatemusic-desktop-$PM_VERSION.deb" \
+            > "privatemusic-desktop-$PM_VERSION.deb.sha256"
 
       - uses: actions/upload-artifact@v4
         with:
           name: desktop-linux
           path: |
             privatemusic-desktop-*-linux-x64.tar.gz
+            privatemusic-desktop-*-linux-x64.tar.gz.sha256
             privatemusic-desktop-*.deb
+            privatemusic-desktop-*.deb.sha256
 
   desktop-windows:
     runs-on: windows-latest
@@ -172,11 +178,15 @@ jobs:
         run: |
           ./gradlew :desktop:packageMsi -PdesktopVersion="$PM_VERSION" --no-daemon
           cp desktop/build/compose/binaries/main/msi/*.msi "privatemusic-desktop-$PM_VERSION.msi"
+          sha256sum "privatemusic-desktop-$PM_VERSION.msi" \
+            > "privatemusic-desktop-$PM_VERSION.msi.sha256"
 
       - uses: actions/upload-artifact@v4
         with:
           name: desktop-windows
-          path: privatemusic-desktop-*.msi
+          path: |
+            privatemusic-desktop-*.msi
+            privatemusic-desktop-*.msi.sha256
 
   publicar:
     needs: [android, test-core, desktop-linux, desktop-windows]

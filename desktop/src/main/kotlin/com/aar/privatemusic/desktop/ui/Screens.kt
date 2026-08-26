@@ -268,19 +268,31 @@ fun SettingsScreen(
     update: DesktopUpdater.UpdateInfo?,
     onUpdate: () -> Unit,
 ) {
+    val syncToken by settings.syncToken.collectAsState()
     // Con el ecualizador desplegado esto mide más que cualquier ventana.
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp)) {
         Text("Ajustes", style = MaterialTheme.typography.headlineSmall)
 
         Text("Móvil", Modifier.padding(top = 24.dp, bottom = 8.dp), style = MaterialTheme.typography.titleMedium)
         Text(
-            "Enciende «Compartir con el PC» en los ajustes del móvil y pulsa aquí. " +
-                "Se encuentran solos en la red local.",
+            "Enciende «Compartir con el PC» en el móvil y copia aquí su clave de enlace.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        var tokenInput by remember(syncToken) { mutableStateOf(syncToken) }
+        OutlinedTextField(
+            value = tokenInput,
+            onValueChange = { value ->
+                tokenInput = value
+                settings.setSyncToken(value)
+            },
+            label = { Text("Clave de enlace") },
+            singleLine = true,
+            visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+            modifier = Modifier.width(320.dp).padding(top = 12.dp),
+        )
         Row(Modifier.padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Button(onClick = onSync, enabled = !syncing) {
+            Button(onClick = onSync, enabled = !syncing && syncToken.isNotBlank()) {
                 Icon(Icons.Filled.Sync, null, Modifier.size(18.dp))
                 Text("  Sincronizar ahora")
             }
@@ -307,7 +319,7 @@ fun SettingsScreen(
             )
             Button(
                 onClick = { onSyncAddress(address.trim()) },
-                enabled = !syncing && address.isNotBlank(),
+                enabled = !syncing && address.isNotBlank() && syncToken.isNotBlank(),
                 modifier = Modifier.padding(start = 12.dp),
             ) { Text("Sincronizar") }
         }

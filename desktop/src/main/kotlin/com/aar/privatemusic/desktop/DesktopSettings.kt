@@ -41,6 +41,12 @@ class DesktopSettings(dataDir: File = DesktopStorage.dataDir) {
     private val _rowDensity = MutableStateFlow(props.getProperty(KEY_DENSITY, "NORMAL"))
     val rowDensity: StateFlow<String> = _rowDensity
 
+    private val _syncToken = MutableStateFlow(normalizeSyncToken(props.getProperty(KEY_SYNC_TOKEN, "")))
+    val syncToken: StateFlow<String> = _syncToken
+
+    fun setSyncToken(value: String) =
+        put(KEY_SYNC_TOKEN, normalizeSyncToken(value)) { _syncToken.value = normalizeSyncToken(value) }
+
     fun setRowDensity(value: String) = put(KEY_DENSITY, value) { _rowDensity.value = value }
 
     private val _eqEnabled = MutableStateFlow(props.getProperty(KEY_EQ_ENABLED, "false").toBoolean())
@@ -133,6 +139,7 @@ class DesktopSettings(dataDir: File = DesktopStorage.dataDir) {
         const val KEY_AUTOMIX = "automix"
         const val KEY_AUTO_UPDATE = "auto_update"
         const val KEY_DENSITY = "row_density"
+        const val KEY_SYNC_TOKEN = "sync_token"
         const val KEY_EQ_ENABLED = "eq_enabled"
         const val KEY_EQ_PREAMP = "eq_preamp"
         const val KEY_EQ_AMPS = "eq_amps"
@@ -142,5 +149,8 @@ class DesktopSettings(dataDir: File = DesktopStorage.dataDir) {
         const val KEY_QUALITY = "deezer_quality"
         const val KEY_HAS_FLAC = "deezer_has_flac"
         const val KEY_HAS_HQ = "deezer_has_hq"
+
+        fun normalizeSyncToken(value: String): String =
+            value.filterNot { it.isWhitespace() || it == '-' }.uppercase()
     }
 }

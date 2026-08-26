@@ -30,7 +30,7 @@ import java.util.zip.ZipOutputStream
 
 /**
  * Copia completa de la app para cambiar de móvil: un ZIP con la base de datos,
- * las preferencias (incluidas las sesiones de Deezer y ListenBrainz), y todos
+ * las preferencias (sin contraseñas ni sesiones), y todos
  * los ficheros de `files/music` (audio, carátulas, letras, karaoke) y de
  * `files/torrents`. Lo que se queda fuera se puede volver a bajar (modelos de
  * IA) o no es de este móvil (música escaneada del dispositivo, que sigue en
@@ -58,9 +58,15 @@ object FullBackup {
     private const val TORRENTS_PREFIX = "torrents/"
     private const val RESTORE_DIR = "restore"
     private const val READY = "READY"
+    private const val MAX_ENTRIES = 100_000
+    private const val MAX_ENTRY_BYTES = 8L * 1024 * 1024 * 1024
+    private const val MAX_TOTAL_BYTES = 512L * 1024 * 1024 * 1024
 
     /** Ficheros de SharedPreferences que merece la pena llevarse. */
     private val PREFS = listOf("settings", "spotify_sync", "resume_positions", "queue_state")
+    private val SECRET_PREF_KEYS = listOf(
+        "listenbrainz_token", "subsonic_pass", "deezer_arl", "sync_token",
+    )
 
     /** Restos de descargas a medias: no son canciones. */
     private val SKIP_SUFFIXES = listOf(".part", ".ytdl", ".tmp", ".restoring")
@@ -171,7 +177,11 @@ object FullBackup {
                     val f = prefsFile(context, name)
                     if (f.isFile) {
                         zip.putNextEntry(ZipEntry("$PREFS_PREFIX$name.xml"))
-                        f.inputStream().use { it.copyTo(zip) }
+                        if (name == "settings") {
+                            zip.write(withoutSecrets(f.readText()).toByteArray())
+                        } else {
+                            f.inputStream().use { it.copyTo(zip) }
+                        }
                         zip.closeEntry()
                     }
                 }
@@ -238,13 +248,15 @@ object FullBackup {
         val staging = restoreDir(context).also { it.deleteRecursively(); it.mkdirs() }
         val stagedDb = File(staging, "music.db")
         val stagedPrefs = File(staging, "prefs").also { it.mkdirs() }
+        val stagedMusic = File(staging, "music").also { it.mkdirs() }
+        val stagedTorrents = File(staging, "torrents").also { it.mkdirs() }
 
         // Un .db suelto (de "Copia de seguridad ahora") también vale.
         val head = BufferedInputStream(counting).also { it.mark(64) }
         val magic = ByteArray(16).also { head.read(it) }
         head.reset()
         if (String(magic, Charsets.ISO_8859_1).startsWith("SQLite format 3")) {
-            head.use { input -> stagedDb.outputStream().use { input.copyTo(it) } }
+            head.use { input -> stagedDb.outputStream().use { copyLimited(input, it, MAX_ENTRY_BYTES) } }
             val songs = countLibrarySongs(stagedDb.absolutePath)
             File(staging, READY).writeText(JSONObject().put("format", FORMAT).put("dbOnly", true).toString())
             return Outcome.Restored(0, stagedDb.length(), songs)
@@ -253,12 +265,14 @@ object FullBackup {
         var manifest: JSONObject? = null
         var files = 0
         var bytes = 0L
+        var entries = 0
         val music = musicDir(context).also { it.mkdirs() }
         val torrents = torrentsDir(context).also { it.mkdirs() }
 
         ZipInputStream(head).use { zip ->
             while (true) {
                 val entry = zip.nextEntry ?: break
+                check(++entries <= MAX_ENTRIES) { "La copia contiene demasiados archivos" }
                 val name = entry.name
                 if (entry.isDirectory) continue
                 // Una entrada con ".." escribiría fuera de la app: se ignora sin más.
@@ -269,28 +283,38 @@ object FullBackup {
                 fun report() = run { _progress.value = Progress("Restaurando $label", counting.count, total, files) }
                 when {
                     name == MANIFEST -> {
-                        val m = JSONObject(zip.readBytes().toString(Charsets.UTF_8))
+                        val manifestBytes = java.io.ByteArrayOutputStream().also {
+                            copyLimited(zip, it, 1024 * 1024)
+                        }.toByteArray()
+                        val m = JSONObject(manifestBytes.toString(Charsets.UTF_8))
                         if (m.optInt("format", 0) > FORMAT) {
                             return Outcome.Failed("Esta copia es de una versión más nueva de la app; actualízala primero")
                         }
                         manifest = m
                     }
-                    name == DB_ENTRY -> stagedDb.outputStream().use { bytes += copy(zip, it) { report() } }
+                    name == DB_ENTRY -> stagedDb.outputStream().use {
+                        bytes += copyLimited(zip, it, MAX_ENTRY_BYTES) { report() }
+                    }
                     name.startsWith(PREFS_PREFIX) -> {
                         val pref = name.removePrefix(PREFS_PREFIX).removeSuffix(".xml")
-                        if (pref in PREFS) File(stagedPrefs, "$pref.xml").outputStream().use { zip.copyTo(it) }
+                        if (pref in PREFS) {
+                            val target = File(stagedPrefs, "$pref.xml")
+                            target.outputStream().use { copyLimited(zip, it, 16L * 1024 * 1024) }
+                            if (pref == "settings") target.writeText(withoutSecrets(target.readText()))
+                        }
                     }
                     name.startsWith(MUSIC_PREFIX) || name.startsWith(TORRENTS_PREFIX) -> {
                         val (base, rel) = if (name.startsWith(MUSIC_PREFIX)) {
-                            music to name.removePrefix(MUSIC_PREFIX)
+                            stagedMusic to name.removePrefix(MUSIC_PREFIX)
                         } else {
-                            torrents to name.removePrefix(TORRENTS_PREFIX)
+                            stagedTorrents to name.removePrefix(TORRENTS_PREFIX)
                         }
                         val target = File(base, rel)
                         target.parentFile?.mkdirs()
                         // Primero a un temporal: un corte a medias no deja una canción truncada con nombre bueno.
                         val tmp = File(target.path + ".restoring")
-                        tmp.outputStream().use { bytes += copy(zip, it) { report() } }
+                        tmp.outputStream().use { bytes += copyLimited(zip, it, MAX_ENTRY_BYTES) { report() } }
+                        check(bytes <= MAX_TOTAL_BYTES) { "La copia es demasiado grande" }
                         if (entry.time > 0) tmp.setLastModified(entry.time)
                         target.delete()
                         if (!tmp.renameTo(target)) throw IllegalStateException("No se pudo colocar $rel")
@@ -314,6 +338,8 @@ object FullBackup {
             ),
         )
         val songs = countLibrarySongs(stagedDb.absolutePath)
+        installStagedFiles(stagedMusic, music)
+        installStagedFiles(stagedTorrents, torrents)
         File(staging, READY).writeText(m.toString())
         Log.i(TAG, "restauración preparada: $files ficheros, $songs canciones; se aplica al reiniciar")
         return Outcome.Restored(files, bytes, songs)
@@ -387,6 +413,42 @@ object FullBackup {
         }
         onProgress(copied)
         return copied
+    }
+
+    private inline fun copyLimited(
+        input: InputStream,
+        out: OutputStream,
+        limit: Long,
+        onProgress: (Long) -> Unit = {},
+    ): Long {
+        var copied = 0L
+        val buffer = ByteArray(1 shl 16)
+        while (true) {
+            val n = input.read(buffer)
+            if (n < 0) break
+            copied += n
+            check(copied <= limit) { "Un archivo de la copia supera el límite permitido" }
+            out.write(buffer, 0, n)
+            onProgress(copied)
+        }
+        return copied
+    }
+
+    private fun withoutSecrets(xml: String): String = SECRET_PREF_KEYS.fold(xml) { current, key ->
+        current.replace(Regex("""\s*<string name="${Regex.escape(key)}">.*?</string>"""), "")
+    }
+
+    private fun installStagedFiles(source: File, destination: File) {
+        source.walkTopDown().filter(File::isFile).forEach { staged ->
+            val relative = staged.relativeTo(source)
+            val target = File(destination, relative.path)
+            target.parentFile?.mkdirs()
+            val temporary = File(target.path + ".restoring")
+            staged.copyTo(temporary, overwrite = true)
+            target.delete()
+            check(temporary.renameTo(target)) { "No se pudo colocar ${relative.path}" }
+        }
+        source.deleteRecursively()
     }
 
     /** Un par de gigas por Wi-Fi o a un USB tardan: que la CPU no se duerma a mitad. */

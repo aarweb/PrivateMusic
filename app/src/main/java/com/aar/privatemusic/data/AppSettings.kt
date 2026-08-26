@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import java.security.SecureRandom
 
 /**
  * [BLACK] es negro puro, no "muy oscuro": en una pantalla OLED el píxel negro
@@ -69,6 +70,17 @@ class AppSettings(context: Context) {
     private val _shareWithPc = MutableStateFlow(prefs.getBoolean(KEY_SHARE_PC, false))
     val shareWithPc: StateFlow<Boolean> = _shareWithPc
 
+    /** Clave privada que autoriza al reproductor de escritorio en la red local. */
+    val syncToken: String
+        get() = synchronized(SYNC_TOKEN_LOCK) {
+            prefs.getString(KEY_SYNC_TOKEN, null)?.takeIf { it.length == 32 }
+                ?: newSyncToken().also { prefs.edit().putString(KEY_SYNC_TOKEN, it).commit() }
+        }
+
+    fun regenerateSyncToken(): String = synchronized(SYNC_TOKEN_LOCK) {
+        newSyncToken().also { prefs.edit().putString(KEY_SYNC_TOKEN, it).commit() }
+    }
+
     /** Voz del DJ (TTS del sistema). Off por defecto: el DJ funciona con texto. */
     private val _djVoice = MutableStateFlow(prefs.getBoolean(KEY_DJ_VOICE, false))
     val djVoice: StateFlow<Boolean> = _djVoice
@@ -117,15 +129,15 @@ class AppSettings(context: Context) {
     val subsonicUrl: StateFlow<String> = _subsonicUrl
     private val _subsonicUser = MutableStateFlow(prefs.getString(KEY_SUB_USER, "") ?: "")
     val subsonicUser: StateFlow<String> = _subsonicUser
-    private val _subsonicPass = MutableStateFlow(prefs.getString(KEY_SUB_PASS, "") ?: "")
+    private val _subsonicPass = MutableStateFlow(SecretStore.read(prefs, KEY_SUB_PASS))
     val subsonicPass: StateFlow<String> = _subsonicPass
 
     fun setSubsonicServer(url: String, user: String, pass: String) {
         prefs.edit()
             .putString(KEY_SUB_URL, url.trim())
             .putString(KEY_SUB_USER, user.trim())
-            .putString(KEY_SUB_PASS, pass)
             .apply()
+        SecretStore.write(prefs, KEY_SUB_PASS, pass)
         _subsonicUrl.value = url.trim()
         _subsonicUser.value = user.trim()
         _subsonicPass.value = pass
@@ -140,11 +152,11 @@ class AppSettings(context: Context) {
         else null
     }
 
-    private val _listenBrainzToken = MutableStateFlow(prefs.getString(KEY_LISTENBRAINZ, "") ?: "")
+    private val _listenBrainzToken = MutableStateFlow(SecretStore.read(prefs, KEY_LISTENBRAINZ))
     val listenBrainzToken: StateFlow<String> = _listenBrainzToken
 
     // --- Deezer (descarga directa FLAC/MP3 con la sesión del propio usuario) ---
-    private val _deezerArl = MutableStateFlow(prefs.getString(KEY_DZ_ARL, "") ?: "")
+    private val _deezerArl = MutableStateFlow(SecretStore.read(prefs, KEY_DZ_ARL))
     /** Cookie de sesión de Deezer del usuario; vacío = no autenticado. */
     val deezerArl: StateFlow<String> = _deezerArl
 
@@ -216,20 +228,20 @@ class AppSettings(context: Context) {
     }
 
     fun setListenBrainzToken(value: String) {
-        prefs.edit().putString(KEY_LISTENBRAINZ, value.trim()).apply()
+        SecretStore.write(prefs, KEY_LISTENBRAINZ, value.trim())
         _listenBrainzToken.value = value.trim()
     }
 
     /** Guarda (o limpia, con arl en blanco) la sesión de Deezer. */
     fun setDeezerSession(arl: String, user: String, country: String, hasFlac: Boolean, hasHq: Boolean) {
         prefs.edit()
-            .putString(KEY_DZ_ARL, arl)
             .putString(KEY_DZ_USER, user)
             .putString(KEY_DZ_COUNTRY, country)
             .putBoolean(KEY_DZ_HAS_FLAC, hasFlac)
             .putBoolean(KEY_DZ_HAS_HQ, hasHq)
             .putBoolean(KEY_DZ_EXPIRED, false)
             .apply()
+        SecretStore.write(prefs, KEY_DZ_ARL, arl)
         _deezerArl.value = arl
         _deezerUser.value = user
         _deezerArlExpired.value = false
@@ -260,6 +272,7 @@ class AppSettings(context: Context) {
         private const val KEY_AUTOMIX = "automix"
         private const val KEY_AUTOMIX_MAX = "automix_max_pct"
         private const val KEY_SHARE_PC = "share_with_pc"
+        private const val KEY_SYNC_TOKEN = "sync_token"
         private const val KEY_DJ_VOICE = "dj_voice"
         private const val KEY_ROMANIZE = "romanize_lyrics"
         private const val KEY_ANIM_BG = "animated_background"
@@ -275,10 +288,13 @@ class AppSettings(context: Context) {
         private const val KEY_DZ_HAS_FLAC = "deezer_has_flac"
         private const val KEY_DZ_HAS_HQ = "deezer_has_hq"
         private const val KEY_DZ_EXPIRED = "deezer_arl_expired"
+        private val SYNC_TOKEN_LOCK = Any()
+
+        private fun newSyncToken(): String = ByteArray(16).also(SecureRandom()::nextBytes)
+            .joinToString("") { "%02X".format(it) }
 
         fun readDeezerArl(context: Context): String =
-            context.getSharedPreferences("settings", Context.MODE_PRIVATE)
-                .getString(KEY_DZ_ARL, "") ?: ""
+            SecretStore.read(context.getSharedPreferences("settings", Context.MODE_PRIVATE), KEY_DZ_ARL)
 
         fun readDeezerQuality(context: Context): String =
             context.getSharedPreferences("settings", Context.MODE_PRIVATE)
@@ -301,8 +317,7 @@ class AppSettings(context: Context) {
                 .getBoolean(KEY_VIDEO_METERED, false)
 
         fun readListenBrainzToken(context: Context): String =
-            context.getSharedPreferences("settings", Context.MODE_PRIVATE)
-                .getString(KEY_LISTENBRAINZ, "") ?: ""
+            SecretStore.read(context.getSharedPreferences("settings", Context.MODE_PRIVATE), KEY_LISTENBRAINZ)
 
         fun readEqEnabled(context: Context): Boolean =
             context.getSharedPreferences("settings", Context.MODE_PRIVATE)

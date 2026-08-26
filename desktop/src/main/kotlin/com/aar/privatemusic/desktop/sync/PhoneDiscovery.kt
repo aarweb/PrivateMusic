@@ -13,7 +13,7 @@ import javax.jmdns.ServiceInfo
 const val SHARE_PORT = 8966
 
 /** Un móvil compartiendo su biblioteca en la red local. */
-data class Phone(val name: String, val host: String, val port: Int) {
+data class Phone(val name: String, val host: String, val port: Int, val token: String) {
     val baseUrl: String get() = "http://$host:$port"
 }
 
@@ -38,21 +38,21 @@ object PhoneDiscovery {
      *    enlace local aparece a la primera, y el registro trae dentro su IPv4,
      *    que es por donde luego habla el HTTP.
      */
-    suspend fun discover(timeoutMs: Long = 4000): List<Phone> = withContext(Dispatchers.IO) {
+    suspend fun discover(token: String, timeoutMs: Long = 4000): List<Phone> = withContext(Dispatchers.IO) {
         val addresses = localAddresses()
         if (addresses.isEmpty()) return@withContext emptyList()
 
         addresses
-            .map { address -> async { queryOn(address, timeoutMs) } }
+            .map { address -> async { queryOn(address, token, timeoutMs) } }
             .awaitAll()
             .flatten()
             .distinctBy { it.host to it.port }
     }
 
-    private fun queryOn(address: InetAddress, timeoutMs: Long): List<Phone> {
+    private fun queryOn(address: InetAddress, token: String, timeoutMs: Long): List<Phone> {
         val jmdns = runCatching { JmDNS.create(address) }.getOrNull() ?: return emptyList()
         return try {
-            jmdns.list(SERVICE_TYPE, timeoutMs).mapNotNull(::toPhone)
+            jmdns.list(SERVICE_TYPE, timeoutMs).mapNotNull { toPhone(it, token) }
         } catch (e: Exception) {
             emptyList()
         } finally {
@@ -66,12 +66,12 @@ object PhoneDiscovery {
      * la IPv6 vale igual entre corchetes (sin el sufijo de ámbito, que sólo
      * entiende la máquina que lo escribió).
      */
-    private fun toPhone(info: ServiceInfo): Phone? {
+    private fun toPhone(info: ServiceInfo, token: String): Phone? {
         if (info.port == 0) return null
         val host = info.inet4Addresses.firstOrNull()?.hostAddress
             ?: info.inet6Addresses.firstOrNull()?.hostAddress?.substringBefore('%')?.let { "[$it]" }
             ?: return null
-        return Phone(name = info.name, host = host, port = info.port)
+        return Phone(name = info.name, host = host, port = info.port, token = token)
     }
 
     private fun localAddresses(): List<InetAddress> =

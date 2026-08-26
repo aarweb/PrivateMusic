@@ -5,6 +5,7 @@ import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import com.aar.privatemusic.cast.MediaHttpServer
 import com.aar.privatemusic.data.db.MusicDao
+import com.aar.privatemusic.data.AppSettings
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -32,7 +33,7 @@ class LibraryShare(private val context: Context, private val dao: MusicDao) {
     fun start() {
         if (_running.value) return
         val started = runCatching {
-            MediaHttpServer(dao, MediaHttpServer.SHARE_PORT).also { it.start() }
+            MediaHttpServer(dao, MediaHttpServer.SHARE_PORT, AppSettings(context).syncToken).also { it.start() }
         }.getOrNull() ?: return
         server = started
         _running.value = true

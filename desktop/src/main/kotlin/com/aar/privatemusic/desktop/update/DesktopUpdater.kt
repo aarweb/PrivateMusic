@@ -6,6 +6,7 @@ import org.json.JSONObject
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
+import java.security.MessageDigest
 
 /**
  * Actualización desde GitHub Releases, igual que `AppUpdater` en Android:
@@ -30,7 +31,12 @@ object DesktopUpdater {
 
     val isDevBuild: Boolean get() = currentVersion == "dev" || currentVersion == "1.0.0"
 
-    data class UpdateInfo(val version: String, val assetUrl: String, val notes: String)
+    data class UpdateInfo(
+        val version: String,
+        val assetUrl: String,
+        val sha256: String,
+        val notes: String,
+    )
 
     private val assetSuffix: String
         get() = if (isWindows) ".msi" else "-linux-x64.tar.gz"
@@ -47,13 +53,18 @@ object DesktopUpdater {
             if (version.isBlank() || !isNewer(version, currentVersion)) return@withContext null
 
             val assets = json.optJSONArray("assets") ?: return@withContext null
-            val url = (0 until assets.length())
+            val releaseAssets = (0 until assets.length())
                 .map { assets.getJSONObject(it) }
-                .firstOrNull { it.optString("name").endsWith(assetSuffix) }
-                ?.optString("browser_download_url")
+            val asset = releaseAssets.firstOrNull { it.optString("name").endsWith(assetSuffix) }
                 ?: return@withContext null
+            val url = asset.optString("browser_download_url")
+            val checksumUrl = releaseAssets
+                .firstOrNull { it.optString("name") == asset.optString("name") + ".sha256" }
+                ?.optString("browser_download_url") ?: return@withContext null
+            val checksum = httpGet(checksumUrl).trim().substringBefore(' ').lowercase()
+            require(checksum.matches(Regex("[0-9a-f]{64}"))) { "checksum inválido" }
 
-            UpdateInfo(version, url, json.optString("body").take(500))
+            UpdateInfo(version, url, checksum, json.optString("body").take(500))
         }.getOrNull()
     }
 
@@ -71,7 +82,8 @@ object DesktopUpdater {
      * está completo. Sin esto, la actualización automática se bajaría cien megas
      * en cada arranque hasta que el usuario cerrara la app.
      */
-    fun cached(info: UpdateInfo): File? = targetFor(info).takeIf { it.length() > 1_000_000 }
+    fun cached(info: UpdateInfo): File? = targetFor(info)
+        .takeIf { it.length() > 1_000_000 && sha256(it) == info.sha256 }
 
     suspend fun download(info: UpdateInfo, onProgress: (Int) -> Unit): File = withContext(Dispatchers.IO) {
         val target = targetFor(info)
@@ -99,6 +111,10 @@ object DesktopUpdater {
 
         // Una descarga cortada no puede parecer una actualización válida.
         check(total <= 0 || copied == total) { "descarga incompleta: $copied de $total" }
+        check(sha256(tmp) == info.sha256) {
+            tmp.delete()
+            "La actualización no supera la verificación de integridad"
+        }
         if (target.exists()) target.delete()
         check(tmp.renameTo(target)) { "no se pudo renombrar ${tmp.name}" }
         target
@@ -143,6 +159,7 @@ object DesktopUpdater {
         staging.deleteRecursively()
         staging.mkdirs()
 
+        if (!safeArchive(downloaded)) return false
         val untar = ProcessBuilder("tar", "-xzf", downloaded.absolutePath, "-C", staging.absolutePath)
             .start().waitFor()
         if (untar != 0) return false
@@ -184,6 +201,33 @@ object DesktopUpdater {
             conn.disconnect()
         }
     }
+
+    private fun sha256(file: File): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        file.inputStream().use { input ->
+            val buffer = ByteArray(64 * 1024)
+            while (true) {
+                val read = input.read(buffer)
+                if (read < 0) break
+                digest.update(buffer, 0, read)
+            }
+        }
+        return digest.digest().joinToString("") { "%02x".format(it) }
+    }
+
+    /** Rechaza rutas absolutas, escapes y archivos fuera del único directorio raíz. */
+    private fun safeArchive(file: File): Boolean = runCatching {
+        val process = ProcessBuilder("tar", "-tzf", file.absolutePath).start()
+        val entries = process.inputStream.bufferedReader().readLines()
+        if (process.waitFor() != 0 || entries.isEmpty()) return@runCatching false
+        val root = entries.first().substringBefore('/').takeIf { it.isNotBlank() } ?: return@runCatching false
+        entries.size <= 100_000 && entries.all { rawName ->
+            val name = rawName.trimEnd('/')
+            name.isNotBlank() && !name.startsWith('/') &&
+                name.split('/').none { it == ".." || it.isEmpty() } &&
+                name.substringBefore('/') == root
+        }
+    }.getOrDefault(false)
 
     internal fun isNewer(remote: String, local: String): Boolean {
         val r = remote.split(".").mapNotNull { it.trim().toIntOrNull() }

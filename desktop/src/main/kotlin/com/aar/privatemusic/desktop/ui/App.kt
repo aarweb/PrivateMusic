@@ -213,13 +213,14 @@ fun App(shortcuts: KeyShortcuts) {
 
     /** Acepta "192.168.1.152" o "192.168.1.152:8966". Sin puerto, el que publica el móvil. */
     fun runSyncAddress(input: String) {
-        if (syncing || input.isBlank()) return
+        val token = settings.syncToken.value
+        if (syncing || input.isBlank() || token.isBlank()) return
         val host = input.substringBefore(':').trim()
         val port = input.substringAfter(':', "").trim().toIntOrNull() ?: SHARE_PORT
         scope.launch {
             syncing = true
             syncStatus = "Conectando con $host:$port…"
-            runCatching { sync.sync(Phone(host, host, port)) { syncStatus = it } }
+            runCatching { sync.sync(Phone(host, host, port, token)) { syncStatus = it } }
                 .onSuccess { syncStatus = summaryOf(it) }
                 .onFailure { syncStatus = "Falló: ${it.message}" }
             syncing = false
@@ -227,11 +228,12 @@ fun App(shortcuts: KeyShortcuts) {
     }
 
     fun runSync() {
-        if (syncing) return
+        val token = settings.syncToken.value
+        if (syncing || token.isBlank()) return
         scope.launch {
             syncing = true
             syncStatus = "Buscando el móvil en la red…"
-            val phone = PhoneDiscovery.discover().firstOrNull()
+            val phone = PhoneDiscovery.discover(token).firstOrNull()
             if (phone == null) {
                 syncStatus = "No se encontró ningún móvil. Si tu red bloquea el multicast, " +
                     "escribe su dirección a mano."

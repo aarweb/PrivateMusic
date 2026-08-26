@@ -54,6 +54,8 @@ fun SettingsScreen(app: PrivateMusicApp, onOpenStats: () -> Unit, onOpenEq: () -
     val autoMix by app.settings.autoMix.collectAsState()
     val shareWithPc by app.settings.shareWithPc.collectAsState()
     val shareAddress by app.libraryShare.address.collectAsState()
+    var syncToken by remember { mutableStateOf(app.settings.syncToken) }
+    var regenerateSyncToken by remember { mutableStateOf(false) }
     val prefs = androidx.compose.ui.platform.LocalContext.current
         .getSharedPreferences("settings", android.content.Context.MODE_PRIVATE)
     var btAutoplay by remember { mutableStateOf(prefs.getBoolean("bt_autoplay", false)) }
@@ -337,6 +339,37 @@ fun SettingsScreen(app: PrivateMusicApp, onOpenStats: () -> Unit, onOpenEq: () -
                 )
             }
             Switch(checked = shareWithPc, onCheckedChange = { app.settings.setShareWithPc(it) })
+        }
+        if (shareWithPc) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Clave de enlace", style = MaterialTheme.typography.labelMedium)
+                    Text(
+                        syncToken.chunked(4).joinToString("-"),
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+                TextButton(onClick = { regenerateSyncToken = true }) { Text("Regenerar") }
+            }
+        }
+
+        if (regenerateSyncToken) {
+            AlertDialog(
+                onDismissRequest = { regenerateSyncToken = false },
+                title = { Text("¿Regenerar la clave?") },
+                text = { Text("El PC dejará de sincronizar hasta que copies allí la clave nueva.") },
+                confirmButton = {
+                    TextButton(onClick = {
+                        regenerateSyncToken = false
+                        app.libraryShare.stop()
+                        syncToken = app.settings.regenerateSyncToken()
+                        if (shareWithPc) app.libraryShare.start()
+                    }) { Text("Regenerar") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { regenerateSyncToken = false }) { Text("Cancelar") }
+                },
+            )
         }
 
         Row(
@@ -671,7 +704,7 @@ fun SettingsScreen(app: PrivateMusicApp, onOpenStats: () -> Unit, onOpenEq: () -
         SettingsAction(
             title = "Copia completa para cambiar de móvil",
             subtitle = "ZIP con todas las canciones, carátulas, letras, playlists, historial y ajustes " +
-                "(incluye tus sesiones de Deezer y ListenBrainz)$sizeHint",
+                "(no incluye contraseñas ni sesiones)$sizeHint",
         ) {
             if (backupProgress == null) {
                 val stamp = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date())
