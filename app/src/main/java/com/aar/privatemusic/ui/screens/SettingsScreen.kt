@@ -79,6 +79,7 @@ fun SettingsScreen(app: PrivateMusicApp, onOpenStats: () -> Unit, onOpenEq: () -
 
     var storage by remember { mutableStateOf<MusicRepository.StorageInfo?>(null) }
     var operationResult by remember { mutableStateOf<String?>(null) }
+    var deleteAllVideosOpen by remember { mutableStateOf(false) }
     var normMode by remember { mutableStateOf(com.aar.privatemusic.data.AppSettings.readNormalizeMode(context)) }
     // Duplicate finder: null = closed, non-null (possibly empty) = dialog open.
     var dupGroups by remember { mutableStateOf<List<List<com.aar.privatemusic.data.db.Song>>?>(null) }
@@ -522,6 +523,37 @@ fun SettingsScreen(app: PrivateMusicApp, onOpenStats: () -> Unit, onOpenEq: () -
                     )
                 }
             }
+        }
+        SettingsAction(
+            title = "Borrar todos los vídeos descargados",
+            subtitle = "Libera espacio y permite volver a generar todos los Canvas con el selector nuevo",
+        ) { deleteAllVideosOpen = true }
+
+        if (deleteAllVideosOpen) {
+            AlertDialog(
+                onDismissRequest = { deleteAllVideosOpen = false },
+                title = { Text("¿Borrar todos los vídeos?") },
+                text = {
+                    Text(
+                        "Se borrarán los Canvas descargados o añadidos, los intentos anteriores y " +
+                            "cualquier descarga de vídeos en curso. Las canciones y carátulas no se tocarán."
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        deleteAllVideosOpen = false
+                        app.appScope.launch {
+                            val count = app.videoAuto.deleteAllVideos()
+                            com.aar.privatemusic.util.Feedback.show(
+                                if (count == 1) "1 vídeo borrado" else "$count vídeos borrados",
+                            )
+                        }
+                    }) { Text("Borrar vídeos") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { deleteAllVideosOpen = false }) { Text("Cancelar") }
+                },
+            )
         }
 
         YoutubeClientSetting(app)

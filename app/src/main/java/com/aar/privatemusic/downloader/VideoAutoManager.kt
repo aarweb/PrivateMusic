@@ -9,6 +9,8 @@ import com.aar.privatemusic.data.db.MusicDao
 import com.aar.privatemusic.data.db.Song
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
@@ -36,6 +38,7 @@ class VideoAutoManager(
     private val scope: CoroutineScope,
 ) {
     private val gate = Mutex()
+    private var fillJob: Job? = null
 
     data class Progress(val done: Int, val total: Int)
 
@@ -97,24 +100,67 @@ class VideoAutoManager(
      */
     fun fillMissing(onDone: (Int, Int) -> Unit) {
         if (_fillProgress.value != null) return
-        scope.launch {
-            if (!networkAllows()) {
-                withContext(Dispatchers.Main) { onDone(-1, 0) }
-                return@launch
+        fillJob = scope.launch {
+            try {
+                if (!networkAllows()) {
+                    withContext(Dispatchers.Main) { onDone(-1, 0) }
+                    return@launch
+                }
+                val pending = withContext(Dispatchers.IO) { dao.songsOnce().filterNot { settled(it) } }
+                if (pending.isEmpty()) {
+                    withContext(Dispatchers.Main) { onDone(0, 0) }
+                    return@launch
+                }
+                var got = 0
+                pending.forEachIndexed { i, song ->
+                    _fillProgress.value = Progress(i, pending.size)
+                    if (!networkAllows()) return@forEachIndexed // se cortó la WiFi
+                    if (fetch(song)) got++
+                }
+                withContext(Dispatchers.Main) { onDone(got, pending.size) }
+            } finally {
+                _fillProgress.value = null
+                fillJob = null
             }
-            val pending = withContext(Dispatchers.IO) { dao.songsOnce().filterNot { settled(it) } }
-            if (pending.isEmpty()) {
-                withContext(Dispatchers.Main) { onDone(0, 0) }
-                return@launch
+        }
+    }
+
+    /** Borra Canvas, intentos y temporales para poder generarlos de nuevo desde cero. */
+    suspend fun deleteAllVideos(): Int {
+        fillJob?.cancelAndJoin()
+        return gate.withLock {
+            withContext(Dispatchers.IO) {
+                val songs = dao.songsOnce()
+                var cleared = 0
+                songs.forEach { song ->
+                    val audio = File(song.filePath).canonicalFile
+                    val candidates = buildSet {
+                        song.videoPath?.let { add(File(it)) }
+                        add(videoFile(song.id))
+                        add(File(downloader.musicDir, "${song.id}.gif"))
+                        add(marker(song.id))
+                        downloader.musicDir.listFiles()
+                            ?.filter {
+                                it.name.startsWith("${song.id}.canvas") ||
+                                    it.name.startsWith("${song.id}.video.")
+                            }
+                            ?.let(::addAll)
+                    }
+                    var hadVideo = !song.videoPath.isNullOrBlank()
+                    candidates.forEach { file ->
+                        val safe = runCatching { file.canonicalFile }.getOrNull()
+                        if (safe != null && safe != audio && safe.parentFile == downloader.musicDir.canonicalFile) {
+                            if (safe.exists() && safe.extension.lowercase() in setOf("mp4", "webm", "mkv", "gif")) {
+                                hadVideo = true
+                            }
+                            safe.delete()
+                        }
+                    }
+                    dao.updateSongVideo(song.id, null)
+                    if (hadVideo) cleared++
+                }
+                cleared
             }
-            var got = 0
-            pending.forEachIndexed { i, song ->
-                _fillProgress.value = Progress(i, pending.size)
-                if (!networkAllows()) return@forEachIndexed // se cortó la WiFi
-                if (fetch(song)) got++
-            }
-            _fillProgress.value = null
-            withContext(Dispatchers.Main) { onDone(got, pending.size) }
         }
     }
 }
