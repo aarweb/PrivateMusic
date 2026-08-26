@@ -49,6 +49,18 @@ import kotlinx.coroutines.launch
 
 @Composable
 fun SettingsScreen(app: PrivateMusicApp, onOpenStats: () -> Unit, onOpenEq: () -> Unit = {}) {
+    fun formatBytes(bytes: Long): String {
+        if (bytes < 1024L) return "$bytes B"
+        val units = listOf("KB", "MB", "GB")
+        var value = bytes.toDouble() / 1024.0
+        var unit = 0
+        while (value >= 1024.0 && unit < units.lastIndex) {
+            value /= 1024.0
+            unit++
+        }
+        return "%.1f %s".format(value, units[unit])
+    }
+
     val crossfade by app.settings.crossfadeSec.collectAsState()
     val normalize by app.settings.normalizeVolume.collectAsState()
     val autoMix by app.settings.autoMix.collectAsState()
@@ -477,6 +489,7 @@ fun SettingsScreen(app: PrivateMusicApp, onOpenStats: () -> Unit, onOpenEq: () -
 
         val autoVideo by app.settings.autoDownloadVideo.collectAsState()
         val videoMetered by app.settings.videoOnMetered.collectAsState()
+        val videoOnlyWhileCharging by app.settings.videoOnlyWhileCharging.collectAsState()
         Row(
             Modifier.fillMaxWidth().padding(vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -506,6 +519,23 @@ fun SettingsScreen(app: PrivateMusicApp, onOpenStats: () -> Unit, onOpenEq: () -
                 }
                 Switch(checked = videoMetered, onCheckedChange = { app.settings.setVideoOnMetered(it) })
             }
+            Row(
+                Modifier.fillMaxWidth().padding(start = 16.dp, bottom = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("Solo mientras el móvil carga", style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        "Solo afecta a descargas automáticas y masivas; las manuales siempre se permiten",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(
+                    checked = videoOnlyWhileCharging,
+                    onCheckedChange = { app.settings.setVideoOnlyWhileCharging(it) },
+                )
+            }
             val fillProgress by app.videoAuto.fillProgress.collectAsState()
             SettingsAction(
                 title = if (fillProgress != null)
@@ -516,7 +546,8 @@ fun SettingsScreen(app: PrivateMusicApp, onOpenStats: () -> Unit, onOpenEq: () -
                 if (fillProgress == null) app.videoAuto.fillMissing { got, total ->
                     com.aar.privatemusic.util.Feedback.show(
                         when {
-                            got < 0 -> "Necesita WiFi (o activa los datos móviles arriba)"
+                            got == -2 -> "Conecta el móvil a la corriente para descargar los vídeos"
+                            got == -1 -> "Necesita WiFi (o activa los datos móviles arriba)"
                             total == 0 -> "Todas las canciones ya tienen vídeo o se intentó"
                             else -> "Vídeos descargados: $got de $total"
                         }
@@ -544,6 +575,7 @@ fun SettingsScreen(app: PrivateMusicApp, onOpenStats: () -> Unit, onOpenEq: () -
                         deleteAllVideosOpen = false
                         app.appScope.launch {
                             val count = app.videoAuto.deleteAllVideos()
+                            storage = app.repository.storageInfo()
                             com.aar.privatemusic.util.Feedback.show(
                                 if (count == 1) "1 vídeo borrado" else "$count vídeos borrados",
                             )
@@ -668,11 +700,33 @@ fun SettingsScreen(app: PrivateMusicApp, onOpenStats: () -> Unit, onOpenEq: () -
             Column(Modifier.padding(vertical = 12.dp)) {
                 Text("Almacenamiento", style = MaterialTheme.typography.bodyLarge)
                 Text(
-                    "${info.songCount} canciones · ${"%.1f".format(info.totalBytes / 1024f / 1024f)} MB " +
-                        "(audio + carátulas + letras)",
+                    "${info.songCount} canciones · ${formatBytes(info.totalBytes)} en total",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                listOf(
+                    "Audio" to info.audioBytes,
+                    "Canvas" to info.canvasBytes,
+                    "Karaoke" to info.karaokeBytes,
+                    "Carátulas y letras" to info.artworkLyricsBytes,
+                    "Modelos" to info.modelsBytes,
+                    "Otros" to info.otherBytes,
+                ).filter { (name, bytes) -> bytes > 0L || name == "Audio" || name == "Canvas" }
+                    .forEach { (name, bytes) ->
+                        Row(Modifier.fillMaxWidth().padding(top = 4.dp)) {
+                            Text(
+                                name,
+                                modifier = Modifier.weight(1f),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Text(
+                                formatBytes(bytes),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
             }
         }
 

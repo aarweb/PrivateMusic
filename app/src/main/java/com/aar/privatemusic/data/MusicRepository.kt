@@ -1,5 +1,6 @@
 package com.aar.privatemusic.data
 
+import android.content.Context
 import com.aar.privatemusic.data.db.ArtistPlays
 import com.aar.privatemusic.data.db.DayPlays
 import com.aar.privatemusic.data.db.MusicDao
@@ -22,9 +23,13 @@ import com.aar.privatemusic.util.LoudnessScanner
 import com.aar.privatemusic.util.readAudioQuality
 import com.aar.privatemusic.util.saveCoverImage
 import kotlin.math.pow
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.withContext
+import java.io.File
 
 class MusicRepository(
+    private val context: Context,
     private val dao: MusicDao,
     private val downloader: YtDownloader,
 ) {
@@ -326,13 +331,109 @@ class MusicRepository(
         return true
     }
 
-    data class StorageInfo(val songCount: Int, val totalBytes: Long)
+    data class StorageInfo(
+        val songCount: Int,
+        val audioBytes: Long,
+        val canvasBytes: Long,
+        val karaokeBytes: Long,
+        val artworkLyricsBytes: Long,
+        val modelsBytes: Long,
+        val otherBytes: Long,
+        val totalBytes: Long,
+    )
 
-    suspend fun storageInfo(): StorageInfo {
+    /** Desglose real de los ficheros privados, sin seguir enlaces fuera de cada raíz. */
+    suspend fun storageInfo(): StorageInfo = withContext(Dispatchers.IO) {
         val songs = dao.songsOnce()
-        val bytes = downloader.musicDir.listFiles()?.sumOf { it.length() } ?: 0L
-        return StorageInfo(songs.size, bytes)
+        val musicRoot = runCatching { musicDir.canonicalFile }.getOrNull()
+        val musicFiles = musicRoot?.let(::regularFilesUnder).orEmpty()
+
+        fun referencedPathInside(path: String?): String? {
+            if (path.isNullOrBlank() || musicRoot == null) return null
+            val file = runCatching { File(path).canonicalFile }.getOrNull() ?: return null
+            return file.takeIf { it.isFile && it.isInside(musicRoot) }?.path
+        }
+
+        val audioPaths = songs.mapNotNull { referencedPathInside(it.filePath) }.toHashSet()
+        val canvasPaths = songs.mapNotNull { referencedPathInside(it.videoPath) }.toHashSet()
+        val artworkPaths = songs.mapNotNull { referencedPathInside(it.artPath) }.toHashSet()
+        val songIds = songs.mapTo(HashSet()) { it.id }
+        val namedCanvasFiles = buildSet {
+            songIds.forEach { id ->
+                add("$id.mp4")
+                add("$id.gif")
+                add("$id.novideo")
+            }
+        }
+
+        fun isCanvasFile(name: String): Boolean {
+            if (name in namedCanvasFiles) return true
+            val canvasAt = name.indexOf(".canvas")
+            if (canvasAt > 0 && name.substring(0, canvasAt) in songIds) return true
+            val videoAt = name.indexOf(".video.")
+            return videoAt > 0 && name.substring(0, videoAt) in songIds
+        }
+
+        var audioBytes = 0L
+        var canvasBytes = 0L
+        var karaokeBytes = 0L
+        var artworkLyricsBytes = 0L
+        var otherBytes = 0L
+        musicFiles.forEach { file ->
+            val path = file.path
+            val lowerName = file.name.lowercase()
+            when {
+                path in audioPaths -> audioBytes += file.length()
+                path in canvasPaths || isCanvasFile(file.name) -> canvasBytes += file.length()
+                ".karaoke" in lowerName -> karaokeBytes += file.length()
+                path in artworkPaths ||
+                    lowerName.startsWith("playlist_") ||
+                    file.extension.lowercase() in ARTWORK_LYRICS_EXTENSIONS -> {
+                    artworkLyricsBytes += file.length()
+                }
+                else -> otherBytes += file.length()
+            }
+        }
+
+        val modelsBytes = regularFilesUnder(File(context.filesDir, "models")).sumOf { it.length() }
+        val totalBytes = audioBytes + canvasBytes + karaokeBytes + artworkLyricsBytes +
+            modelsBytes + otherBytes
+        StorageInfo(
+            songCount = songs.size,
+            audioBytes = audioBytes,
+            canvasBytes = canvasBytes,
+            karaokeBytes = karaokeBytes,
+            artworkLyricsBytes = artworkLyricsBytes,
+            modelsBytes = modelsBytes,
+            otherBytes = otherBytes,
+            totalBytes = totalBytes,
+        )
     }
+
+    /** Ficheros canónicos regulares bajo [root], cada uno una sola vez. */
+    private fun regularFilesUnder(root: File): List<File> {
+        val canonicalRoot = runCatching { root.canonicalFile }.getOrNull() ?: return emptyList()
+        if (!canonicalRoot.isDirectory) return emptyList()
+        val files = mutableListOf<File>()
+        val visitedDirectories = HashSet<String>()
+        val visitedFiles = HashSet<String>()
+
+        fun visit(candidate: File) {
+            val canonical = runCatching { candidate.canonicalFile }.getOrNull() ?: return
+            if (!canonical.isInside(canonicalRoot)) return
+            when {
+                canonical.isFile && visitedFiles.add(canonical.path) -> files += canonical
+                canonical.isDirectory && visitedDirectories.add(canonical.path) ->
+                    runCatching { canonical.listFiles() }.getOrNull()?.forEach(::visit)
+            }
+        }
+
+        visit(canonicalRoot)
+        return files
+    }
+
+    private fun File.isInside(root: File): Boolean =
+        path == root.path || path.startsWith(root.path + File.separator)
 
     // ---- Stats (Replay) ----
 
@@ -842,6 +943,8 @@ class MusicRepository(
     }
 
     companion object {
+        private val ARTWORK_LYRICS_EXTENSIONS = setOf("jpg", "jpeg", "png", "webp", "lrc", "txt")
+
         /**
          * Canciones por transacción al rellenar. Ni una (una invalidación por
          * canción) ni todas (si el proceso muere a mitad, se pierde el análisis

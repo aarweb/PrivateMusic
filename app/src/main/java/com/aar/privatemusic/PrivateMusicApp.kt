@@ -87,7 +87,7 @@ class PrivateMusicApp : Application() {
             downloaderEnv, dao, appScope,
         ) { settings.subsonicConfig() }
         bandcamp = com.aar.privatemusic.downloader.BandcampDownloader(downloaderEnv, dao, appScope)
-        repository = MusicRepository(dao, downloader)
+        repository = MusicRepository(this, dao, downloader)
         metadataService = com.aar.privatemusic.metadata.MetadataService(this, dao, downloader.musicDir)
         libraryShare = com.aar.privatemusic.sync.LibraryShare(this, dao)
         // El interruptor de Ajustes es la única verdad: sobrevive a reinicios.

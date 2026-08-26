@@ -23,6 +23,7 @@ import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.SkipNext
+import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -246,6 +247,14 @@ private fun SongRowContent(
                         Icons.Filled.GraphicEq,
                         contentDescription = "Sonando",
                         tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(16.dp).padding(end = 2.dp),
+                    )
+                }
+                if (song.videoPath?.let(::File)?.let { it.isFile && it.canRead() } == true) {
+                    Icon(
+                        Icons.Filled.Videocam,
+                        contentDescription = "Canvas disponible",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(16.dp).padding(end = 2.dp),
                     )
                 }

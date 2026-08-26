@@ -1,6 +1,9 @@
 package com.aar.privatemusic.downloader
 
+import android.content.Intent
+import android.content.IntentFilter
 import android.content.Context
+import android.os.BatteryManager
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.util.Log
@@ -104,6 +107,14 @@ class VideoAutoManager(
         }.getOrDefault(false)
     }
 
+    /** El intent sticky de batería permite consultar el estado sin registrar un receptor permanente. */
+    fun chargingAllows(): Boolean = runCatching {
+        val status = context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+            ?.getIntExtra(BatteryManager.EXTRA_STATUS, -1)
+        status == BatteryManager.BATTERY_STATUS_CHARGING ||
+            status == BatteryManager.BATTERY_STATUS_FULL
+    }.getOrDefault(false)
+
     /** Gancho tras una descarga: baja el vídeo si procede. No bloquea al llamante. */
     fun onSongDownloaded(id: String) {
         if (!settings.autoDownloadVideo.value) return
@@ -112,6 +123,10 @@ class VideoAutoManager(
             if (settled(song)) return@launch
             if (!networkAllows()) {
                 Log.d("VideoAuto", "aplazado (red medida sin permiso): ${song.title}")
+                return@launch
+            }
+            if (settings.videoOnlyWhileCharging.value && !chargingAllows()) {
+                Log.d("VideoAuto", "aplazado (el móvil no está cargando): ${song.title}")
                 return@launch
             }
             fetch(song)
@@ -140,15 +155,20 @@ class VideoAutoManager(
                     withContext(Dispatchers.Main) { onDone(-1, 0) }
                     return@launch
                 }
+                if (settings.videoOnlyWhileCharging.value && !chargingAllows()) {
+                    withContext(Dispatchers.Main) { onDone(-2, 0) }
+                    return@launch
+                }
                 val pending = withContext(Dispatchers.IO) { dao.songsOnce().filterNot { settled(it) } }
                 if (pending.isEmpty()) {
                     withContext(Dispatchers.Main) { onDone(0, 0) }
                     return@launch
                 }
                 var got = 0
-                pending.forEachIndexed { i, song ->
+                for ((i, song) in pending.withIndex()) {
                     _fillProgress.value = Progress(i, pending.size)
-                    if (!networkAllows()) return@forEachIndexed // se cortó la WiFi
+                    if (!networkAllows()) break // se cortó la WiFi
+                    if (settings.videoOnlyWhileCharging.value && !chargingAllows()) break
                     if (fetch(song)) got++
                 }
                 withContext(Dispatchers.Main) { onDone(got, pending.size) }

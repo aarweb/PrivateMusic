@@ -59,6 +59,12 @@ class AppSettings(context: Context) {
     /** Permitir bajar los vídeos también con datos móviles (por defecto solo WiFi). */
     val videoOnMetered: StateFlow<Boolean> = _videoOnMetered
 
+    private val _videoOnlyWhileCharging = MutableStateFlow(
+        prefs.getBoolean(KEY_VIDEO_ONLY_WHILE_CHARGING, false)
+    )
+    /** Limitar las descargas automáticas y masivas de vídeo a cuando el móvil carga. */
+    val videoOnlyWhileCharging: StateFlow<Boolean> = _videoOnlyWhileCharging
+
     private val _autoMix = MutableStateFlow(prefs.getBoolean(KEY_AUTOMIX, false))
     val autoMix: StateFlow<Boolean> = _autoMix
 
@@ -207,6 +213,11 @@ class AppSettings(context: Context) {
         _videoOnMetered.value = value
     }
 
+    fun setVideoOnlyWhileCharging(value: Boolean) {
+        prefs.edit().putBoolean(KEY_VIDEO_ONLY_WHILE_CHARGING, value).apply()
+        _videoOnlyWhileCharging.value = value
+    }
+
     fun setAutoMix(value: Boolean) {
         prefs.edit().putBoolean(KEY_AUTOMIX, value).apply()
         _autoMix.value = value
@@ -268,6 +279,7 @@ class AppSettings(context: Context) {
         private const val KEY_SPONSORBLOCK = "sponsorblock"
         private const val KEY_AUTO_VIDEO = "auto_download_video"
         private const val KEY_VIDEO_METERED = "video_on_metered"
+        private const val KEY_VIDEO_ONLY_WHILE_CHARGING = "video_only_while_charging"
         private const val KEY_LISTENBRAINZ = "listenbrainz_token"
         private const val KEY_AUTOMIX = "automix"
         private const val KEY_AUTOMIX_MAX = "automix_max_pct"
