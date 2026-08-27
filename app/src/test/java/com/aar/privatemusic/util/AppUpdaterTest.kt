@@ -2,6 +2,7 @@ package com.aar.privatemusic.util
 
 import kotlin.test.Test
 import kotlin.test.assertFalse
+import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 /**
@@ -53,5 +54,36 @@ class AppUpdaterTest {
         // actualización: los trozos no numéricos se descartan.
         assertFalse(newer("models", "1.87"))
         assertFalse(newer("", "1.87"))
+    }
+
+    @Test
+    fun `normaliza bullets markdown como texto legible`() {
+        assertEquals(
+            "Novedades\n\n• Mejora la búsqueda\n• Corrige la cola\n• Añade soporte",
+            AppUpdater.normalizeReleaseNotes(
+                "# Novedades\n\n- Mejora la búsqueda\n* Corrige la cola\n+ Añade soporte",
+            ),
+        )
+    }
+
+    @Test
+    fun `normaliza saltos windows y exceso de blancos`() {
+        assertEquals(
+            "Primera línea\n\nSegunda línea",
+            AppUpdater.normalizeReleaseNotes("  Primera   línea  \r\n\r\n\r\n Segunda línea  \r\n"),
+        )
+    }
+
+    @Test
+    fun `un body vacio sigue vacio`() {
+        assertEquals("", AppUpdater.normalizeReleaseNotes(" \r\n\t\n "))
+    }
+
+    @Test
+    fun `trunca sin partir pares surrogate`() {
+        val result = AppUpdater.normalizeReleaseNotes("1234🎵5678", maxLength = 6)
+        assertEquals("1234…", result)
+        assertTrue(result.length <= 6)
+        assertFalse(result.any { Character.isSurrogate(it) })
     }
 }

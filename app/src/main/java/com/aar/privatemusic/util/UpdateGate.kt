@@ -5,7 +5,11 @@ import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import androidx.core.content.edit
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
@@ -18,11 +22,20 @@ import java.util.concurrent.atomic.AtomicBoolean
  */
 object UpdateGate {
 
+    data class UpdatePrompt(
+        val info: AppUpdater.UpdateInfo,
+        val downloaded: Boolean,
+        val downloading: Boolean = false,
+    )
+
     private const val PREFS = "settings"
     private const val KEY_AUTO = "auto_update"
 
     /** Una vez por proceso. Volver de segundo plano no es "abrir la app de 0". */
     private val checked = AtomicBoolean(false)
+    private val downloadMutex = Mutex()
+    private val _prompt = MutableStateFlow<UpdatePrompt?>(null)
+    val prompt = _prompt.asStateFlow()
 
     fun autoUpdate(context: Context): Boolean =
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(KEY_AUTO, true)
@@ -37,22 +50,54 @@ object UpdateGate {
             val info = AppUpdater.check() ?: return@launch
             if (!info.isNewer) return@launch
 
-            if (AppUpdater.hasCached(context, info.version)) {
-                Feedback.show("PrivateMusic ${info.version} está lista: Ajustes › Actualizar")
-                return@launch
-            }
+            val downloaded = AppUpdater.hasCached(context, info.version)
+            _prompt.value = UpdatePrompt(info, downloaded)
+            if (downloaded) return@launch
             if (!autoUpdate(context)) {
-                Feedback.show("Hay una versión nueva: ${info.version}")
                 return@launch
             }
             // Noventa megas por datos móviles sin avisar es una factura, no una
             // actualización. Con Wi-Fi se baja sola; sin él, se avisa y espera.
             if (!isUnmetered(context)) {
-                Feedback.show("PrivateMusic ${info.version} se descargará al conectar a Wi-Fi")
                 return@launch
             }
-            val ok = AppUpdater.download(context, info.apkUrl, info.version) {}
-            if (ok) Feedback.show("PrivateMusic ${info.version} descargada: Ajustes › Actualizar")
+            ensureDownloaded(context, info)
+        }
+    }
+
+    /** Oculta el aviso hasta que termine este proceso de la app. */
+    fun consumePrompt() {
+        _prompt.value = null
+    }
+
+    /** Descarga si hace falta y abre el instalador, sin competir con la descarga automática. */
+    fun confirmPrompt(context: Context, scope: CoroutineScope) {
+        val current = _prompt.value ?: return
+        scope.launch {
+            val ready = ensureDownloaded(context, current.info)
+            if (ready && AppUpdater.installCached(context)) consumePrompt()
+        }
+    }
+
+    private suspend fun ensureDownloaded(
+        context: Context,
+        info: AppUpdater.UpdateInfo,
+    ): Boolean = downloadMutex.withLock {
+        if (AppUpdater.hasCached(context, info.version)) {
+            updatePrompt(info.version, downloaded = true, downloading = false)
+            return@withLock true
+        }
+
+        updatePrompt(info.version, downloaded = false, downloading = true)
+        val ok = AppUpdater.download(context, info.apkUrl, info.version) {}
+        updatePrompt(info.version, downloaded = ok, downloading = false)
+        ok
+    }
+
+    private fun updatePrompt(version: String, downloaded: Boolean, downloading: Boolean) {
+        val current = _prompt.value ?: return
+        if (current.info.version == version) {
+            _prompt.value = current.copy(downloaded = downloaded, downloading = downloading)
         }
     }
 

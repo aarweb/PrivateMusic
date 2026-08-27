@@ -28,7 +28,7 @@ jobs:
           set -euo pipefail
           git init .
           git -c http.extraHeader="Authorization: token $GITEA_JOB_TOKEN" \
-            fetch --no-tags --depth=1 \
+            fetch --tags --prune \
             "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git" "$GITHUB_SHA"
           git checkout --detach FETCH_HEAD
 

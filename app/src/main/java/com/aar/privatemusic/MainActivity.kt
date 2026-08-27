@@ -14,7 +14,10 @@ import com.aar.privatemusic.util.UpdateGate
 import com.aar.privatemusic.widget.ACTION_PLAY_DAILY_MIX
 import kotlinx.coroutines.launch
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.LibraryMusic
@@ -22,14 +25,19 @@ import androidx.compose.material.icons.filled.QueueMusic
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -142,6 +150,54 @@ private fun MainScaffold(app: PrivateMusicApp) {
     )
 
     val nowPlaying by app.playerController.nowPlaying.collectAsState()
+    val updatePrompt by UpdateGate.prompt.collectAsState()
+    val context = LocalContext.current
+    val updateScope = androidx.compose.runtime.rememberCoroutineScope()
+
+    updatePrompt?.let { prompt ->
+        AlertDialog(
+            onDismissRequest = UpdateGate::consumePrompt,
+            title = { Text("Novedades de PrivateMusic ${prompt.info.version}") },
+            text = {
+                Column(
+                    modifier = Modifier
+                        .heightIn(max = 420.dp)
+                        .verticalScroll(rememberScrollState()),
+                ) {
+                    Text(
+                        prompt.info.notes.ifBlank {
+                            "Los detalles de los cambios no están disponibles para esta versión."
+                        },
+                    )
+                    Text(
+                        text = if (prompt.downloaded) {
+                            "La actualización ya está descargada. Android te pedirá confirmar la instalación."
+                        } else {
+                            "Se descargará la actualización y Android te pedirá confirmar la instalación."
+                        },
+                        modifier = Modifier.padding(top = 16.dp),
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = UpdateGate::consumePrompt) { Text("Ahora no") }
+            },
+            confirmButton = {
+                Button(
+                    onClick = { UpdateGate.confirmPrompt(context, updateScope) },
+                    enabled = !prompt.downloading,
+                ) {
+                    Text(
+                        when {
+                            prompt.downloading -> "Descargando…"
+                            prompt.downloaded -> "Instalar"
+                            else -> "Descargar"
+                        },
+                    )
+                }
+            },
+        )
+    }
 
     // Global action feedback ("Añadida a la cola", …) as snackbars.
     val snackbarHostState = androidx.compose.runtime.remember { androidx.compose.material3.SnackbarHostState() }

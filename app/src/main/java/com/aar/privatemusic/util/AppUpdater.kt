@@ -8,6 +8,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.File
+import java.io.InputStream
 import java.net.HttpURLConnection
 import java.net.URL
 
@@ -16,6 +17,9 @@ import java.net.URL
  * downloads the APK asset and hands it to the system installer.
  */
 object AppUpdater {
+
+    private const val MAX_RESPONSE_BYTES = 2 * 1024 * 1024
+    private const val MAX_NOTES_LENGTH = 8_000
 
     private const val LATEST_URL =
         "https://api.github.com/repos/aarweb/PrivateMusic/releases/latest"
@@ -37,7 +41,7 @@ object AppUpdater {
                 conn.disconnect()
                 return@withContext null
             }
-            val body = conn.inputStream.bufferedReader().readText()
+            val body = conn.inputStream.use { it.readTextLimited(MAX_RESPONSE_BYTES) }
             conn.disconnect()
 
             val json = JSONObject(body)
@@ -55,7 +59,7 @@ object AppUpdater {
             UpdateInfo(
                 version = version,
                 apkUrl = apkUrl ?: return@withContext null,
-                notes = json.optString("body").take(500),
+                notes = normalizeReleaseNotes(json.optString("body")),
                 isNewer = isNewer(version, BuildConfig.VERSION_NAME),
             )
         } catch (e: Exception) {
@@ -77,6 +81,61 @@ object AppUpdater {
             if (rv != lv) return rv > lv
         }
         return false
+    }
+
+    /** Convierte el Markdown sencillo de GitHub en texto compacto para Compose. */
+    @androidx.annotation.VisibleForTesting
+    internal fun normalizeReleaseNotes(
+        body: String,
+        maxLength: Int = MAX_NOTES_LENGTH,
+    ): String {
+        if (maxLength <= 0) return ""
+
+        val normalized = body
+            .replace("\r\n", "\n")
+            .replace('\r', '\n')
+            .filter { it == '\n' || it == '\t' || !it.isISOControl() }
+            .lineSequence()
+            .map { line ->
+                line.trim()
+                    .replace(Regex("^#{1,6}\\s+"), "")
+                    .replace(Regex("^[-*+]\\s+"), "• ")
+                    .replace(Regex("\\[([^]]+)]\\((?:https?://)?[^)]+\\)"), "$1")
+                    .replace(Regex("[ \\t]+"), " ")
+            }
+            .toList()
+            .fold(mutableListOf<String>()) { lines, line ->
+                if (line.isNotEmpty() || lines.lastOrNull()?.isNotEmpty() == true) lines += line
+                lines
+            }
+            .joinToString("\n")
+            .trim()
+
+        if (normalized.length <= maxLength) return normalized
+        if (maxLength == 1) return "…"
+
+        var end = maxLength - 1
+        if (end < normalized.length && end > 0 &&
+            Character.isHighSurrogate(normalized[end - 1]) &&
+            Character.isLowSurrogate(normalized[end])
+        ) {
+            end--
+        }
+        return normalized.take(end).trimEnd() + "…"
+    }
+
+    private fun InputStream.readTextLimited(maxBytes: Int): String {
+        val output = java.io.ByteArrayOutputStream()
+        val buffer = ByteArray(16 * 1024)
+        var total = 0
+        while (true) {
+            val read = read(buffer)
+            if (read < 0) break
+            total += read
+            if (total > maxBytes) throw IllegalStateException("Respuesta de actualización demasiado grande")
+            output.write(buffer, 0, read)
+        }
+        return output.toString(Charsets.UTF_8.name())
     }
 
     private fun cachedApk(context: Context) = File(context.cacheDir, "updates/update.apk")

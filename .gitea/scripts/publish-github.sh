@@ -13,14 +13,33 @@ headers=(
   -H "X-GitHub-Api-Version: 2022-11-28"
 )
 
+notes=""
+if git rev-parse --verify --quiet "$RELEASE_TAG^{commit}" >/dev/null; then
+  previous_tag="$(git describe --tags --abbrev=0 "$RELEASE_TAG^" 2>/dev/null || true)"
+  if [[ -n "$previous_tag" ]]; then
+    while IFS= read -r subject; do
+      [[ "$subject" =~ ^chore\(release\) ]] && continue
+      notes+="- $subject"$'\n'
+    done < <(git log --format='%s' "$previous_tag..$RELEASE_TAG")
+    notes="${notes%$'\n'}"
+  fi
+fi
+if [[ -z "$notes" ]]; then
+  notes="$(git log -1 --format='%s' HEAD)"
+fi
+
 release_json="$(curl --silent --show-error --fail "${headers[@]}" \
   "$api/releases/tags/$RELEASE_TAG" 2>/dev/null || true)"
 if [[ -z "$release_json" ]]; then
-  notes="$(git log -1 --format='%s')"
   payload="$(jq -n --arg tag "$RELEASE_TAG" --arg name "$RELEASE_TAG" \
     --arg body "$notes" '{tag_name:$tag,name:$name,body:$body,draft:false,prerelease:false}')"
   release_json="$(curl --silent --show-error --fail "${headers[@]}" \
     -X POST "$api/releases" -d "$payload")"
+else
+  release_id="$(jq -r .id <<<"$release_json")"
+  payload="$(jq -n --arg body "$notes" '{body:$body}')"
+  release_json="$(curl --silent --show-error --fail "${headers[@]}" \
+    -X PATCH "$api/releases/$release_id" -d "$payload")"
 fi
 
 release_id="$(jq -r .id <<<"$release_json")"
