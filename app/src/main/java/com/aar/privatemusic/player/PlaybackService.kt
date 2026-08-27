@@ -23,6 +23,7 @@ import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.coroutineScope
@@ -153,102 +154,267 @@ class PlaybackService : MediaLibraryService() {
     private var castContext: com.google.android.gms.cast.framework.CastContext? = null
     private var httpServer: com.aar.privatemusic.cast.MediaHttpServer? = null
     private var castDao: MusicDao? = null
+    private val playbackHandoff = PlaybackHandoff()
+    private val handoffServers = mutableSetOf<com.aar.privatemusic.cast.MediaHttpServer>()
+
+    private data class PreparedCast(
+        val baseUrl: String,
+        val entries: List<MediaItem?>,
+    )
+
+    private data class LocalHandoffFingerprint(
+        val ids: List<String>,
+        val index: Int,
+        val position: Long,
+        val playWhenReady: Boolean,
+    )
 
     /** Chromecast: move the whole session (queue + position) to the TV. */
     private fun switchToCast() {
-        val local = localPlayer ?: return
-        val cast = castPlayer ?: return
-        val dao = castDao ?: return
-        val session = mediaSession ?: return
-        val ids = (0 until local.mediaItemCount).map { local.getMediaItemAt(it).mediaId }
-        if (ids.isEmpty()) {
-            android.util.Log.w("Cast", "no se pasa a la TV: la cola local está vacía")
-            return
-        }
-        val index = local.currentMediaItemIndex
-        val position = local.currentPosition
-        val wasPlaying = local.isPlaying
-        local.pause()
-        serviceScope.launch {
-            runCatching {
-                httpServer?.stop()
-                httpServer = com.aar.privatemusic.cast.MediaHttpServer(dao).also { it.start() }
-            }.onFailure { android.util.Log.e("Cast", "el servidor HTTP no arrancó", it) }
-            val ip = com.aar.privatemusic.cast.MediaHttpServer.localIp()
-            if (ip == null) {
-                android.util.Log.w("Cast", "no se pasa a la TV: sin IP local en la red")
+        mainScope.launch {
+            val ticket = playbackHandoff.begin()
+            val local = localPlayer ?: return@launch
+            val cast = castPlayer ?: return@launch
+            val dao = castDao ?: return@launch
+            val session = mediaSession ?: return@launch
+            val ids = (0 until local.mediaItemCount).map { local.getMediaItemAt(it).mediaId }
+            if (ids.isEmpty()) {
+                android.util.Log.w("Cast", "no se pasa a la TV: la cola local está vacía")
                 return@launch
             }
-            val base = com.aar.privatemusic.cast.CastUrls.base(
-                ip,
-                com.aar.privatemusic.cast.MediaHttpServer.PORT,
-            )
-            android.util.Log.d("Cast", "sirviendo desde $base")
-            // A partir de aquí, TODO lo que la app ponga a sonar viaja como URL:
-            // lo lee `onAddMediaItems`, que es por donde pasa cada canción y cada
-            // playlist que elijas mientras suena en la tele.
-            com.aar.privatemusic.cast.CastState.baseUrl = base
-            val items = ids.mapNotNull { id -> dao.getSong(id)?.toCastItem(base) }
-            if (items.isEmpty()) {
-                android.util.Log.w("Cast", "no se pasa a la TV: ninguna canción de la cola está en la biblioteca")
-                return@launch
-            }
-            withContext(Dispatchers.Main) {
-                // El orden importa desde Media3 1.9: `setMediaItems` construye el
-                // LOAD del receptor leyendo `playWhenReady` EN ESE INSTANTE para
-                // rellenar su `autoplay`. Si se deja para después, la TV recibe
-                // "carga pero no reproduzcas" y se queda muda: `prepare()` es un
-                // no-op en Cast y `play()` se ignora mientras el MediaStatus sea
-                // null (justo tras el load). Por eso esto va ANTES.
-                cast.playWhenReady = wasPlaying
-                cast.setMediaItems(items, index.coerceIn(0, items.size - 1), position)
+            var candidate: com.aar.privatemusic.cast.MediaHttpServer? = null
+            var previousServer: com.aar.privatemusic.cast.MediaHttpServer? = null
+            var restorePlayWhenReady: Boolean? = null
+            var commitAttempted = false
+            var committed = false
+            try {
+                candidate = com.aar.privatemusic.cast.MediaHttpServer(dao)
+                handoffServers += candidate
+                val prepared = withContext(Dispatchers.IO) {
+                    candidate.start()
+                    val ip = com.aar.privatemusic.cast.MediaHttpServer.localIp()
+                        ?: return@withContext null
+                    val base = com.aar.privatemusic.cast.CastUrls.base(
+                        ip,
+                        com.aar.privatemusic.cast.MediaHttpServer.PORT,
+                    )
+                    PreparedCast(
+                        baseUrl = base,
+                        entries = ids.map { id -> dao.getSong(id)?.toCastItem(base) },
+                    )
+                }
+                if (prepared == null) {
+                    android.util.Log.w("Cast", "no se pasa a la TV: falta la red local")
+                    return@launch
+                }
+                if (!playbackHandoff.isCurrent(ticket)) return@launch
+                val activeCastSession = castContext?.sessionManager?.currentCastSession
+                if (!cast.isCastSessionAvailable || activeCastSession == null) {
+                    android.util.Log.w("Cast", "no se pasa a la TV: la sesión Cast ya no está disponible")
+                    return@launch
+                }
+                if (session.player !== local) {
+                    android.util.Log.d("Cast", "handoff descartado: la sesión ya no usa el reproductor local")
+                    return@launch
+                }
+                val currentIds = localQueueIds(local)
+                if (currentIds != ids) {
+                    android.util.Log.d("Cast", "handoff descartado: la cola local cambió durante la preparación")
+                    return@launch
+                }
+                val index = local.currentMediaItemIndex
+                val position = local.currentPosition
+                val wasPlayWhenReady = local.playWhenReady
+                val queue = resolveHandoffQueue(prepared.entries, index)
+                if (queue == null) {
+                    android.util.Log.w("Cast", "no se pasa a la TV: la pista local actual no se resolvió")
+                    return@launch
+                }
+
+                previousServer = httpServer
+                restorePlayWhenReady = wasPlayWhenReady
+                commitAttempted = true
+                local.pause()
+                httpServer = candidate
+                // Desde aquí, toda nueva canción debe convertirse en URL Cast.
+                com.aar.privatemusic.cast.CastState.baseUrl = prepared.baseUrl
+                // Media3 reads autoplay while constructing the receiver LOAD.
+                cast.playWhenReady = wasPlayWhenReady
+                cast.setMediaItems(queue.items, queue.currentIndex, position)
                 session.player = cast
-                com.aar.privatemusic.cast.CastState.castDeviceName.value = runCatching {
-                    castContext?.sessionManager?.currentCastSession?.castDevice?.friendlyName
-                }.getOrNull() ?: "TV"
+                com.aar.privatemusic.cast.CastState.castDeviceName.value =
+                    activeCastSession.castDevice?.friendlyName ?: "TV"
+                committed = true
                 android.util.Log.d(
                     "Cast",
-                    "session moved to cast: ${items.size} items @$position playWhenReady=$wasPlaying",
+                    "session moved to cast: ${queue.items.size} items @$position " +
+                        "playWhenReady=$wasPlayWhenReady",
                 )
+
+                if (committed && previousServer !== candidate) {
+                    withContext(NonCancellable + Dispatchers.IO) {
+                        runCatching { previousServer?.stop() }
+                    }
+                    previousServer?.let(handoffServers::remove)
+                }
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                if (commitAttempted && !committed && playbackHandoff.isCurrent(ticket)) {
+                    withContext(NonCancellable + Dispatchers.Main) {
+                        rollbackCast(
+                            ticket,
+                            local,
+                            cast,
+                            session,
+                            candidate,
+                            previousServer,
+                            checkNotNull(restorePlayWhenReady),
+                        )
+                    }
+                }
+                throw cancelled
+            } catch (error: Throwable) {
+                android.util.Log.e(
+                    "Cast",
+                    if (commitAttempted) "falló el commit del handoff" else "falló la preparación del handoff",
+                    error,
+                )
+                if (commitAttempted) {
+                    rollbackCast(
+                        ticket,
+                        local,
+                        cast,
+                        session,
+                        candidate,
+                        previousServer,
+                        checkNotNull(restorePlayWhenReady),
+                    )
+                }
+            } finally {
+                if (!committed) {
+                    withContext(NonCancellable + Dispatchers.IO) {
+                        runCatching { candidate?.stop() }
+                    }
+                    candidate?.let(handoffServers::remove)
+                }
             }
         }
     }
 
     private fun switchToLocal() {
-        val local = localPlayer ?: return
-        val cast = castPlayer ?: return
-        val session = mediaSession ?: return
-        val castIds = (0 until cast.mediaItemCount).map { cast.getMediaItemAt(it).mediaId }
-        val index = cast.currentMediaItemIndex
-        val position = cast.currentPosition
-        val wasPlaying = cast.isPlaying
-        cast.stop()
-        session.player = local
-        com.aar.privatemusic.cast.CastState.baseUrl = null
-        val localIds = (0 until local.mediaItemCount).map { local.getMediaItemAt(it).mediaId }
-        val dao = castDao
-        if (castIds.isNotEmpty() && castIds != localIds && dao != null) {
-            // Si cambiaste de playlist mientras sonaba en la tele, el reproductor
-            // del móvil se quedó con la cola vieja: volver aquí sonaría a otra
-            // cosa. Se rehace con los ficheros locales de lo que estaba puesto.
-            android.util.Log.d("Cast", "la cola cambió en la tele: se rehace en local (${castIds.size})")
-            serviceScope.launch {
-                val songs = castIds.mapNotNull { dao.getSong(it) }
-                withContext(Dispatchers.Main) {
-                    if (songs.isNotEmpty()) {
-                        local.setMediaItems(
-                            songs.map { it.toPlayableItem() },
-                            index.coerceIn(0, songs.size - 1),
-                            position,
-                        )
-                        local.prepare()
-                        if (wasPlaying) local.play()
+        mainScope.launch {
+            val ticket = playbackHandoff.begin()
+            val local = localPlayer ?: return@launch
+            val cast = castPlayer ?: return@launch
+            val session = mediaSession ?: return@launch
+            val castIds = (0 until cast.mediaItemCount).map { cast.getMediaItemAt(it).mediaId }
+            val index = cast.currentMediaItemIndex
+            val position = cast.currentPosition
+            val wasPlayWhenReady = cast.playWhenReady
+            runCatching { cast.stop() }
+                .onFailure { android.util.Log.w("Cast", "no se pudo detener Cast", it) }
+            runCatching { session.player = local }
+                .onFailure { android.util.Log.e("Cast", "no se pudo devolver la sesión a local", it) }
+            com.aar.privatemusic.cast.CastState.baseUrl = null
+            com.aar.privatemusic.cast.CastState.castDeviceName.value = null
+            val server = httpServer
+            httpServer = null
+
+            val localIds = localQueueIds(local)
+            val dao = castDao
+            val queueChanged = castIds.isNotEmpty() && castIds != localIds && dao != null
+            var exposedFingerprint: LocalHandoffFingerprint? = null
+            if (!queueChanged) {
+                if (index in 0 until local.mediaItemCount) local.seekTo(index, position)
+                local.playWhenReady = wasPlayWhenReady
+            } else {
+                local.playWhenReady = false
+                exposedFingerprint = localFingerprint(local)
+            }
+
+            val resolved = try {
+                withContext(Dispatchers.IO) {
+                    runCatching { server?.stop() }
+                    if (queueChanged) {
+                        runCatching {
+                            resolveHandoffQueue(
+                                castIds.map { id -> dao?.getSong(id)?.toPlayableItem() },
+                                index,
+                            )
+                        }.onFailure {
+                            android.util.Log.e("Cast", "no se pudo resolver la cola local", it)
+                        }.getOrNull()
+                    } else {
+                        null
                     }
                 }
+            } finally {
+                server?.let(handoffServers::remove)
             }
-        } else if (local.mediaItemCount > index) {
-            local.seekTo(index, position)
+            if (!playbackHandoff.isCurrent(ticket)) return@launch
+
+            if (queueChanged) {
+                val localUntouched = session.player === local &&
+                    localFingerprint(local) == exposedFingerprint
+                if (!localUntouched) {
+                    android.util.Log.d("Cast", "resultado local descartado: el usuario cambió la reproducción")
+                } else if (resolved == null) {
+                    // Keep the previous local queue usable when the Cast item vanished.
+                    local.playWhenReady = wasPlayWhenReady
+                    android.util.Log.w(
+                        "Cast",
+                        "fallback a la cola local previa: falta la pista Cast actual",
+                    )
+                } else {
+                    android.util.Log.d("Cast", "la cola cambió en la tele: se rehace en local (${castIds.size})")
+                    local.setMediaItems(resolved.items, resolved.currentIndex, position)
+                    local.prepare()
+                    local.playWhenReady = wasPlayWhenReady
+                }
+            }
+            routeLocalOutput(local, ticket)
+            android.util.Log.d("Cast", "session back to local @$position")
         }
+    }
+
+    private fun localQueueIds(local: ExoPlayer): List<String> =
+        (0 until local.mediaItemCount).map { local.getMediaItemAt(it).mediaId }
+
+    private fun localFingerprint(local: ExoPlayer) = LocalHandoffFingerprint(
+        ids = localQueueIds(local),
+        index = local.currentMediaItemIndex,
+        position = local.currentPosition,
+        playWhenReady = local.playWhenReady,
+    )
+
+    private suspend fun rollbackCast(
+        ticket: PlaybackHandoff.Ticket,
+        local: ExoPlayer,
+        cast: androidx.media3.cast.CastPlayer,
+        session: MediaLibrarySession,
+        candidate: com.aar.privatemusic.cast.MediaHttpServer?,
+        previousServer: com.aar.privatemusic.cast.MediaHttpServer?,
+        wasPlayWhenReady: Boolean,
+    ) {
+        if (!playbackHandoff.isCurrent(ticket)) return
+        runCatching { cast.stop() }
+        runCatching { session.player = local }
+        com.aar.privatemusic.cast.CastState.baseUrl = null
+        com.aar.privatemusic.cast.CastState.castDeviceName.value = null
+        val publishedServer = httpServer
+        httpServer = null
+        runCatching { local.playWhenReady = wasPlayWhenReady }
+        withContext(NonCancellable + Dispatchers.IO) {
+            listOfNotNull(previousServer, publishedServer)
+                .filter { it !== candidate }
+                .distinct()
+                .forEach { runCatching { it.stop() } }
+        }
+        previousServer?.let(handoffServers::remove)
+        if (publishedServer !== candidate) publishedServer?.let(handoffServers::remove)
+    }
+
+    private fun routeLocalOutput(local: ExoPlayer, ticket: PlaybackHandoff.Ticket) {
+        if (!playbackHandoff.isCurrent(ticket)) return
         // While casting, Android suspends the Bluetooth A2DP link; a fresh
         // AudioTrack can then land on the loudspeaker even though the user's
         // headphones are still connected. Route explicitly to the external
@@ -269,10 +435,6 @@ class PlaybackService : MediaLibraryService() {
             local.setPreferredAudioDevice(external)
             android.util.Log.d("Cast", "local output -> ${external?.productName ?: "default"}")
         }
-        runCatching { httpServer?.stop() }
-        httpServer = null
-        com.aar.privatemusic.cast.CastState.castDeviceName.value = null
-        android.util.Log.d("Cast", "session back to local @$position")
     }
 
     /**
@@ -1081,6 +1243,17 @@ class PlaybackService : MediaLibraryService() {
     }
 
     override fun onDestroy() {
+        // Invalidate first: no suspended handoff may commit during teardown.
+        playbackHandoff.begin()
+        mainScope.cancel()
+        val servers = (handoffServers + listOfNotNull(httpServer)).distinct()
+        handoffServers.clear()
+        httpServer = null
+        kotlinx.coroutines.runBlocking {
+            withContext(Dispatchers.IO) {
+                servers.forEach { runCatching { it.stop() } }
+            }
+        }
         mediaSession?.run {
             player.release()
             release()
@@ -1091,11 +1264,9 @@ class PlaybackService : MediaLibraryService() {
         castPlayer?.release()
         castPlayer = null
         com.aar.privatemusic.cast.CastState.castDeviceName.value = null
-        runCatching { httpServer?.stop() }
-        httpServer = null
+        com.aar.privatemusic.cast.CastState.baseUrl = null
         EqHolder.release()
         serviceScope.cancel()
-        mainScope.cancel()
         super.onDestroy()
     }
 }
