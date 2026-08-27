@@ -1,12 +1,13 @@
 package com.aar.privatemusic.dj
 
 import com.aar.privatemusic.data.db.Song
+import com.aar.privatemusic.player.decideTempoMatch
 import kotlin.math.abs
 
 /**
  * El "cerebro" del AI DJ local: arma una sesión continua con una **curva de
  * energía** (arranque medio → subida → pico → bajada), dividida en **bloques**
- * de 2-4 canciones por idea, encadenadas dentro de cada bloque por cercanía de
+ * encadenadas dentro de cada bloque por cercanía de
  * tonalidad (Camelot) y BPM para que el AutoMix mezcle limpio. Mezcla lo
  * conocido (favoritas / muy escuchadas) con el descubrimiento (nunca sonadas)
  * y nunca pone más de dos seguidas del mismo artista.
@@ -32,6 +33,7 @@ object DjEngine {
     ) {
         /** El bloque al que pertenece la canción en la posición [index] de la cola. */
         fun blockAt(index: Int): Block? {
+            if (index !in tracks.indices) return null
             var acc = 0
             for (b in blocks) {
                 if (index < acc + b.songs.size) return b
@@ -48,6 +50,33 @@ object DjEngine {
                 acc += b.songs.size
             }
             return false
+        }
+
+        /**
+         * Sustituye todo lo posterior a [currentIndex] por [rest]. Un índice
+         * fuera de la sesión no cambia nada; una lista vacía trunca el futuro.
+         */
+        fun replaceFuture(
+            currentIndex: Int,
+            rest: List<Song>,
+            kind: BlockKind = BlockKind.BUILD,
+            targetEnergy: Float = 0.6f,
+        ): Session {
+            if (currentIndex !in tracks.indices) return this
+
+            val keptCount = currentIndex + 1
+            var remaining = keptCount
+            val newBlocks = mutableListOf<Block>()
+            for (block in blocks) {
+                if (remaining <= 0) break
+                val keptSongs = block.songs.take(remaining)
+                if (keptSongs.isNotEmpty()) newBlocks.add(block.copy(songs = keptSongs))
+                remaining -= keptSongs.size
+            }
+            if (rest.isNotEmpty()) newBlocks.add(Block(kind, rest, targetEnergy))
+
+            val newTracks = tracks.take(keptCount) + rest
+            return Session(newTracks, newBlocks)
         }
     }
 
@@ -86,21 +115,31 @@ object DjEngine {
         }
     }
 
-    private fun transitionCost(a: Song, b: Song): Float {
+    private fun transitionCost(a: Song, b: Song, maxStretch: Float): Float {
         val key = camelotDistance(a.camelot, b.camelot).toFloat()
-        val bpmA = a.bpm; val bpmB = b.bpm
-        val bpm = if (bpmA != null && bpmB != null) abs(bpmA - bpmB) / 8f else 1.5f
+        val decision = decideTempoMatch(a.bpm, b.bpm, maxStretch)
+        val requiredStretch = abs(decision.requiredRatio - 1f)
+        val stretch = when {
+            decision.comparableTargetBpm == null -> 1.5f
+            maxStretch > 0f -> requiredStretch / maxStretch
+            requiredStretch == 0f -> 0f
+            else -> 4f
+        }
+        val residual = (decision.residualErrorPct ?: 0f) / 3f
+        val rejected = if (decision.discardedReason != null && requiredStretch > 0f) 2f else 0f
+        val bpm = stretch + residual + rejected
         return key + bpm
     }
 
     /** Orden "de DJ" dentro de un bloque: cada canción sigue a la más cercana. */
-    fun sonicOrder(songs: List<Song>): List<Song> {
+    fun sonicOrder(songs: List<Song>, maxStretch: Float = 0.20f): List<Song> {
         if (songs.size < 3) return songs
+        val safeMaxStretch = maxStretch.takeIf { it.isFinite() && it >= 0f } ?: 0.20f
         val remaining = songs.toMutableList()
         val ordered = mutableListOf(remaining.removeAt(0))
         while (remaining.isNotEmpty()) {
             val last = ordered.last()
-            val next = remaining.minByOrNull { transitionCost(last, it) }!!
+            val next = remaining.minByOrNull { transitionCost(last, it, safeMaxStretch) }!!
             remaining.remove(next)
             ordered.add(next)
         }
@@ -119,8 +158,9 @@ object DjEngine {
         seed: Long,
         size: Int = 24,
     ): Session {
-        val pool = candidates.filter { it.durationSec > 0 }
-        if (pool.isEmpty()) return Session(emptyList(), emptyList())
+        val pool = candidates.filter { it.durationSec > 0 }.distinctBy { it.id }
+        val requested = size.coerceAtLeast(0).coerceAtMost(pool.size)
+        if (requested == 0) return Session(emptyList(), emptyList())
         val rng = DeterministicRng(seed)
 
         // Curva de energía por bloque: medio → sube → pico → baja.
@@ -131,7 +171,8 @@ object DjEngine {
             BlockKind.BUILD to 0.70f,
             BlockKind.COOLDOWN to 0.35f,
         )
-        val perBlock = (size / plan.size).coerceIn(2, 4)
+        val basePerBlock = requested / plan.size
+        val extraBlocks = requested % plan.size
 
         val used = HashSet<String>()
         val known = pool.filter { favoriteIds.contains(it.id) || (playCounts[it.id] ?: 0) >= 3 }.toMutableList()
@@ -140,13 +181,16 @@ object DjEngine {
         fresh.shuffleWith(rng)
 
         val blocks = mutableListOf<Block>()
-        for ((kind, target) in plan) {
+        for ((planIndex, item) in plan.withIndex()) {
+            val (kind, target) = item
+            val blockSize = basePerBlock + if (planIndex < extraBlocks) 1 else 0
+            if (blockSize == 0) continue
             // Cada bloque intenta cuadrar con su energía objetivo, alternando
             // canciones conocidas y descubrimientos, sin repetir.
             val bucket = mutableListOf<Song>()
             var wantFresh = kind == BlockKind.BUILD || kind == BlockKind.WARMUP
             var guard = 0
-            while (bucket.size < perBlock && guard++ < pool.size * 2) {
+            while (bucket.size < blockSize && guard++ < pool.size * 2) {
                 val from = if (wantFresh && fresh.any { it.id !in used }) fresh else known
                 val tail = bucket.takeLast(2).map { it.artist.lowercase() }
                 val cand = nearestEnergy(from, target, used, tail)
@@ -157,12 +201,17 @@ object DjEngine {
                 wantFresh = !wantFresh
             }
             if (bucket.isEmpty()) continue
-            blocks.add(Block(kind, noTripleArtist(sonicOrder(bucket)), target))
+            blocks.add(Block(kind, sonicOrder(bucket), target))
         }
 
-        // Aplana respetando "máx. 2 seguidas del mismo artista" en las costuras.
-        val tracks = blocks.flatMap { it.songs }
-        return Session(tracks, blocks)
+        // Reordena dentro de cada bloque, teniendo en cuenta la costura anterior.
+        val orderedTracks = mutableListOf<Song>()
+        val alignedBlocks = blocks.map { block ->
+            val songs = noTripleArtist(block.songs, orderedTracks.takeLast(2))
+            orderedTracks.addAll(songs)
+            block.copy(songs = songs)
+        }
+        return Session(orderedTracks, alignedBlocks)
     }
 
     private fun nearestEnergy(
@@ -172,16 +221,16 @@ object DjEngine {
         .filter { avoidArtists.size < 2 || avoidArtists.any { a -> a != it.artist.lowercase() } }
         .minByOrNull { abs(energyOf(it) - target) }
 
-    /** Evita tres seguidas del mismo artista dentro de un bloque. */
-    private fun noTripleArtist(songs: List<Song>): List<Song> {
-        val out = mutableListOf<Song>()
+    /** Evita tres seguidas del mismo artista siempre que quede una alternativa. */
+    private fun noTripleArtist(songs: List<Song>, prefix: List<Song> = emptyList()): List<Song> {
+        val out = prefix.takeLast(2).toMutableList()
         val rest = songs.toMutableList()
         while (rest.isNotEmpty()) {
             val lastTwo = out.takeLast(2).map { it.artist.lowercase() }
             val idx = rest.indexOfFirst { c -> lastTwo.size < 2 || lastTwo.any { it != c.artist.lowercase() } }
             out.add(rest.removeAt(if (idx >= 0) idx else 0))
         }
-        return out
+        return out.drop(prefix.takeLast(2).size)
     }
 }
 
