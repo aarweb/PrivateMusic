@@ -4,8 +4,8 @@ import android.media.MediaCodec
 import android.media.MediaCodecList
 import android.media.MediaExtractor
 import android.media.MediaFormat
-import kotlin.math.log10
-import kotlin.math.sqrt
+import com.aar.privatemusic.dsp.PcmRmsAccumulator
+import java.nio.ByteOrder
 
 /**
  * Decodes an audio file to PCM and measures its RMS loudness in dBFS.
@@ -39,8 +39,11 @@ object LoudnessScanner {
             codec.configure(format, null, null, 0)
             codec.start()
 
-            var sumSquares = 0.0
-            var sampleCount = 0L
+            val accumulator = PcmRmsAccumulator()
+            var channelCount = runCatching {
+                format.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
+            }.getOrDefault(0)
+            var pcmSamples = ShortArray(0)
             var inputDone = false
             var outputDone = false
             val info = MediaCodec.BufferInfo()
@@ -62,25 +65,38 @@ object LoudnessScanner {
                 }
                 val outIndex = codec.dequeueOutputBuffer(info, 10_000)
                 if (outIndex >= 0) {
-                    val out = codec.getOutputBuffer(outIndex)!!
-                    val shortBuf = out.order(java.nio.ByteOrder.LITTLE_ENDIAN).asShortBuffer()
-                    // Subsample: every 4th sample is plenty for an RMS estimate.
-                    var i = 0
-                    while (i < shortBuf.limit()) {
-                        val s = shortBuf.get(i) / 32768.0
-                        sumSquares += s * s
-                        sampleCount++
-                        i += 4
+                    val out = codec.getOutputBuffer(outIndex)
+                    if (out != null && info.size > 0 && channelCount > 0) {
+                        val visibleLimit = out.limit().coerceIn(0, out.capacity())
+                        val start = info.offset.coerceIn(0, visibleLimit)
+                        val requestedEnd = info.offset.toLong() + info.size.toLong()
+                        val end = requestedEnd.coerceIn(start.toLong(), visibleLimit.toLong()).toInt()
+                        val sampleLength = (end - start) / Short.SIZE_BYTES
+                        if (sampleLength > 0) {
+                            if (pcmSamples.size < sampleLength) pcmSamples = ShortArray(sampleLength)
+                            val pcm = out.duplicate().order(ByteOrder.LITTLE_ENDIAN).apply {
+                                position(start)
+                                limit(end)
+                            }.asShortBuffer()
+                            pcm.get(pcmSamples, 0, sampleLength)
+                            accumulator.add(
+                                samples = pcmSamples,
+                                length = sampleLength,
+                                channelCount = channelCount,
+                                frameStride = 4,
+                            )
+                        }
                     }
                     codec.releaseOutputBuffer(outIndex, false)
                     if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) outputDone = true
+                } else if (outIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                    channelCount = runCatching {
+                        codec.outputFormat.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
+                    }.getOrDefault(channelCount)
                 }
             }
 
-            if (sampleCount == 0L) return null
-            val rms = sqrt(sumSquares / sampleCount)
-            if (rms <= 0.0) return null
-            return (20.0 * log10(rms)).toFloat()
+            return accumulator.rmsDb()
         } catch (e: Exception) {
             return null
         } finally {

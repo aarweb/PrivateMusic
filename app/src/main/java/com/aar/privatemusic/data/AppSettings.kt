@@ -428,6 +428,6 @@ class AppSettings(context: Context) {
                 .edit().putString("normalize_mode", mode).apply()
 
         /** Spotify-style target loudness; louder tracks are attenuated down to it. */
-        const val TARGET_LOUDNESS_DB = -14f
+        const val TARGET_LOUDNESS_DB = com.aar.privatemusic.player.PlaybackGain.TARGET_LOUDNESS_DB
     }
 }
