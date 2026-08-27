@@ -48,6 +48,7 @@ import androidx.compose.ui.unit.dp
 import com.aar.privatemusic.PrivateMusicApp
 import com.aar.privatemusic.data.db.Song
 import com.aar.privatemusic.ui.components.ArtImage
+import com.aar.privatemusic.ui.components.SongOverflowMenu
 import kotlinx.coroutines.launch
 import java.io.File
 import java.util.Calendar
@@ -277,6 +278,7 @@ fun HomeScreen(
             ) {
                 items(recent, key = { it.id }) { song ->
                     SongCard(
+                        app = app,
                         song = song,
                         highlighted = song.id == nowPlaying?.songId,
                         onClick = {
@@ -303,6 +305,7 @@ fun HomeScreen(
             ) {
                 items(freshest, key = { it.id }) { song ->
                     SongCard(
+                        app = app,
                         song = song,
                         highlighted = song.id == nowPlaying?.songId,
                         onClick = {
@@ -418,7 +421,12 @@ private fun HomeSection(title: String) {
 }
 
 @Composable
-private fun SongCard(song: Song, highlighted: Boolean, onClick: () -> Unit) {
+private fun SongCard(
+    app: PrivateMusicApp,
+    song: Song,
+    highlighted: Boolean,
+    onClick: () -> Unit,
+) {
     Column(
         Modifier
             .width(132.dp)
@@ -449,6 +457,9 @@ private fun SongCard(song: Song, highlighted: Boolean, onClick: () -> Unit) {
                         modifier = Modifier.size(40.dp),
                     )
                 }
+            }
+            Box(Modifier.align(Alignment.TopEnd)) {
+                SongOverflowMenu(app, song)
             }
         }
         Text(

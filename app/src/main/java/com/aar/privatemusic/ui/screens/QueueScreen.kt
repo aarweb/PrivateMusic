@@ -33,6 +33,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.aar.privatemusic.PrivateMusicApp
 import com.aar.privatemusic.ui.components.ArtImage
+import com.aar.privatemusic.ui.components.SongOverflowMenu
 import sh.calvin.reorderable.ReorderableItem
 import sh.calvin.reorderable.rememberReorderableLazyListState
 import java.io.File
@@ -42,6 +43,10 @@ fun QueueScreen(app: PrivateMusicApp, onBack: () -> Unit, onOpenSavedQueues: () 
     val controller = app.playerController
     val queue by controller.queue.collectAsState()
     val currentIndex by controller.currentIndex.collectAsState()
+    val librarySongs by app.repository.observeSongs().collectAsState(initial = emptyList())
+    val librarySongsById = androidx.compose.runtime.remember(librarySongs) {
+        librarySongs.associateBy { it.id }
+    }
 
     val lazyListState = rememberLazyListState()
     val reorderableState = rememberReorderableLazyListState(lazyListState) { from, to ->
@@ -195,6 +200,9 @@ fun QueueScreen(app: PrivateMusicApp, onBack: () -> Unit, onOpenSavedQueues: () 
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
+                            }
+                            librarySongsById[item.mediaId]?.let { song ->
+                                SongOverflowMenu(app, song)
                             }
                             IconButton(onClick = { controller.removeQueueItem(index) }) {
                                 Icon(Icons.Filled.Close, contentDescription = "Quitar de la cola")

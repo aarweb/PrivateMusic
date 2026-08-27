@@ -19,12 +19,15 @@ import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.MusicNote
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -34,19 +37,24 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
+import com.aar.privatemusic.PrivateMusicApp
 import com.aar.privatemusic.data.db.Playlist
 import com.aar.privatemusic.data.db.Song
 import com.aar.privatemusic.player.PlayerController
 import java.io.File
+import kotlinx.coroutines.launch
 
 fun formatDuration(totalSec: Int): String {
     val m = totalSec / 60
@@ -144,6 +152,133 @@ fun EmptyState(text: String, modifier: Modifier = Modifier) {
     }
 }
 
+@Composable
+fun SongOverflowMenu(app: PrivateMusicApp, song: Song) {
+    var expanded by remember(song.id) { mutableStateOf(false) }
+    val manualDownloadIds by app.videoAuto.manualDownloadIds.collectAsState()
+    val canvasActive = song.id in manualDownloadIds
+    val hasCanvas = song.videoPath?.let(::File)?.let { file ->
+        runCatching { file.isFile && file.canRead() && file.length() > 0L }.getOrDefault(false)
+    } == true
+    val isSnoozed = song.snoozedUntil > System.currentTimeMillis()
+
+    androidx.compose.foundation.layout.Box {
+        IconButton(onClick = { expanded = true }) {
+            Icon(Icons.Filled.MoreVert, contentDescription = "Opciones de ${song.title}")
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            DropdownMenuItem(
+                text = { Text("Radio de esta canción") },
+                onClick = {
+                    expanded = false
+                    app.appScope.launch {
+                        val radio = app.repository.radioFor(song)
+                        app.playerController.playQueue(
+                            if (radio.size > 1) radio else listOf(song),
+                            0,
+                        )
+                    }
+                },
+            )
+            DropdownMenuItem(
+                text = { Text("Reproducir a continuación") },
+                onClick = {
+                    expanded = false
+                    app.playerController.playNext(song)
+                    com.aar.privatemusic.util.Feedback.show("Sonará a continuación")
+                },
+            )
+            DropdownMenuItem(
+                text = { Text("Añadir a la cola") },
+                onClick = {
+                    expanded = false
+                    app.playerController.addToQueue(song)
+                    com.aar.privatemusic.util.Feedback.show("Añadida a la cola")
+                },
+            )
+            DropdownMenuItem(
+                text = { Text(if (song.isFavorite) "Quitar de favoritas" else "Añadir a favoritas") },
+                onClick = {
+                    expanded = false
+                    app.appScope.launch {
+                        app.repository.setFavorite(song.id, !song.isFavorite)
+                    }
+                },
+            )
+            DropdownMenuItem(
+                text = {
+                    Text(
+                        if (isSnoozed) "Volver a sugerir en mixes"
+                        else "No sugerir en mixes (30 días)"
+                    )
+                },
+                onClick = {
+                    expanded = false
+                    app.appScope.launch {
+                        if (isSnoozed) {
+                            app.repository.unsnoozeSong(song.id)
+                            com.aar.privatemusic.util.Feedback.show("Volverá a aparecer en tus mixes")
+                        } else {
+                            app.repository.snoozeSong(song.id)
+                            com.aar.privatemusic.util.Feedback.show("No se sugerirá durante 30 días")
+                        }
+                    }
+                },
+            )
+            DropdownMenuItem(
+                text = {
+                    Text(
+                        when {
+                            canvasActive -> "Descargando Canvas…"
+                            hasCanvas -> "Reemplazar Canvas desde YouTube"
+                            else -> "Descargar Canvas desde YouTube"
+                        }
+                    )
+                },
+                enabled = !canvasActive,
+                onClick = {
+                    expanded = false
+                    val replacing = hasCanvas
+                    com.aar.privatemusic.util.Feedback.show(
+                        if (replacing) "Reemplazando Canvas…" else "Descargando Canvas…"
+                    )
+                    app.appScope.launch {
+                        val ok = app.videoAuto.downloadOrReplace(song)
+                        com.aar.privatemusic.util.Feedback.show(
+                            when {
+                                ok && replacing -> "Canvas reemplazado"
+                                ok -> "Canvas descargado"
+                                replacing -> "No se pudo reemplazar el Canvas"
+                                else -> "No se pudo descargar el Canvas"
+                            }
+                        )
+                    }
+                },
+            )
+            if (hasCanvas) {
+                DropdownMenuItem(
+                    text = { Text("Borrar Canvas") },
+                    enabled = !canvasActive,
+                    onClick = {
+                        expanded = false
+                        app.appScope.launch {
+                            runCatching { app.repository.clearSongVideo(song) }
+                                .onSuccess {
+                                    com.aar.privatemusic.util.Feedback.show("Canvas borrado")
+                                }
+                                .onFailure {
+                                    com.aar.privatemusic.util.Feedback.show(
+                                        "No se pudo borrar el Canvas"
+                                    )
+                                }
+                        }
+                    },
+                )
+            }
+        }
+    }
+}
+
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun SongRow(
@@ -154,7 +289,7 @@ fun SongRow(
     selected: Boolean = false,
     onLongClick: (() -> Unit)? = null,
     onSwipeToQueue: (() -> Unit)? = null,
-    trailing: @Composable () -> Unit = {},
+    trailing: (@Composable () -> Unit)? = null,
 ) {
     // Deslizar hacia la derecha encola la canción. La fila NO se va: vuelve a su
     // sitio (confirmValueChange devuelve false), porque encolar no la quita de
@@ -212,7 +347,7 @@ private fun SongRowContent(
     selectionMode: Boolean,
     selected: Boolean,
     onLongClick: (() -> Unit)?,
-    trailing: @Composable () -> Unit,
+    trailing: (@Composable () -> Unit)?,
 ) {
     Row(
         modifier = Modifier
@@ -275,7 +410,14 @@ private fun SongRowContent(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        if (!selectionMode) trailing()
+        if (!selectionMode) {
+            if (trailing != null) {
+                trailing()
+            } else {
+                val app = LocalContext.current.applicationContext as PrivateMusicApp
+                SongOverflowMenu(app, song)
+            }
+        }
     }
 }
 
