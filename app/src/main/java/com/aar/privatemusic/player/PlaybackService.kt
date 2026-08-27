@@ -501,13 +501,9 @@ class PlaybackService : MediaLibraryService() {
                                 val ba = dao.getBpm(curId)
                                 val bb = dao.getBpm(nextId)
                                 val ts = dao.getTailSilence(curId) ?: 0L
-                                val r = chooseTempoRatio(ba, bb, maxStretch)
-                                // Sin recortar: es lo que hace falta de verdad para
-                                // igualar, y sin ello no se puede distinguir "cuadra"
-                                // de "se ha quedado en el tope".
-                                val rawR = chooseTempoRatio(ba, bb, 10f)
-                                MixInfoHolder.publish(MixInfo(ba, bb, rawR, r, autoMix))
-                                Triple(listOf(la, lb, rga, rgb), r, ts)
+                                val decision = decideTempoMatch(ba, bb, maxStretch)
+                                MixInfoHolder.publish(MixInfo(ba, bb, decision, autoMix))
+                                Triple(listOf(la, lb, rga, rgb), decision.appliedRatio, ts)
                             }.getOrDefault(Triple(listOf<Float?>(null, null, null, null), 1f, 0L))
                         }
                         if (player.currentMediaItem?.mediaId == curId) {
@@ -530,7 +526,7 @@ class PlaybackService : MediaLibraryService() {
                             val mix = MixInfoHolder.info.value
                             android.util.Log.d(
                                 "Crossfade",
-                                "pre-armed at $armedAtPos ratio=$ratio rawRatio=${mix?.rawRatio} " +
+                                "pre-armed at $armedAtPos ratio=$ratio requiredRatio=${mix?.requiredRatio} " +
                                     "autoMix=$autoMix bpm=${mix?.bpmOut}->${mix?.bpmIn} " +
                                     "tailSilenceMs=$tailSilence",
                             )
@@ -570,8 +566,6 @@ class PlaybackService : MediaLibraryService() {
                                 prep += 20
                             }
                         }
-                        val pos = player.currentPosition
-                        val fadeLen = (effDur - pos).coerceIn(500L, crossfadeMs)
                         xfGainA = armedGainA
                         xfMainId = armedNextId
                         // Re-sync: the main player is 0-200ms ahead of the armed
@@ -719,17 +713,40 @@ class PlaybackService : MediaLibraryService() {
                             delay(100)
                             continue
                         }
+                        // El warm-up y el relevo A->tail consumen contenido. Medir
+                        // antes de ellos dejaba un fade obsoleto que sobrevivía al
+                        // final musical real. Se toma AHORA la posición del tail,
+                        // se mantiene el máximo configurado y no se inventa un
+                        // mínimo si el contenido ya se ha agotado.
+                        val remainingContentMs = (armedEffDur - tail.currentPosition)
+                            .coerceAtMost(crossfadeMs)
+                        if (remainingContentMs < 500L) {
+                            tail.stop()
+                            tail.clearMediaItems()
+                            tail.setPlaybackSpeed(1f)
+                            armedForId = null
+                            skipXfForId = curId
+                            player.volume = gainFactor * fade
+                            touchedVolume = true
+                            android.util.Log.d(
+                                "Crossfade",
+                                "overlap cancelado: contenido restante insuficiente (${remainingContentMs}ms)",
+                            )
+                            delay(100)
+                            continue
+                        }
+                        val wallFadeLen = contentDurationToWallMs(remainingContentMs, speed)
                         tail.volume = xfGainA * fade
                         player.volume = 0f
                         player.seekToNextMediaItem()
                         gainFactor = armedGainB
                         gainForId = armedNextId
-                        xfDurationMs = fadeLen
-                        xfEndsAt = android.os.SystemClock.elapsedRealtime() + fadeLen
+                        xfDurationMs = wallFadeLen
+                        xfEndsAt = android.os.SystemClock.elapsedRealtime() + wallFadeLen
                         armedForId = null
                         android.util.Log.d(
                             "Crossfade",
-                            "overlap start durMs=$fadeLen gainA=$xfGainA gainB=$gainFactor armed=$armedReady waitedMs=$waited driftMs=$drift",
+                            "overlap start contentMs=$remainingContentMs wallMs=$wallFadeLen gainA=$xfGainA gainB=$gainFactor armed=$armedReady waitedMs=$waited driftMs=$drift",
                         )
                         touchedVolume = true
                         delay(100)
