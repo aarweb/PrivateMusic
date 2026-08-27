@@ -9,6 +9,7 @@ import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.session.LibraryResult
@@ -44,6 +45,10 @@ class PlaybackService : MediaLibraryService() {
 
     /** ¿Suena algo ahora mismo? Lo usa el bucle de volumen para dormirse. */
     private val playing = kotlinx.coroutines.flow.MutableStateFlow(false)
+    private val playbackErrorRecovery = PlaybackErrorRecovery()
+    private var recoveringPlaybackError = false
+    private var pendingPlaybackError: PlaybackException? = null
+    private var crossfadeResetGeneration = 0L
 
     override fun onCreate() {
         super.onCreate()
@@ -100,7 +105,7 @@ class PlaybackService : MediaLibraryService() {
             }
         })
         player.addListener(object : Player.Listener {
-            override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+            override fun onPlayerError(error: PlaybackException) {
                 // Stream previews use signed URLs that expire; a dead preview item
                 // would otherwise fail silently forever from the notification.
                 if (player.currentMediaItem?.mediaId?.startsWith("preview:") == true) {
@@ -108,19 +113,37 @@ class PlaybackService : MediaLibraryService() {
                     android.util.Log.w("Playback", "player error", error)
                     return
                 }
-                android.util.Log.w("Playback", "player error", error)
-                // Media3 1.5: al cambiar el tempo a mitad de canción (tempo manual,
-                // AutoMix, modo correr) el sink vacía la cadena de procesadores y
-                // `Sonic.queueEndOfStream` puede lanzar ArrayIndexOutOfBounds. El
-                // reproductor se queda en ERROR con la cola intacta: se vuelve a
-                // preparar y se sigue donde iba, con los parámetros nuevos ya puestos.
-                if (error.cause is ArrayIndexOutOfBoundsException && player.mediaItemCount > 0) {
-                    val index = player.currentMediaItemIndex
-                    val position = player.currentPosition
-                    android.util.Log.w("Playback", "recovering from audio processor error at $index/$position")
-                    player.prepare()
-                    player.seekTo(index, position)
-                    player.play()
+                if (recoveringPlaybackError) {
+                    android.util.Log.w(
+                        "Playback",
+                        "queued reentrant player error code=${error.errorCode}",
+                        error,
+                    )
+                    pendingPlaybackError = error
+                    return
+                }
+                recoveringPlaybackError = true
+                try {
+                    val maxErrors = maxOf(2, player.mediaItemCount + 2)
+                    var currentError = error
+                    var processed = 0
+                    while (true) {
+                        pendingPlaybackError = null
+                        recoverLocalPlaybackError(player, currentError)
+                        processed++
+                        val pending = pendingPlaybackError ?: break
+                        if (processed >= maxErrors) {
+                            pendingPlaybackError = null
+                            stopLocalAfterRecoveryDrainExceeded(player, pending, processed)
+                            // stop() may itself synchronously report another error.
+                            pendingPlaybackError = null
+                            break
+                        }
+                        currentError = pending
+                    }
+                } finally {
+                    pendingPlaybackError = null
+                    recoveringPlaybackError = false
                 }
             }
 
@@ -156,6 +179,138 @@ class PlaybackService : MediaLibraryService() {
     private var castDao: MusicDao? = null
     private val playbackHandoff = PlaybackHandoff()
     private val handoffServers = mutableSetOf<com.aar.privatemusic.cast.MediaHttpServer>()
+
+    private fun recoverLocalPlaybackError(player: ExoPlayer, error: PlaybackException) {
+        val trackId = player.currentMediaItem?.mediaId
+        val errorCode = error.errorCode
+        android.util.Log.w(
+            "Playback",
+            "player error code=$errorCode track=$trackId",
+            error,
+        )
+
+        // This listener belongs to the local ExoPlayer. Never move its stale, silent queue while
+        // the MediaSession is exposing Cast.
+        if (mediaSession?.player !== player) {
+            invalidateCrossfadeForRecovery()
+            player.playWhenReady = false
+            player.stop()
+            android.util.Log.w(
+                "Playback",
+                "action=STOP_LOCAL_INACTIVE code=$errorCode track=$trackId",
+            )
+            return
+        }
+
+        // Player callbacks are delivered on Main, so snapshot all mutable player state here before
+        // applying the owner-thread-only policy.
+        val queueIds = localQueueIds(player)
+        val currentIndex = player.currentMediaItemIndex
+        val position = player.currentPosition.coerceAtLeast(0L)
+        val wasPlayWhenReady = player.playWhenReady
+        val errorType = playbackErrorType(errorCode)
+        val action = playbackErrorRecovery.onError(
+            PlaybackErrorRecovery.Event(
+                trackId = trackId,
+                type = errorType,
+                queueIds = queueIds,
+                currentIndex = currentIndex,
+                allowWrap = player.repeatMode == Player.REPEAT_MODE_ALL,
+            ),
+        )
+
+        // Invalidate both the physical tail and volumeLoop's coroutine-local state before any
+        // player operation can synchronously emit another error.
+        invalidateCrossfadeForRecovery()
+
+        when (action) {
+            PlaybackErrorRecovery.Action.RETRY_CURRENT -> {
+                android.util.Log.w(
+                    "Playback",
+                    "action=RETRY_CURRENT code=$errorCode type=$errorType track=$trackId " +
+                        "index=$currentIndex position=$position",
+                )
+                player.seekTo(currentIndex, position)
+                player.prepare()
+                player.playWhenReady = wasPlayWhenReady
+            }
+
+            is PlaybackErrorRecovery.Action.SKIP_TO -> {
+                android.util.Log.w(
+                    "Playback",
+                    "action=SKIP_TO index=${action.index} code=$errorCode " +
+                        "type=$errorType track=$trackId",
+                )
+                player.seekTo(action.index, 0L)
+                player.prepare()
+                player.playWhenReady = wasPlayWhenReady
+            }
+
+            PlaybackErrorRecovery.Action.STOP -> {
+                android.util.Log.w(
+                    "Playback",
+                    "action=STOP code=$errorCode type=$errorType track=$trackId",
+                )
+                player.playWhenReady = false
+                player.stop()
+            }
+        }
+    }
+
+    private fun stopLocalAfterRecoveryDrainExceeded(
+        player: ExoPlayer,
+        error: PlaybackException,
+        processed: Int,
+    ) {
+        val trackId = player.currentMediaItem?.mediaId
+        invalidateCrossfadeForRecovery()
+        player.playWhenReady = false
+        player.stop()
+        android.util.Log.e(
+            "Playback",
+            "action=STOP_RECOVERY_LIMIT processed=$processed code=${error.errorCode} " +
+                "track=$trackId localActive=${mediaSession?.player === player}",
+            error,
+        )
+    }
+
+    private fun playbackErrorType(errorCode: Int): PlaybackErrorRecovery.ErrorType =
+        when (errorCode) {
+            PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND,
+            PlaybackException.ERROR_CODE_IO_NO_PERMISSION,
+            PlaybackException.ERROR_CODE_IO_READ_POSITION_OUT_OF_RANGE,
+            PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED,
+            PlaybackException.ERROR_CODE_PARSING_MANIFEST_MALFORMED,
+            PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED,
+            PlaybackException.ERROR_CODE_PARSING_MANIFEST_UNSUPPORTED,
+            PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES,
+            PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED,
+            PlaybackException.ERROR_CODE_DRM_SCHEME_UNSUPPORTED,
+            PlaybackException.ERROR_CODE_DRM_CONTENT_ERROR,
+            PlaybackException.ERROR_CODE_DRM_LICENSE_EXPIRED,
+            -> PlaybackErrorRecovery.ErrorType.PERMANENT
+
+            else -> PlaybackErrorRecovery.ErrorType.TRANSIENT
+        }
+
+    private fun clearTailCrossfadeForRecovery() {
+        tailPlayer?.let {
+            it.volume = 0f
+            it.stop()
+            it.clearMediaItems()
+            it.setPlaybackSpeed(1f)
+        }
+        tailAudioAdvancing = false
+    }
+
+    private fun invalidateCrossfadeForRecovery() {
+        clearTailCrossfadeForRecovery()
+        crossfadeResetGeneration = if (crossfadeResetGeneration == Long.MAX_VALUE) {
+            Long.MIN_VALUE
+        } else {
+            crossfadeResetGeneration + 1L
+        }
+    }
 
     private data class PreparedCast(
         val baseUrl: String,
@@ -511,6 +666,7 @@ class PlaybackService : MediaLibraryService() {
             // the crossfade for THAT track: gapless is better than replaying A.
             var skipXfForId: String? = null
             val lifecycle = CrossfadeLifecycle()
+            var observedCrossfadeResetGeneration = crossfadeResetGeneration
 
             fun currentGainConfig(trackId: String? = player.currentMediaItem?.mediaId) =
                 PlaybackGain.configKey(
@@ -564,6 +720,8 @@ class PlaybackService : MediaLibraryService() {
                     it.setPlaybackSpeed(1f)
                 }
                 xfEndsAt = 0L
+                xfDurationMs = 1L
+                xfGainA = 1f
                 xfMainId = null
                 armedForId = null
                 armedAtPos = 0L
@@ -573,8 +731,22 @@ class PlaybackService : MediaLibraryService() {
                 armedRatio = 1f
                 armedEffDur = 0L
                 clearArmedNormalization()
+                tailAudioAdvancing = false
                 player.volume = gain * fade
                 touchedVolume = true
+            }
+
+            fun applyCrossfadeResetIfNeeded(fade: Float, gain: Float): Boolean {
+                val requestedGeneration = crossfadeResetGeneration
+                if (requestedGeneration == observedCrossfadeResetGeneration) return false
+                observedCrossfadeResetGeneration = requestedGeneration
+                clearCrossfadeOperation(fade, gain)
+                lifecycle.reset()
+                android.util.Log.d(
+                    "Crossfade",
+                    "recovery reset generation=$requestedGeneration",
+                )
+                return true
             }
 
             fun acceptOrRecover(
@@ -621,6 +793,7 @@ class PlaybackService : MediaLibraryService() {
             var maxStretch = 0.10f
 
             while (isActive) {
+                applyCrossfadeResetIfNeeded(SleepFade.level, gainFactor)
                 val observedId = player.currentMediaItem?.mediaId
                 if (lifecycle.phase == CrossfadeLifecycle.Phase.CANCELLED &&
                     observedId != lifecycle.trackId
@@ -715,6 +888,11 @@ class PlaybackService : MediaLibraryService() {
                         }
                     }
                 }
+
+                // The Room lookup above suspends on IO. A player error can be recovered on Main
+                // while it is in flight, so observe the reset again before driving any crossfade
+                // state or volume curve with the old coroutine-local snapshot.
+                if (applyCrossfadeResetIfNeeded(SleepFade.level, gainFactor)) continue
 
                 if (crossfadeMs == 0L &&
                     lifecycle.phase != CrossfadeLifecycle.Phase.IDLE &&
@@ -844,6 +1022,7 @@ class PlaybackService : MediaLibraryService() {
                                 Triple(listOf(la, lb, rga, rgb), decision.appliedRatio, ts)
                             }
                         }
+                        if (applyCrossfadeResetIfNeeded(fade, gainFactor)) continue
                         val observedNextId = currentNextId()
                         val observedConfig = currentGainConfig(curId)
                         if (player.currentMediaItem?.mediaId != curId ||
@@ -961,7 +1140,9 @@ class PlaybackService : MediaLibraryService() {
                             while (tail.playbackState != Player.STATE_READY && prep < 1200) {
                                 delay(20)
                                 prep += 20
+                                if (crossfadeResetGeneration != observedCrossfadeResetGeneration) break
                             }
+                            if (applyCrossfadeResetIfNeeded(fade, gainFactor)) continue
                             if (tail.playbackState != Player.STATE_READY) {
                                 skipXfForId = curId
                                 cancelCrossfade(
@@ -986,8 +1167,10 @@ class PlaybackService : MediaLibraryService() {
                             while (tail.playbackState != Player.STATE_READY && resync < 500) {
                                 delay(20)
                                 resync += 20
+                                if (crossfadeResetGeneration != observedCrossfadeResetGeneration) break
                             }
                         }
+                        if (applyCrossfadeResetIfNeeded(fade, gainFactor)) continue
                         // Spin the tail up MUTED: its AudioTrack takes 100-800ms
                         // (longer with the AutoMix tempo bend: Sonic lengthens the
                         // pipeline) to actually push samples, and during that
@@ -1020,11 +1203,14 @@ class PlaybackService : MediaLibraryService() {
                         while (!tailAudioAdvancing && waited < warmupCap) {
                             delay(20)
                             waited += 20
+                            if (crossfadeResetGeneration != observedCrossfadeResetGeneration) break
                         }
+                        if (applyCrossfadeResetIfNeeded(fade, gainFactor)) continue
                         // Right after start the position tracker overshoots by up
                         // to the AudioTrack buffer (~350ms): let it settle on the
                         // real audio clock before trusting any measurement.
                         delay(120)
+                        if (applyCrossfadeResetIfNeeded(fade, gainFactor)) continue
                         // Measure how far the tail's CONTENT is from the main's
                         // and re-seek predicting the restart latency, so both A
                         // streams line up when the tail becomes audible.
@@ -1054,8 +1240,11 @@ class PlaybackService : MediaLibraryService() {
                             while (!tailAudioAdvancing && rewait < 600) {
                                 delay(20)
                                 rewait += 20
+                                if (crossfadeResetGeneration != observedCrossfadeResetGeneration) break
                             }
+                            if (applyCrossfadeResetIfNeeded(fade, gainFactor)) continue
                             delay(120)
+                            if (applyCrossfadeResetIfNeeded(fade, gainFactor)) continue
                             tailPos = tail.currentPosition
                             drift = player.currentPosition - tailPos
                         }
@@ -1138,15 +1327,22 @@ class PlaybackService : MediaLibraryService() {
                         // full tail while main ramped down doubled correlated A
                         // (~+5 dB) and clipped the mixer — that was the "pop".
                         delay(80)
+                        if (applyCrossfadeResetIfNeeded(fade, gainFactor)) continue
                         for (step in 0..5) {
                             // El salto puede caer en estos ~120ms: si el principal
                             // deja de ser A, paramos de tocar SU volumen en el acto.
-                            if (player.currentMediaItem?.mediaId != curId || !player.playWhenReady) break
+                            if (player.currentMediaItem?.mediaId != curId ||
+                                !player.playWhenReady ||
+                                crossfadeResetGeneration != observedCrossfadeResetGeneration
+                            ) {
+                                break
+                            }
                             val s = step / 5f
                             tail.volume = xfGainA * s * fade
                             player.volume = gainFactor * (1f - s) * fade
                             delay(20)
                         }
+                        if (applyCrossfadeResetIfNeeded(fade, gainFactor)) continue
                         // Última comprobación antes de avanzar nosotros: si navegó
                         // durante el fundido, NO hacemos seekToNextMediaItem (saltaría
                         // una pista); restauramos el volumen y que siga su navegación.
@@ -1200,6 +1396,7 @@ class PlaybackService : MediaLibraryService() {
                         tail.volume = xfGainA * fade
                         player.volume = 0f
                         player.seekToNextMediaItem()
+                        if (applyCrossfadeResetIfNeeded(fade, gainFactor)) continue
                         gainFactor = armedGainB
                         gainKey = PlaybackGain.ConfigKey(
                             trackId = handoverNextId,
@@ -1245,6 +1442,9 @@ class PlaybackService : MediaLibraryService() {
     override fun onDestroy() {
         // Invalidate first: no suspended handoff may commit during teardown.
         playbackHandoff.begin()
+        playbackErrorRecovery.reset()
+        recoveringPlaybackError = false
+        pendingPlaybackError = null
         mainScope.cancel()
         val servers = (handoffServers + listOfNotNull(httpServer)).distinct()
         handoffServers.clear()
