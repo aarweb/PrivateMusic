@@ -344,6 +344,56 @@ class PlaybackService : MediaLibraryService() {
             // A failed handover (audio never surfaced / still misaligned) skips
             // the crossfade for THAT track: gapless is better than replaying A.
             var skipXfForId: String? = null
+            val lifecycle = CrossfadeLifecycle()
+
+            fun clearCrossfadeOperation(fade: Float, gain: Float) {
+                tailPlayer?.let {
+                    it.volume = 0f
+                    it.stop()
+                    it.clearMediaItems()
+                    it.setPlaybackSpeed(1f)
+                }
+                xfEndsAt = 0L
+                xfMainId = null
+                armedForId = null
+                armedNextId = null
+                player.volume = gain * fade
+                touchedVolume = true
+            }
+
+            fun acceptOrRecover(
+                transition: CrossfadeLifecycle.Transition,
+                fade: Float,
+                gain: Float,
+            ): Boolean {
+                if (transition.accepted) return true
+                android.util.Log.w(
+                    "Crossfade",
+                    "transición ilegal event=${transition.event} phase=${transition.before.phase} " +
+                        "track=${transition.before.trackId} next=${transition.before.nextId}; reset",
+                )
+                clearCrossfadeOperation(fade, gain)
+                lifecycle.reset()
+                return false
+            }
+
+            fun cancelCrossfade(
+                reason: CrossfadeLifecycle.CancelReason,
+                detail: String,
+                fade: Float,
+                gain: Float,
+            ) {
+                val transition = lifecycle.cancel(reason)
+                clearCrossfadeOperation(fade, gain)
+                if (!transition.accepted) {
+                    android.util.Log.w(
+                        "Crossfade",
+                        "cancelación ilegal reason=$reason phase=${transition.before.phase}; reset",
+                    )
+                    lifecycle.reset()
+                }
+                android.util.Log.d("Crossfade", "cancel reason=$reason $detail")
+            }
 
             // Modo de normalización (RMS medido o ReplayGain del tag); se relee
             // cada iteración. Sólo atenúa (nunca sube) para no saturar sin peak.
@@ -361,6 +411,22 @@ class PlaybackService : MediaLibraryService() {
             }
 
             while (isActive) {
+                val observedId = player.currentMediaItem?.mediaId
+                if (lifecycle.phase == CrossfadeLifecycle.Phase.CANCELLED &&
+                    observedId != lifecycle.trackId
+                ) {
+                    acceptOrRecover(lifecycle.trackChanged(observedId), SleepFade.level, gainFactor)
+                } else if (lifecycle.phase != CrossfadeLifecycle.Phase.IDLE &&
+                    lifecycle.phase != CrossfadeLifecycle.Phase.CANCELLED &&
+                    observedId != lifecycle.expectedMainTrackId
+                ) {
+                    cancelCrossfade(
+                        CrossfadeLifecycle.CancelReason.NAVIGATION,
+                        "track=${lifecycle.trackId} observed=$observedId phase=${lifecycle.phase}",
+                        SleepFade.level,
+                        gainFactor,
+                    )
+                }
                 // En pausa no hay volumen que gestionar, y el servicio sigue vivo
                 // mucho después de pausar. Sin esta guarda el bucle ticaba dos
                 // veces por segundo para siempre: medido en el Pixel, 0,75% de un
@@ -370,6 +436,16 @@ class PlaybackService : MediaLibraryService() {
                 // de "ha empezado a sonar", el bucle despierta solo en vez de
                 // quedarse dormido con la música puesta.
                 if (!player.isPlaying && xfEndsAt == 0L) {
+                    if (lifecycle.phase != CrossfadeLifecycle.Phase.IDLE &&
+                        lifecycle.phase != CrossfadeLifecycle.Phase.CANCELLED
+                    ) {
+                        cancelCrossfade(
+                            CrossfadeLifecycle.CancelReason.PAUSED,
+                            "phase=${lifecycle.phase}",
+                            SleepFade.level,
+                            gainFactor,
+                        )
+                    }
                     kotlinx.coroutines.withTimeoutOrNull(5_000) {
                         playing.first { it }
                     }
@@ -386,6 +462,18 @@ class PlaybackService : MediaLibraryService() {
                 // que se aplica a TODA escritura de volumen, para que no se pelee con
                 // el crossfade/normalización escribiendo controller.volume por fuera.
                 val fade = SleepFade.level
+
+                if (crossfadeMs == 0L &&
+                    lifecycle.phase != CrossfadeLifecycle.Phase.IDLE &&
+                    lifecycle.phase != CrossfadeLifecycle.Phase.CANCELLED
+                ) {
+                    cancelCrossfade(
+                        CrossfadeLifecycle.CancelReason.WINDOW_CLOSED,
+                        "crossfade desactivado",
+                        fade,
+                        gainFactor,
+                    )
+                }
 
                 // Con el fade activo (fade < 1) NO hacemos el early-return: hay que
                 // seguir aplicando el multiplicador al volumen aunque no haya crossfade
@@ -421,13 +509,17 @@ class PlaybackService : MediaLibraryService() {
                     // playWhenReady only drops when the user actually pauses.
                     val aborted = player.currentMediaItem?.mediaId != xfMainId || !player.playWhenReady
                     if (remainingXf <= 0 || aborted) {
-                        tail.volume = 0f
-                        tail.stop()
-                        tail.clearMediaItems()
-                        tail.setPlaybackSpeed(1f)
-                        xfEndsAt = 0L
-                        player.volume = gainFactor * fade
-                        android.util.Log.d("Crossfade", "overlap end aborted=$aborted")
+                        if (aborted) {
+                            val reason = if (!player.playWhenReady) {
+                                CrossfadeLifecycle.CancelReason.PAUSED
+                            } else {
+                                CrossfadeLifecycle.CancelReason.NAVIGATION
+                            }
+                            cancelCrossfade(reason, "durante overlap", fade, gainFactor)
+                        } else if (acceptOrRecover(lifecycle.complete(), fade, gainFactor)) {
+                            clearCrossfadeOperation(fade, gainFactor)
+                            android.util.Log.d("Crossfade", "overlap completo")
+                        }
                     } else {
                         val t = (1f - remainingXf.toFloat() / xfDurationMs).coerceIn(0f, 1f)
                         // Different tracks here (A on tail, B on main) → uncorrelated
@@ -487,11 +579,16 @@ class PlaybackService : MediaLibraryService() {
                     // FILE end, but the anchor may sit up to ~20s earlier (trimmed
                     // tail silence) — arm early enough to cover the worst case.
                     val nextIdx = player.nextMediaItemIndex
-                    if (eligible && armedForId != curId &&
+                    if (eligible && lifecycle.phase == CrossfadeLifecycle.Phase.IDLE &&
+                        armedForId != curId &&
                         remaining < crossfadeMs + 25000 &&
                         nextIdx != androidx.media3.common.C.INDEX_UNSET
                     ) {
                         val nextId = player.getMediaItemAt(nextIdx).mediaId
+                        if (!acceptOrRecover(lifecycle.prearm(curId, nextId), fade, gainFactor)) {
+                            delay(100)
+                            continue
+                        }
                         val (gains, ratio, tailSilence) = withContext(Dispatchers.IO) {
                             runCatching {
                                 val la = dao.getLoudness(curId)
@@ -523,13 +620,26 @@ class PlaybackService : MediaLibraryService() {
                                 tail.setMediaItem(MediaItem.Builder().setUri(curUri).build(), armedAtPos)
                                 tail.prepare()
                             }
+                            if (!acceptOrRecover(lifecycle.armed(), fade, gainFactor)) {
+                                delay(100)
+                                continue
+                            }
                             val mix = MixInfoHolder.info.value
                             android.util.Log.d(
                                 "Crossfade",
                                 "pre-armed at $armedAtPos ratio=$ratio requiredRatio=${mix?.requiredRatio} " +
                                     "autoMix=$autoMix bpm=${mix?.bpmOut}->${mix?.bpmIn} " +
-                                    "tailSilenceMs=$tailSilence",
+                                "tailSilenceMs=$tailSilence",
                             )
+                        } else {
+                            cancelCrossfade(
+                                CrossfadeLifecycle.CancelReason.NAVIGATION,
+                                "durante prearm track=$curId observed=${player.currentMediaItem?.mediaId}",
+                                fade,
+                                gainFactor,
+                            )
+                            delay(100)
+                            continue
                         }
                     }
 
@@ -565,6 +675,17 @@ class PlaybackService : MediaLibraryService() {
                                 delay(20)
                                 prep += 20
                             }
+                            if (tail.playbackState != Player.STATE_READY) {
+                                skipXfForId = curId
+                                cancelCrossfade(
+                                    CrossfadeLifecycle.CancelReason.PREPARATION_FAILED,
+                                    "track=$curId waitedMs=$prep",
+                                    fade,
+                                    gainFactor,
+                                )
+                                delay(100)
+                                continue
+                            }
                         }
                         xfGainA = armedGainA
                         xfMainId = armedNextId
@@ -592,6 +713,10 @@ class PlaybackService : MediaLibraryService() {
                         // del cálculo de deriva (ver `realDrift`): aún parado, la
                         // posición del tail ES el destino del último seek.
                         var refTailPos = tail.currentPosition
+                        if (!acceptOrRecover(lifecycle.warming(), fade, gainFactor)) {
+                            delay(100)
+                            continue
+                        }
                         tail.play()
                         // AutoMix routes the tail through Sonic (tempo bend), which
                         // lengthens the pipeline and delays real audio.
@@ -647,22 +772,38 @@ class PlaybackService : MediaLibraryService() {
                             tailPos = tail.currentPosition
                             drift = player.currentPosition - tailPos
                         }
-                        if (!tailAudioAdvancing || kotlin.math.abs(realDrift(drift, tailPos)) > 250) {
+                        if (!player.playWhenReady) {
+                            cancelCrossfade(
+                                CrossfadeLifecycle.CancelReason.PAUSED,
+                                "durante warming track=$curId",
+                                fade,
+                                gainFactor,
+                            )
+                            delay(100)
+                            continue
+                        }
+                        if (!tailAudioAdvancing) {
                             // No real audio (cold pipeline) or still misaligned:
                             // a blind handover replays part of A. Skip this
                             // crossfade — plain gapless beats an audible glitch.
-                            tail.stop()
-                            tail.clearMediaItems()
-                            tail.setPlaybackSpeed(1f)
-                            armedForId = null
                             skipXfForId = curId
-                            player.volume = gainFactor * fade
-                            android.util.Log.w(
-                                "Crossfade",
-                                "overlap skipped advancing=$tailAudioAdvancing driftMs=$drift " +
-                                    "realDriftMs=${realDrift(drift, tailPos)} waitedMs=$waited",
+                            cancelCrossfade(
+                                CrossfadeLifecycle.CancelReason.TAIL_NO_AUDIO,
+                                "driftMs=$drift realDriftMs=${realDrift(drift, tailPos)} waitedMs=$waited",
+                                fade,
+                                gainFactor,
                             )
-                            touchedVolume = true
+                            delay(100)
+                            continue
+                        }
+                        if (kotlin.math.abs(realDrift(drift, tailPos)) > 250) {
+                            skipXfForId = curId
+                            cancelCrossfade(
+                                CrossfadeLifecycle.CancelReason.EXCESSIVE_DRIFT,
+                                "driftMs=$drift realDriftMs=${realDrift(drift, tailPos)} waitedMs=$waited",
+                                fade,
+                                gainFactor,
+                            )
                             delay(100)
                             continue
                         }
@@ -673,13 +814,16 @@ class PlaybackService : MediaLibraryService() {
                         // OTRA vez: un solo "siguiente" se comería una canción. Cortamos
                         // el fundido y dejamos que mande la navegación del usuario.
                         if (player.currentMediaItem?.mediaId != curId) {
-                            tail.stop()
-                            tail.clearMediaItems()
-                            tail.setPlaybackSpeed(1f)
-                            armedForId = null
-                            player.volume = gainFactor * fade
-                            touchedVolume = true
-                            android.util.Log.d("Crossfade", "fire cancelado: el usuario navegó fuera de A")
+                            cancelCrossfade(
+                                CrossfadeLifecycle.CancelReason.NAVIGATION,
+                                "durante warming track=$curId observed=${player.currentMediaItem?.mediaId}",
+                                fade,
+                                gainFactor,
+                            )
+                            delay(100)
+                            continue
+                        }
+                        if (!acceptOrRecover(lifecycle.handover(), fade, gainFactor)) {
                             delay(100)
                             continue
                         }
@@ -693,7 +837,7 @@ class PlaybackService : MediaLibraryService() {
                         for (step in 0..5) {
                             // El salto puede caer en estos ~120ms: si el principal
                             // deja de ser A, paramos de tocar SU volumen en el acto.
-                            if (player.currentMediaItem?.mediaId != curId) break
+                            if (player.currentMediaItem?.mediaId != curId || !player.playWhenReady) break
                             val s = step / 5f
                             tail.volume = xfGainA * s * fade
                             player.volume = gainFactor * (1f - s) * fade
@@ -702,14 +846,13 @@ class PlaybackService : MediaLibraryService() {
                         // Última comprobación antes de avanzar nosotros: si navegó
                         // durante el fundido, NO hacemos seekToNextMediaItem (saltaría
                         // una pista); restauramos el volumen y que siga su navegación.
-                        if (player.currentMediaItem?.mediaId != curId) {
-                            tail.stop()
-                            tail.clearMediaItems()
-                            tail.setPlaybackSpeed(1f)
-                            armedForId = null
-                            player.volume = gainFactor * fade
-                            touchedVolume = true
-                            android.util.Log.d("Crossfade", "fire cancelado durante el fundido: el usuario navegó fuera de A")
+                        if (player.currentMediaItem?.mediaId != curId || !player.playWhenReady) {
+                            val reason = if (!player.playWhenReady) {
+                                CrossfadeLifecycle.CancelReason.PAUSED
+                            } else {
+                                CrossfadeLifecycle.CancelReason.NAVIGATION
+                            }
+                            cancelCrossfade(reason, "durante handover track=$curId", fade, gainFactor)
                             delay(100)
                             continue
                         }
@@ -721,21 +864,21 @@ class PlaybackService : MediaLibraryService() {
                         val remainingContentMs = (armedEffDur - tail.currentPosition)
                             .coerceAtMost(crossfadeMs)
                         if (remainingContentMs < 500L) {
-                            tail.stop()
-                            tail.clearMediaItems()
-                            tail.setPlaybackSpeed(1f)
-                            armedForId = null
                             skipXfForId = curId
-                            player.volume = gainFactor * fade
-                            touchedVolume = true
-                            android.util.Log.d(
-                                "Crossfade",
-                                "overlap cancelado: contenido restante insuficiente (${remainingContentMs}ms)",
+                            cancelCrossfade(
+                                CrossfadeLifecycle.CancelReason.INSUFFICIENT_CONTENT,
+                                "remainingContentMs=$remainingContentMs",
+                                fade,
+                                gainFactor,
                             )
                             delay(100)
                             continue
                         }
                         val wallFadeLen = contentDurationToWallMs(remainingContentMs, speed)
+                        if (!acceptOrRecover(lifecycle.overlapping(), fade, gainFactor)) {
+                            delay(100)
+                            continue
+                        }
                         tail.volume = xfGainA * fade
                         player.volume = 0f
                         player.seekToNextMediaItem()
