@@ -15,7 +15,16 @@ jobs:
       DEBUG_KEYSTORE_B64: ${{ secrets.DEBUG_KEYSTORE_B64 }}
     steps:
       - name: Descargar código desde Gitea
-        uses: http://git.lan/aar/checkout@v4
+        env:
+          GITEA_JOB_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git init .
+          git -c http.extraHeader="Authorization: token $GITEA_JOB_TOKEN" \
+            fetch --no-tags --depth=1 \
+            "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git" "$GITHUB_SHA"
+          git checkout --detach FETCH_HEAD
 
       - name: Validar versión y preparar firma
         shell: bash
