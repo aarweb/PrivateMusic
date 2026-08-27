@@ -1737,24 +1737,29 @@ class PlaybackService : MediaLibraryService() {
                         // saltarse el fundido (activar AutoMix hacía MENOS probable
                         // que hubiera fundido). Lo que el tail ha avanzado de más por
                         // el tempo es exactamente `avance * (1 - 1/ratio)`: se descuenta
-                        // para decidir si el relevo está sano. El seek, en cambio, sigue
-                        // usando la deriva REAL: hay que alinearlos de verdad.
+                        // para decidir y calcular el reseek, y también para validar el
+                        // resultado final.
                         val speed = if (autoMix) armedRatio else 1f
-                        fun realDrift(rawDrift: Long, tailPos: Long): Long {
-                            if (speed == 1f) return rawDrift
-                            val advanced = (tailPos - refTailPos).coerceAtLeast(0L)
-                            return rawDrift + (advanced * (1f - 1f / speed)).toLong()
-                        }
                         var tailPos = tail.currentPosition
                         var drift = player.currentPosition - tailPos
-                        if (tailAudioAdvancing && kotlin.math.abs(drift) > 60) {
-                            val restartLatency = if (drift > 0) drift + 40 else 120L
+                        var realDrift = CrossfadeAlignment.realDriftMs(
+                            drift,
+                            tailPos,
+                            refTailPos,
+                            speed,
+                        )
+                        if (tailAudioAdvancing && CrossfadeAlignment.shouldReseek(realDrift)) {
                             tailAudioAdvancing = false
-                            val target = player.currentPosition + restartLatency
+                            val target = CrossfadeAlignment.reseekTargetMs(
+                                player.currentPosition,
+                                realDrift,
+                            )
                             tail.seekTo(target)
                             refTailPos = target
                             var rewait = 0
-                            while (!tailAudioAdvancing && rewait < 600) {
+                            val postReseekTimeoutMs =
+                                CrossfadeAlignment.postReseekTimeoutMs(autoMix)
+                            while (!tailAudioAdvancing && rewait < postReseekTimeoutMs) {
                                 if (applyCrossfadeResetIfNeeded(fade, gainFactor)) {
                                     continue@volumeLoop
                                 }
@@ -1782,6 +1787,12 @@ class PlaybackService : MediaLibraryService() {
                             }
                             tailPos = tail.currentPosition
                             drift = player.currentPosition - tailPos
+                            realDrift = CrossfadeAlignment.realDriftMs(
+                                drift,
+                                tailPos,
+                                refTailPos,
+                                speed,
+                            )
                         }
                         if (!player.playWhenReady) {
                             cancelCrossfade(
@@ -1800,18 +1811,18 @@ class PlaybackService : MediaLibraryService() {
                             skipXfForId = curId
                             cancelCrossfade(
                                 CrossfadeLifecycle.CancelReason.TAIL_NO_AUDIO,
-                                "driftMs=$drift realDriftMs=${realDrift(drift, tailPos)} waitedMs=$waited",
+                                "driftMs=$drift realDriftMs=$realDrift waitedMs=$waited",
                                 fade,
                                 gainFactor,
                             )
                             delay(100)
                             continue
                         }
-                        if (kotlin.math.abs(realDrift(drift, tailPos)) > 250) {
+                        if (!CrossfadeAlignment.isFinalAlignmentAcceptable(realDrift)) {
                             skipXfForId = curId
                             cancelCrossfade(
                                 CrossfadeLifecycle.CancelReason.EXCESSIVE_DRIFT,
-                                "driftMs=$drift realDriftMs=${realDrift(drift, tailPos)} waitedMs=$waited",
+                                "driftMs=$drift realDriftMs=$realDrift waitedMs=$waited",
                                 fade,
                                 gainFactor,
                             )

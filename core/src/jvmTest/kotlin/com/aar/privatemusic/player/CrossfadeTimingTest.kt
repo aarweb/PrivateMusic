@@ -14,11 +14,11 @@ class CrossfadeTimingTest {
             ReserveCase(2_000L, autoMix = false, expectedReserveMs = 4_000L),
             ReserveCase(2_000L, autoMix = true, expectedReserveMs = 4_000L),
             ReserveCase(4_000L, autoMix = false, expectedReserveMs = 7_240L),
-            ReserveCase(4_000L, autoMix = true, expectedReserveMs = 7_840L),
+            ReserveCase(4_000L, autoMix = true, expectedReserveMs = 8_000L),
             ReserveCase(8_000L, autoMix = false, expectedReserveMs = 9_240L),
-            ReserveCase(8_000L, autoMix = true, expectedReserveMs = 9_240L),
+            ReserveCase(8_000L, autoMix = true, expectedReserveMs = 9_840L),
             ReserveCase(12_000L, autoMix = false, expectedReserveMs = 11_240L),
-            ReserveCase(12_000L, autoMix = true, expectedReserveMs = 11_240L),
+            ReserveCase(12_000L, autoMix = true, expectedReserveMs = 11_840L),
         )
 
         cases.forEach { case ->

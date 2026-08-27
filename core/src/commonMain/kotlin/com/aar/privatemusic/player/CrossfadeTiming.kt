@@ -57,7 +57,7 @@ object CrossfadeTiming {
             500L,
             warmupMs,
             120L,
-            600L,
+            CrossfadeAlignment.postReseekTimeoutMs(autoMix),
             120L,
             80L,
             120L,
