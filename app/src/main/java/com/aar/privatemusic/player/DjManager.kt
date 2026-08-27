@@ -2,17 +2,21 @@ package com.aar.privatemusic.player
 
 import android.content.Context
 import android.speech.tts.TextToSpeech
-import android.speech.tts.UtteranceProgressListener
 import android.util.Log
+import com.aar.privatemusic.data.AppSettings
 import com.aar.privatemusic.data.MusicRepository
 import com.aar.privatemusic.data.MixPromptParser
 import com.aar.privatemusic.data.db.MusicDao
-import com.aar.privatemusic.data.db.Song
 import com.aar.privatemusic.dj.DjEngine
 import com.aar.privatemusic.dj.DjNarrator
+import com.aar.privatemusic.util.Feedback
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
@@ -54,78 +58,173 @@ class DjManager(
     private var playCounts: Map<String, Int> = emptyMap()
     private var lastPlayed: Map<String, Long> = emptyMap()
     private var lastAnnouncedIndex = -1
+    private var buildJob: Job? = null
+    private var requestJob: Job? = null
     private var observeJob: Job? = null
+    @Volatile private var lifecycleGeneration = 0L
 
     private var tts: TextToSpeech? = null
     private var ttsReady = false
+    private var pendingSpeech: String? = null
+    private var ttsGeneration = 0L
 
     /** Arranca una nueva sesión de DJ. [seed] la hace repetible; 0 = del día/hora. */
     fun start(seed: Long) {
+        buildJob?.cancel()
+        requestJob?.cancel()
+        observeJob?.cancel()
+        lifecycleGeneration++
+        val generation = lifecycleGeneration
+        session = null
+        pendingSpeech = null
+        runCatching { tts?.stop() }
         _state.value = State(active = true, building = true)
-        scope.launch {
-            val now = System.currentTimeMillis()
-            val songs = dao.songsOnce().filter { it.snoozedUntil < now }
-            playCounts = dao.playCountsOnce().associate { it.songId to it.plays }
-            lastPlayed = dao.lastPlayedOnce().associate { it.songId to it.lastPlayed }
-            val favs = songs.filter { it.isFavorite }.map { it.id }.toSet()
-            val s = DjEngine.buildSession(songs, playCounts, favs, seed = seed)
-            if (s.tracks.isEmpty()) {
-                _state.value = State(active = false)
-                com.aar.privatemusic.util.Feedback.show("Aún no hay suficientes canciones analizadas para el DJ")
-                return@launch
+        buildJob = scope.launch {
+            try {
+                val now = System.currentTimeMillis()
+                val effectiveSeed = if (seed == 0L) now / 3_600_000L else seed
+                val songs = dao.songsOnce().filter { it.snoozedUntil < now }
+                currentCoroutineContext().ensureActive()
+                val counts = dao.playCountsOnce().associate { it.songId to it.plays }
+                currentCoroutineContext().ensureActive()
+                val played = dao.lastPlayedOnce().associate { it.songId to it.lastPlayed }
+                val favs = songs.filter { it.isFavorite }.map { it.id }.toSet()
+                val newSession = DjEngine.buildSession(songs, counts, favs, seed = effectiveSeed)
+                currentCoroutineContext().ensureActive()
+
+                if (newSession.tracks.size < 2) {
+                    withContext(Dispatchers.Main) {
+                        currentCoroutineContext().ensureActive()
+                        if (generation != lifecycleGeneration) return@withContext
+                        session = null
+                        _state.value = State(active = false)
+                        Feedback.show("Se necesitan al menos 2 canciones analizadas para iniciar el DJ")
+                    }
+                    return@launch
+                }
+
+                withContext(Dispatchers.Main) {
+                    currentCoroutineContext().ensureActive()
+                    if (generation != lifecycleGeneration) return@withContext
+                    playCounts = counts
+                    lastPlayed = played
+                    session = newSession
+                    narrator = DjNarrator(seed = effectiveSeed)
+                    lastAnnouncedIndex = -1
+                    if (settings.djVoice.value) ensureTts()
+                    player.playQueueInOrder(newSession.tracks)
+                    currentCoroutineContext().ensureActive()
+                    if (generation != lifecycleGeneration || session !== newSession) return@withContext
+                    _state.value = State(active = true, building = false)
+                    observeBlocks(generation)
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Throwable) {
+                Log.e(TAG, "No se pudo construir la sesión del DJ", error)
+                withContext(NonCancellable + Dispatchers.Main) {
+                    if (generation != lifecycleGeneration) return@withContext
+                    session = null
+                    _state.value = State(active = false, building = false)
+                    Feedback.show("No se pudo iniciar el DJ")
+                }
             }
-            session = s
-            narrator = DjNarrator(seed = seed)
-            lastAnnouncedIndex = -1
-            if (settings.djVoice.value) ensureTts()
-            withContext(Dispatchers.Main) { player.playQueueInOrder(s.tracks) }
-            _state.value = State(active = true, building = false)
-            observeBlocks()
         }
     }
 
     fun stop() {
+        lifecycleGeneration++
+        buildJob?.cancel()
+        requestJob?.cancel()
         observeJob?.cancel()
         session = null
+        pendingSpeech = null
+        runCatching { tts?.stop() }
         _state.value = State(active = false)
     }
 
     /** El usuario pide algo ("más animado"): re-secuencia el resto de la cola. */
     fun request(text: String) {
         val s = session ?: return
-        scope.launch {
-            val parsed = MixPromptParser.parse(text)
-            val mix = repository.buildCustomMix(parsed, size = 20)
-            if (mix.songs.isEmpty()) {
-                com.aar.privatemusic.util.Feedback.show("No encontré nada así en tu biblioteca")
-                return@launch
+        requestJob?.cancel()
+        val generation = lifecycleGeneration
+        requestJob = scope.launch {
+            try {
+                val parsed = MixPromptParser.parse(text)
+                val mix = repository.buildCustomMix(parsed, size = 20)
+                currentCoroutineContext().ensureActive()
+                if (generation != lifecycleGeneration || session !== s) return@launch
+                if (mix.songs.isEmpty()) {
+                    withContext(Dispatchers.Main) {
+                        currentCoroutineContext().ensureActive()
+                        if (generation == lifecycleGeneration && session === s) {
+                            Feedback.show("No encontré nada así en tu biblioteca")
+                        }
+                    }
+                    return@launch
+                }
+
+                val idx = withContext(Dispatchers.Main) { player.currentIndex.value }
+                currentCoroutineContext().ensureActive()
+                if (generation != lifecycleGeneration || session !== s || idx !in s.tracks.indices) return@launch
+
+                val playedIds = s.tracks.take(idx + 1).mapTo(HashSet()) { it.id }
+                val candidates = mix.songs
+                    .asSequence()
+                    .filter { it.id !in playedIds }
+                    .distinctBy { it.id }
+                    .toList()
+                val rest = DjEngine.sonicOrder(
+                    candidates,
+                    maxStretch = AppSettings.readAutoMixMaxStretch(context),
+                )
+                currentCoroutineContext().ensureActive()
+                if (rest.isEmpty()) {
+                    withContext(Dispatchers.Main) {
+                        currentCoroutineContext().ensureActive()
+                        if (generation == lifecycleGeneration && session === s) {
+                            Feedback.show("No quedan canciones nuevas para añadir a la cola")
+                        }
+                    }
+                    return@launch
+                }
+
+                val replacement = s.replaceFuture(idx, rest, DjEngine.BlockKind.BUILD, 0.6f)
+                withContext(Dispatchers.Main) {
+                    currentCoroutineContext().ensureActive()
+                    if (
+                        generation != lifecycleGeneration ||
+                        session !== s ||
+                        idx !in s.tracks.indices ||
+                        player.currentIndex.value != idx
+                    ) return@withContext
+                    val line = narrator.narrateRequest(parsed.summary)
+                    player.replaceUpcoming(rest)
+                    session = replacement
+                    lastAnnouncedIndex = idx
+                    announce(line, DjEngine.BlockKind.BUILD)
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Throwable) {
+                Log.e(TAG, "No se pudo ajustar la sesión del DJ", error)
+                withContext(NonCancellable + Dispatchers.Main) {
+                    if (generation == lifecycleGeneration && session === s) {
+                        Feedback.show("No se pudo ajustar la sesión del DJ")
+                    }
+                }
             }
-            // Mantiene lo que ya suena y reordena lo que viene con la petición.
-            val idx = player.currentIndex.value
-            val head = s.tracks.take(idx + 1)
-            val rest = DjEngine.sonicOrder(mix.songs.filter { song -> head.none { it.id == song.id } })
-            val newTracks = head + rest
-            val favs = head.filter { it.isFavorite }.map { it.id }.toSet()
-            // Un solo bloque "a petición" para el resto.
-            val block = DjEngine.Block(DjEngine.BlockKind.BUILD, rest, 0.6f)
-            session = DjEngine.Session(newTracks, s.blocks.take(1) + block)
-            lastAnnouncedIndex = idx
-            withContext(Dispatchers.Main) {
-                // Reemplaza sólo la parte futura de la cola.
-                player.replaceUpcoming(rest)
-            }
-            val line = narrator.narrateRequest(parsed.summary)
-            announce(line, DjEngine.BlockKind.BUILD)
         }
     }
 
-    private fun observeBlocks() {
+    private fun observeBlocks(generation: Long) {
         observeJob?.cancel()
         observeJob = scope.launch {
             player.currentIndex.collect { index ->
+                currentCoroutineContext().ensureActive()
+                if (generation != lifecycleGeneration) return@collect
                 val s = session ?: return@collect
                 if (!s.isBlockStart(index) || index == lastAnnouncedIndex) return@collect
-                lastAnnouncedIndex = index
                 val block = s.blockAt(index) ?: return@collect
                 val incoming = s.tracks.getOrNull(index) ?: return@collect
                 val outgoing = s.tracks.getOrNull(index - 1)
@@ -142,7 +241,18 @@ class DjManager(
                     incomingPlays = playCounts[incoming.id] ?: 0,
                     incomingLastPlayedDays = days, artistStreak = streak,
                 )
-                announce(narrator.narrate(cue), block.kind)
+                withContext(Dispatchers.Main) {
+                    currentCoroutineContext().ensureActive()
+                    if (
+                        generation != lifecycleGeneration ||
+                        session !== s ||
+                        !_state.value.active ||
+                        index == lastAnnouncedIndex
+                    ) return@withContext
+                    val line = narrator.narrate(cue)
+                    lastAnnouncedIndex = index
+                    announce(line, block.kind)
+                }
             }
         }
     }
@@ -156,29 +266,79 @@ class DjManager(
 
     private fun ensureTts() {
         if (tts != null) return
-        tts = TextToSpeech(context) { status ->
-            if (status == TextToSpeech.SUCCESS) {
-                ttsReady = runCatching {
-                    tts?.language = Locale("es", "ES")
-                    true
-                }.getOrDefault(false)
-            } else {
-                Log.w("DjVoice", "TTS no disponible ($status): el DJ se queda en texto")
+        ttsReady = false
+        val generation = ++ttsGeneration
+        try {
+            tts = TextToSpeech(context) { status ->
+                if (generation != ttsGeneration) return@TextToSpeech
+                if (status != TextToSpeech.SUCCESS) {
+                    ttsReady = false
+                    pendingSpeech = null
+                    Log.w(TAG_VOICE, "TTS no disponible ($status): el DJ se queda en texto")
+                    return@TextToSpeech
+                }
+
+                val languageResult = runCatching {
+                    tts?.setLanguage(Locale.forLanguageTag("es-ES"))
+                }.onFailure {
+                    Log.w(TAG_VOICE, "No se pudo configurar el idioma del TTS", it)
+                }.getOrNull()
+                ttsReady = languageResult != null &&
+                    languageResult != TextToSpeech.LANG_MISSING_DATA &&
+                    languageResult != TextToSpeech.LANG_NOT_SUPPORTED
+
+                if (!ttsReady) {
+                    pendingSpeech = null
+                    Log.w(TAG_VOICE, "El TTS no admite español de España ($languageResult)")
+                    return@TextToSpeech
+                }
+
+                val pending = pendingSpeech
+                pendingSpeech = null
+                if (pending != null && _state.value.active && settings.djVoice.value) {
+                    speak(pending)
+                }
             }
+        } catch (error: Throwable) {
+            tts = null
+            ttsReady = false
+            pendingSpeech = null
+            Log.w(TAG_VOICE, "No se pudo inicializar el TTS", error)
         }
     }
 
     private fun speak(line: String) {
-        val engine = tts ?: run { ensureTts(); return }
+        pendingSpeech = line
+        val engine = tts ?: run {
+            ensureTts()
+            return
+        }
         if (!ttsReady) return
-        runCatching {
+        pendingSpeech = null
+        val result = runCatching {
             // QUEUE_FLUSH: si empalma otro bloque, la locución nueva manda.
             engine.speak(line, TextToSpeech.QUEUE_FLUSH, null, "dj-${line.hashCode()}")
-        }.onFailure { Log.w("DjVoice", "no se pudo hablar", it) }
+        }.onFailure {
+            pendingSpeech = null
+            Log.w(TAG_VOICE, "No se pudo hablar", it)
+        }.getOrNull()
+        if (result == TextToSpeech.ERROR) {
+            pendingSpeech = null
+            Log.w(TAG_VOICE, "El TTS rechazó la locución")
+        }
     }
 
     fun release() {
+        stop()
+        ttsGeneration++
         runCatching { tts?.shutdown() }
-        tts = null; ttsReady = false
+        tts = null
+        ttsReady = false
+        pendingSpeech = null
+    }
+
+    private companion object {
+        const val TAG = "DjManager"
+        const val TAG_VOICE = "DjVoice"
     }
 }
