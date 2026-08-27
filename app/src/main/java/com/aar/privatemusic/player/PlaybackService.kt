@@ -1065,6 +1065,7 @@ class PlaybackService : MediaLibraryService() {
             // trailing silence trimmed): crossfading INTO a dying tail sounds
             // like a cut no matter how seamless the engine is.
             var armedEffDur = 0L
+            var armedAppliedTailSilenceMs = 0L
             // A failed handover (audio never surfaced / still misaligned) skips
             // the crossfade for THAT track: gapless is better than replaying A.
             var skipXfForId: String? = null
@@ -1133,6 +1134,7 @@ class PlaybackService : MediaLibraryService() {
                 armedNextId = null
                 armedRatio = 1f
                 armedEffDur = 0L
+                armedAppliedTailSilenceMs = 0L
                 clearArmedNormalization()
                 tailAudioAdvancing = false
                 incomingAudioTrackId = null
@@ -1279,6 +1281,7 @@ class PlaybackService : MediaLibraryService() {
                 val normalizeMode = AppSettings.readNormalizeMode(this@PlaybackService)
                 maxStretch = AppSettings.readAutoMixMaxStretch(this@PlaybackService)
                 val autoMix = AppSettings.readAutoMix(this@PlaybackService)
+                val technicalTriggerMs = CrossfadeTiming.technicalTriggerMs(crossfadeMs, autoMix)
                 val xfActive = xfEndsAt != 0L
                 // Fundido del temporizador de apagado (0..1): multiplicador global
                 // que se aplica a TODA escritura de volumen, para que no se pelee con
@@ -1515,10 +1518,15 @@ class PlaybackService : MediaLibraryService() {
                         val (gains, ratio, tailSilence) = prearmData
                         if (player.currentMediaItem?.mediaId == curId) {
                             armedForId = curId
-                            // Trim the silent/fading tail, but never more than half the window.
-                            armedEffDur = (duration - tailSilence)
+                            val musicalEndPlan = CrossfadeTiming.planMusicalEnd(
+                                duration,
+                                tailSilence,
+                                crossfadeMs,
+                            )
+                            armedEffDur = musicalEndPlan.effectiveDurationMs
                                 .coerceAtLeast(player.currentPosition + 500)
-                            armedAtPos = armedEffDur - crossfadeMs
+                            armedAppliedTailSilenceMs = (duration - armedEffDur).coerceAtLeast(0L)
+                            armedAtPos = (armedEffDur - technicalTriggerMs).coerceAtLeast(0L)
                             armedLoudnessA = gains[0]
                             armedLoudnessB = gains[1]
                             armedReplayGainA = gains[2]
@@ -1545,7 +1553,10 @@ class PlaybackService : MediaLibraryService() {
                                 "Crossfade",
                                 "pre-armed at $armedAtPos ratio=$ratio requiredRatio=${mix?.requiredRatio} " +
                                     "autoMix=$autoMix bpm=${mix?.bpmOut}->${mix?.bpmIn} " +
-                                "tailSilenceMs=$tailSilence",
+                                    "tailSilenceMs=$tailSilence configuredMs=$crossfadeMs " +
+                                    "technicalTriggerMs=$technicalTriggerMs " +
+                                    "appliedTailSilenceMs=$armedAppliedTailSilenceMs " +
+                                    "effectiveOverlapMs=$crossfadeMs",
                             )
                         } else {
                             cancelCrossfade(
@@ -1559,7 +1570,7 @@ class PlaybackService : MediaLibraryService() {
                         }
                     }
 
-                    if (eligible && armedForId == curId && remaining < crossfadeMs &&
+                    if (eligible && armedForId == curId && remaining < technicalTriggerMs &&
                         nextIdx != androidx.media3.common.C.INDEX_UNSET
                     ) {
                         val firingNextId = currentNextId()
@@ -1921,12 +1932,12 @@ class PlaybackService : MediaLibraryService() {
                         // volumen cero. El reloj del overlap todavía NO existe:
                         // se publicará sólo cuando el callback confirme audio de B.
                         val initialRemainingContentMs = (armedEffDur - tail.currentPosition)
-                            .coerceAtMost(crossfadeMs)
+                            .coerceAtLeast(0L)
                         val initialWallFadeMs = contentDurationToWallMs(
                             initialRemainingContentMs,
                             speed,
                         )
-                        val startGuard = CrossfadeStartGuard(initialWallFadeMs)
+                        var startGuard = CrossfadeStartGuard(initialWallFadeMs)
                         tail.volume = focusAdjustedVolume(xfGainA * SleepFade.level)
                         player.volume = focusAdjustedVolume(0f)
                         incomingAudioTrackId = null
@@ -1941,12 +1952,17 @@ class PlaybackService : MediaLibraryService() {
                         if (applyCrossfadeResetIfNeeded(SleepFade.level, gainFactor)) {
                             continue@volumeLoop
                         }
-                        val waitStartedAt = android.os.SystemClock.elapsedRealtime()
+                        var waitStartedAt = android.os.SystemClock.elapsedRealtime()
+                        var incomingNeedsRewind = false
+                        var incomingRewound = false
                         android.util.Log.d(
                             "Crossfade",
                             "incoming wait initialContentMs=$initialRemainingContentMs " +
                                 "initialWallMs=$initialWallFadeMs budgetMs=${startGuard.waitBudgetMs} " +
-                                "gainA=$xfGainA gainB=$gainFactor driftMs=$drift",
+                                "gainA=$xfGainA gainB=$gainFactor driftMs=$drift " +
+                                "configuredMs=$crossfadeMs technicalTriggerMs=$technicalTriggerMs " +
+                                "appliedTailSilenceMs=$armedAppliedTailSilenceMs " +
+                                "effectiveOverlapMs=0",
                         )
 
                         while (true) {
@@ -1956,13 +1972,32 @@ class PlaybackService : MediaLibraryService() {
                             val now = android.os.SystemClock.elapsedRealtime()
                             val elapsedWaitingMs = (now - waitStartedAt).coerceAtLeast(0L)
                             val remainingContentMs = (armedEffDur - tail.currentPosition)
-                                .coerceAtMost(crossfadeMs)
+                                .coerceAtLeast(0L)
                             val remainingTailWallMs = contentDurationToWallMs(
                                 remainingContentMs,
                                 speed,
                             )
                             val observedMainTrackId = player.currentMediaItem?.mediaId
                             val tailError = tailFailedForCurrentOperation()
+                            if (incomingNeedsRewind && !incomingRewound &&
+                                remainingTailWallMs <= crossfadeMs &&
+                                observedMainTrackId == handoverNextId &&
+                                player.playWhenReady && !tailError
+                            ) {
+                                val rewindFade = SleepFade.level
+                                tail.volume = focusAdjustedVolume(xfGainA * rewindFade)
+                                player.volume = focusAdjustedVolume(0f)
+                                touchedVolume = true
+                                // Preservar el inicio de B exige confirmar audio otra vez;
+                                // su latencia residual sólo acorta el overlap contra A real.
+                                player.seekTo(0L)
+                                incomingAudioTrackId = null
+                                startGuard = CrossfadeStartGuard(remainingTailWallMs)
+                                waitStartedAt = now
+                                incomingNeedsRewind = false
+                                incomingRewound = true
+                                continue
+                            }
                             when (
                                 val decision = startGuard.evaluate(
                                     CrossfadeStartGuard.Input(
@@ -1991,44 +2026,114 @@ class PlaybackService : MediaLibraryService() {
                                 }
 
                                 is CrossfadeStartGuard.Decision.START -> {
-                                    if (!acceptOrRecover(
-                                            lifecycle.overlapping(),
-                                            SleepFade.level,
-                                            gainFactor,
+                                    when (
+                                        val timingDecision = CrossfadeTiming.decideAudibleStart(
+                                            crossfadeMs,
+                                            remainingTailWallMs,
                                         )
                                     ) {
-                                        continue@volumeLoop
+                                        CrossfadeTiming.AudibleStartDecision.WAIT -> {
+                                            if (!incomingNeedsRewind && !incomingRewound) {
+                                                incomingNeedsRewind = true
+                                            }
+                                            val waitFade = SleepFade.level
+                                            tail.volume = focusAdjustedVolume(xfGainA * waitFade)
+                                            player.volume = focusAdjustedVolume(0f)
+                                            touchedVolume = true
+                                            if (applyCrossfadeResetIfNeeded(waitFade, gainFactor)) {
+                                                continue@volumeLoop
+                                            }
+                                            delay(20)
+                                            if (applyCrossfadeResetIfNeeded(
+                                                    SleepFade.level,
+                                                    gainFactor,
+                                                )
+                                            ) {
+                                                continue@volumeLoop
+                                            }
+                                            continue
+                                        }
+
+                                        is CrossfadeTiming.AudibleStartDecision.START -> {
+                                            val appliedTailSilenceMs = armedAppliedTailSilenceMs
+                                            val operationIncomingRewound = incomingRewound
+                                            if (!acceptOrRecover(
+                                                    lifecycle.overlapping(),
+                                                    SleepFade.level,
+                                                    gainFactor,
+                                                )
+                                            ) {
+                                                continue@volumeLoop
+                                            }
+                                            val overlapStartedAt =
+                                                android.os.SystemClock.elapsedRealtime()
+                                            xfDurationMs = timingDecision.durationMs
+                                            xfEndsAt = overlapStartedAt + timingDecision.durationMs
+                                            val overlapFade = SleepFade.level
+                                            tail.volume = focusAdjustedVolume(xfGainA * overlapFade)
+                                            player.volume = focusAdjustedVolume(0f)
+                                            armedForId = null
+                                            armedAtPos = 0L
+                                            armedGainA = 1f
+                                            armedGainB = 1f
+                                            armedNextId = null
+                                            armedRatio = 1f
+                                            armedEffDur = 0L
+                                            armedAppliedTailSilenceMs = 0L
+                                            clearArmedNormalization()
+                                            android.util.Log.d(
+                                                "Crossfade",
+                                                "overlap start initialWallMs=$initialWallFadeMs " +
+                                                    "remainingWallMs=$remainingTailWallMs " +
+                                                    "waitMs=$elapsedWaitingMs gainA=$xfGainA " +
+                                                    "gainB=$gainFactor driftMs=$drift " +
+                                                    "configuredMs=$crossfadeMs " +
+                                                    "technicalTriggerMs=$technicalTriggerMs " +
+                                                    "appliedTailSilenceMs=$appliedTailSilenceMs " +
+                                                    "effectiveOverlapMs=${timingDecision.durationMs} " +
+                                                    "incomingRewound=$operationIncomingRewound",
+                                            )
+                                            touchedVolume = true
+                                            if (applyCrossfadeResetIfNeeded(
+                                                    overlapFade,
+                                                    gainFactor,
+                                                )
+                                            ) {
+                                                continue@volumeLoop
+                                            }
+                                            delay(100)
+                                            if (applyCrossfadeResetIfNeeded(
+                                                    SleepFade.level,
+                                                    gainFactor,
+                                                )
+                                            ) {
+                                                continue@volumeLoop
+                                            }
+                                            continue@volumeLoop
+                                        }
+
+                                        CrossfadeTiming.AudibleStartDecision.ABORT -> {
+                                            val reason = if (crossfadeMs <= 0L) {
+                                                CrossfadeLifecycle.CancelReason.WINDOW_CLOSED
+                                            } else {
+                                                CrossfadeLifecycle.CancelReason.INSUFFICIENT_CONTENT
+                                            }
+                                            val appliedTailSilenceMs = armedAppliedTailSilenceMs
+                                            cancelCrossfade(
+                                                reason,
+                                                "post-jump timing track=$curId " +
+                                                    "remainingWallMs=$remainingTailWallMs " +
+                                                    "configuredMs=$crossfadeMs " +
+                                                    "technicalTriggerMs=$technicalTriggerMs " +
+                                                    "appliedTailSilenceMs=$appliedTailSilenceMs " +
+                                                    "effectiveOverlapMs=0",
+                                                SleepFade.level,
+                                                gainFactor,
+                                            )
+                                            touchedVolume = true
+                                            continue@volumeLoop
+                                        }
                                     }
-                                    val overlapStartedAt = android.os.SystemClock.elapsedRealtime()
-                                    xfDurationMs = decision.fadeMs
-                                    xfEndsAt = overlapStartedAt + decision.fadeMs
-                                    val overlapFade = SleepFade.level
-                                    tail.volume = focusAdjustedVolume(xfGainA * overlapFade)
-                                    player.volume = focusAdjustedVolume(0f)
-                                    armedForId = null
-                                    armedAtPos = 0L
-                                    armedGainA = 1f
-                                    armedGainB = 1f
-                                    armedNextId = null
-                                    armedRatio = 1f
-                                    armedEffDur = 0L
-                                    clearArmedNormalization()
-                                    android.util.Log.d(
-                                        "Crossfade",
-                                        "overlap start initialWallMs=$initialWallFadeMs " +
-                                            "remainingWallMs=${decision.fadeMs} " +
-                                            "waitMs=$elapsedWaitingMs gainA=$xfGainA " +
-                                            "gainB=$gainFactor driftMs=$drift",
-                                    )
-                                    touchedVolume = true
-                                    if (applyCrossfadeResetIfNeeded(overlapFade, gainFactor)) {
-                                        continue@volumeLoop
-                                    }
-                                    delay(100)
-                                    if (applyCrossfadeResetIfNeeded(SleepFade.level, gainFactor)) {
-                                        continue@volumeLoop
-                                    }
-                                    continue@volumeLoop
                                 }
 
                                 CrossfadeStartGuard.Decision.ABORT -> {
@@ -2045,6 +2150,7 @@ class PlaybackService : MediaLibraryService() {
                                     ) {
                                         skipXfForId = curId
                                     }
+                                    val appliedTailSilenceMs = armedAppliedTailSilenceMs
                                     cancelCrossfade(
                                         reason,
                                         "post-jump track=$curId expected=$handoverNextId " +
@@ -2054,7 +2160,10 @@ class PlaybackService : MediaLibraryService() {
                                             "waitMs=$elapsedWaitingMs gainA=$xfGainA " +
                                             "gainB=$gainFactor driftMs=$drift " +
                                             "generation=$armedTailErrorGeneration/" +
-                                            tailPlayerErrorGeneration,
+                                            "$tailPlayerErrorGeneration configuredMs=$crossfadeMs " +
+                                            "technicalTriggerMs=$technicalTriggerMs " +
+                                            "appliedTailSilenceMs=$appliedTailSilenceMs " +
+                                            "effectiveOverlapMs=0",
                                         SleepFade.level,
                                         gainFactor,
                                     )
