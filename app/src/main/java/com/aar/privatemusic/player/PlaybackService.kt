@@ -7,6 +7,7 @@ import android.net.Uri
 import com.aar.privatemusic.MainActivity
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
+import androidx.media3.common.ForwardingPlayer
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.PlaybackException
@@ -49,6 +50,13 @@ class PlaybackService : MediaLibraryService() {
     private var recoveringPlaybackError = false
     private var pendingPlaybackError: PlaybackException? = null
     private var crossfadeResetGeneration = 0L
+    private var audioFocusPolicyState = AudioFocusPolicy.State()
+    @Volatile
+    private var audioFocusVolumeMultiplier = AudioFocusPolicy.FULL_VOLUME
+    private var audioFocusRequestGeneration = 0L
+    private var currentAudioFocusRequest: android.media.AudioFocusRequest? = null
+    private var currentLegacyFocusListener: android.media.AudioManager.OnAudioFocusChangeListener? = null
+    private var serviceDestroyed = false
 
     override fun onCreate() {
         super.onCreate()
@@ -61,11 +69,18 @@ class PlaybackService : MediaLibraryService() {
                     .setUsage(C.USAGE_MEDIA)
                     .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
                     .build(),
-                /* handleAudioFocus = */ true,
+                /* handleAudioFocus = */ false,
             )
             .setHandleAudioBecomingNoisy(true)
             .build()
         localPlayer = player
+        val focusPlayer = FocusAwarePlayer(
+            player = player,
+            onPlay = ::onLocalPlayRequested,
+            onPause = ::onLocalPauseRequested,
+            onStop = ::onLocalStopRequested,
+        )
+        localSessionPlayer = focusPlayer
         alignLocalOutput("main-created")
         // Sin esto, la CPU puede entrar en reposo profundo con la pantalla apagada
         // y la reproducción se corta. `WAKE_MODE_LOCAL` retiene sólo el wakelock de
@@ -80,7 +95,11 @@ class PlaybackService : MediaLibraryService() {
             Intent(this, MainActivity::class.java),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
-        mediaSession = MediaLibrarySession.Builder(this, player, LibraryCallback(dao, serviceScope))
+        mediaSession = MediaLibrarySession.Builder(
+            this,
+            focusPlayer,
+            LibraryCallback(dao, serviceScope),
+        )
             .setSessionActivity(sessionActivity)
             .build()
         EqHolder.init(this, player.audioSessionId)
@@ -166,6 +185,7 @@ class PlaybackService : MediaLibraryService() {
                 // Stream previews use signed URLs that expire; a dead preview item
                 // would otherwise fail silently forever from the notification.
                 if (player.currentMediaItem?.mediaId?.startsWith("preview:") == true) {
+                    dispatchAudioFocusEvent(AudioFocusPolicy.Event.Stop)
                     player.clearMediaItems()
                     android.util.Log.w("Playback", "player error", error)
                     return
@@ -206,6 +226,38 @@ class PlaybackService : MediaLibraryService() {
 
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 playing.value = isPlaying
+                dispatchAudioFocusEvent(
+                    if (isPlaying) {
+                        AudioFocusPolicy.Event.PlaybackStarted
+                    } else {
+                        AudioFocusPolicy.Event.PlaybackStopped
+                    },
+                )
+            }
+
+            override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+                // Controller commands are captured exactly by FocusAwarePlayer. These are the
+                // remaining definitive platform/player transitions (for example, noisy output or
+                // end-of-item); a focus-loss pause is performed directly and is therefore not
+                // mistaken for user intent here.
+                if (!playWhenReady && reason != Player.PLAY_WHEN_READY_CHANGE_REASON_USER_REQUEST) {
+                    dispatchAudioFocusEvent(AudioFocusPolicy.Event.Stop)
+                }
+            }
+
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                if (playbackState == Player.STATE_IDLE && player.mediaItemCount == 0) {
+                    dispatchAudioFocusEvent(AudioFocusPolicy.Event.Stop)
+                }
+            }
+
+            override fun onTimelineChanged(
+                timeline: androidx.media3.common.Timeline,
+                reason: Int,
+            ) {
+                if (player.mediaItemCount == 0) {
+                    dispatchAudioFocusEvent(AudioFocusPolicy.Event.Stop)
+                }
             }
         })
         startVolumeLoop(player, dao)
@@ -238,6 +290,7 @@ class PlaybackService : MediaLibraryService() {
     private var incomingAudioTrackId: String? = null
     private var tailPlayerErrorGeneration = 0L
     private var localPlayer: ExoPlayer? = null
+    private var localSessionPlayer: Player? = null
     private var castPlayer: androidx.media3.cast.CastPlayer? = null
     private var castContext: com.google.android.gms.cast.framework.CastContext? = null
     private var httpServer: com.aar.privatemusic.cast.MediaHttpServer? = null
@@ -252,6 +305,158 @@ class PlaybackService : MediaLibraryService() {
     private var mainRouteTarget: AudioRouteTarget? = null
     private var tailRouteApplied = false
     private var tailRouteTarget: AudioRouteTarget? = null
+
+    private fun onLocalPlayRequested() {
+        if (!isLocalSessionActive()) return
+        dispatchAudioFocusEvent(AudioFocusPolicy.Event.Play)
+    }
+
+    private fun onLocalPauseRequested() {
+        if (!isLocalSessionActive()) return
+        dispatchAudioFocusEvent(AudioFocusPolicy.Event.Pause)
+    }
+
+    private fun onLocalStopRequested() {
+        if (!isLocalSessionActive()) return
+        dispatchAudioFocusEvent(AudioFocusPolicy.Event.Stop)
+    }
+
+    private fun isLocalSessionActive(): Boolean {
+        val sessionPlayer = localSessionPlayer ?: return false
+        return mediaSession?.player === sessionPlayer
+    }
+
+    /** Applies one pure transition, then performs its Android/player side effects on Main. */
+    private fun dispatchAudioFocusEvent(event: AudioFocusPolicy.Event) {
+        if (serviceDestroyed) return
+        check(android.os.Looper.myLooper() == mainLooper) {
+            "Audio focus policy must run on Main"
+        }
+        val transition = AudioFocusPolicy.reduce(audioFocusPolicyState, event)
+        audioFocusPolicyState = transition.state
+        val decision = transition.decision
+        decision.duckMultiplier?.let { audioFocusVolumeMultiplier = it }
+
+        // A focus loss must silence/cancel the tail before abandoning or doing any other work.
+        if (decision.pausePlayers) pauseLocalPlayersForAudioFocus()
+        if (decision.abandonFocus) abandonAudioFocusPlatform()
+        if (decision.requestFocus) requestAudioFocusPlatform()
+        if (decision.resumeMain) {
+            if (isLocalSessionActive()) {
+                localPlayer?.play()
+            } else {
+                // A Cast handoff may win while the focus request is being resolved.
+                dispatchAudioFocusEvent(AudioFocusPolicy.Event.Stop)
+            }
+        }
+    }
+
+    private fun pauseLocalPlayersForAudioFocus() {
+        // invalidateCrossfadeForRecovery writes tail=0 before stop/clear and increments the
+        // generation observed by every pre-arm/warm-up wait in volumeLoop.
+        invalidateCrossfadeForRecovery()
+        localPlayer?.pause()
+        tailPlayer?.pause()
+    }
+
+    private fun requestAudioFocusPlatform() {
+        if (serviceDestroyed || !isLocalSessionActive()) {
+            dispatchAudioFocusEvent(AudioFocusPolicy.Event.FocusRequestDenied)
+            return
+        }
+        // The policy's REQUESTING/HELD states make this idempotent. Keep the platform guard too,
+        // because duplicate listeners must never create a second AudioFocusRequest.
+        if (currentAudioFocusRequest != null || currentLegacyFocusListener != null) return
+
+        val generation = nextAudioFocusGeneration()
+        val listener = android.media.AudioManager.OnAudioFocusChangeListener { change ->
+            val deliver = Runnable {
+                if (!serviceDestroyed && generation == audioFocusRequestGeneration) {
+                    onPlatformAudioFocusChange(change)
+                }
+            }
+            if (android.os.Looper.myLooper() == mainLooper) deliver.run()
+            else android.os.Handler(mainLooper).post(deliver)
+        }
+        val result = if (android.os.Build.VERSION.SDK_INT >= 26) {
+            val request = android.media.AudioFocusRequest.Builder(
+                android.media.AudioManager.AUDIOFOCUS_GAIN,
+            )
+                .setAudioAttributes(
+                    android.media.AudioAttributes.Builder()
+                        .setUsage(android.media.AudioAttributes.USAGE_MEDIA)
+                        .setContentType(android.media.AudioAttributes.CONTENT_TYPE_MUSIC)
+                        .build(),
+                )
+                .setOnAudioFocusChangeListener(listener, android.os.Handler(mainLooper))
+                .build()
+            currentAudioFocusRequest = request
+            audioManager.requestAudioFocus(request)
+        } else {
+            @Suppress("DEPRECATION")
+            currentLegacyFocusListener = listener
+            @Suppress("DEPRECATION")
+            audioManager.requestAudioFocus(
+                listener,
+                android.media.AudioManager.STREAM_MUSIC,
+                android.media.AudioManager.AUDIOFOCUS_GAIN,
+            )
+        }
+
+        if (result == android.media.AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
+            dispatchAudioFocusEvent(AudioFocusPolicy.Event.FocusRequestGranted)
+        } else {
+            clearDeniedAudioFocusHandle(generation)
+            dispatchAudioFocusEvent(AudioFocusPolicy.Event.FocusRequestDenied)
+        }
+    }
+
+    private fun onPlatformAudioFocusChange(change: Int) {
+        val event = when (change) {
+            android.media.AudioManager.AUDIOFOCUS_GAIN -> AudioFocusPolicy.Event.FocusGain
+            android.media.AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK ->
+                AudioFocusPolicy.Event.FocusDuck
+            android.media.AudioManager.AUDIOFOCUS_LOSS_TRANSIENT ->
+                AudioFocusPolicy.Event.FocusLossTransient
+            android.media.AudioManager.AUDIOFOCUS_LOSS -> AudioFocusPolicy.Event.FocusLoss
+            else -> return
+        }
+        dispatchAudioFocusEvent(event)
+    }
+
+    private fun clearDeniedAudioFocusHandle(generation: Long) {
+        if (generation != audioFocusRequestGeneration) return
+        currentAudioFocusRequest = null
+        currentLegacyFocusListener = null
+        nextAudioFocusGeneration()
+    }
+
+    private fun abandonAudioFocusPlatform() {
+        val request = currentAudioFocusRequest
+        val legacyListener = currentLegacyFocusListener
+        currentAudioFocusRequest = null
+        currentLegacyFocusListener = null
+        // Invalidate before calling AudioManager: even a queued callback from this request is stale.
+        nextAudioFocusGeneration()
+        if (android.os.Build.VERSION.SDK_INT >= 26) {
+            request?.let { audioManager.abandonAudioFocusRequest(it) }
+        } else {
+            @Suppress("DEPRECATION")
+            legacyListener?.let { audioManager.abandonAudioFocus(it) }
+        }
+    }
+
+    private fun nextAudioFocusGeneration(): Long {
+        audioFocusRequestGeneration = if (audioFocusRequestGeneration == Long.MAX_VALUE) {
+            Long.MIN_VALUE
+        } else {
+            audioFocusRequestGeneration + 1L
+        }
+        return audioFocusRequestGeneration
+    }
+
+    private fun focusAdjustedVolume(volume: Float): Float =
+        volume * audioFocusVolumeMultiplier
 
     private val audioDeviceCallback = object : android.media.AudioDeviceCallback() {
         override fun onAudioDevicesAdded(addedDevices: Array<out android.media.AudioDeviceInfo>) {
@@ -276,7 +481,8 @@ class PlaybackService : MediaLibraryService() {
 
         // This listener belongs to the local ExoPlayer. Never move its stale, silent queue while
         // the MediaSession is exposing Cast.
-        if (mediaSession?.player !== player) {
+        if (!isLocalSessionActive()) {
+            dispatchAudioFocusEvent(AudioFocusPolicy.Event.Stop)
             invalidateCrossfadeForRecovery()
             player.playWhenReady = false
             player.stop()
@@ -336,6 +542,7 @@ class PlaybackService : MediaLibraryService() {
                     "Playback",
                     "action=STOP code=$errorCode type=$errorType track=$trackId",
                 )
+                dispatchAudioFocusEvent(AudioFocusPolicy.Event.Stop)
                 player.playWhenReady = false
                 player.stop()
             }
@@ -348,13 +555,14 @@ class PlaybackService : MediaLibraryService() {
         processed: Int,
     ) {
         val trackId = player.currentMediaItem?.mediaId
+        dispatchAudioFocusEvent(AudioFocusPolicy.Event.Stop)
         invalidateCrossfadeForRecovery()
         player.playWhenReady = false
         player.stop()
         android.util.Log.e(
             "Playback",
             "action=STOP_RECOVERY_LIMIT processed=$processed code=${error.errorCode} " +
-                "track=$trackId localActive=${mediaSession?.player === player}",
+                "track=$trackId localActive=${isLocalSessionActive()}",
             error,
         )
     }
@@ -380,7 +588,7 @@ class PlaybackService : MediaLibraryService() {
 
     private fun clearTailCrossfadeForRecovery() {
         tailPlayer?.let {
-            it.volume = 0f
+            it.volume = focusAdjustedVolume(0f)
             it.stop()
             it.clearMediaItems()
             it.setPlaybackSpeed(1f)
@@ -454,7 +662,7 @@ class PlaybackService : MediaLibraryService() {
                     android.util.Log.w("Cast", "no se pasa a la TV: la sesión Cast ya no está disponible")
                     return@launch
                 }
-                if (session.player !== local) {
+                if (!isLocalSessionActive()) {
                     android.util.Log.d("Cast", "handoff descartado: la sesión ya no usa el reproductor local")
                     return@launch
                 }
@@ -477,8 +685,7 @@ class PlaybackService : MediaLibraryService() {
                 commitAttempted = true
                 // El tail puede seguir sonando aunque el main se pause. Se cancela antes de que
                 // Cast pueda hacerse audible, sin tocar la cola del reproductor local principal.
-                invalidateCrossfadeForRecovery()
-                local.pause()
+                dispatchAudioFocusEvent(AudioFocusPolicy.Event.Stop)
                 httpServer = candidate
                 // Desde aquí, toda nueva canción debe convertirse en URL Cast.
                 com.aar.privatemusic.cast.CastState.baseUrl = prepared.baseUrl
@@ -564,9 +771,10 @@ class PlaybackService : MediaLibraryService() {
             runCatching { cast.stop() }
                 .onFailure { android.util.Log.w("Cast", "no se pudo detener Cast", it) }
             if (!playbackHandoff.isCurrent(ticket)) return@launch
-            val localExposed = runCatching { session.player = local }
+            val focusPlayer = localSessionPlayer ?: return@launch
+            val localExposed = runCatching { session.player = focusPlayer }
                 .onFailure { android.util.Log.e("Cast", "no se pudo devolver la sesión a local", it) }
-                .isSuccess && session.player === local
+                .isSuccess && session.player === focusPlayer
             if (!localExposed) {
                 local.playWhenReady = false
                 tailPlayer?.playWhenReady = false
@@ -584,7 +792,7 @@ class PlaybackService : MediaLibraryService() {
             var exposedFingerprint: LocalHandoffFingerprint? = null
             if (!queueChanged) {
                 if (index in 0 until local.mediaItemCount) local.seekTo(index, position)
-                local.playWhenReady = wasPlayWhenReady
+                setLocalPlayWhenReadyWithFocus(wasPlayWhenReady)
             } else {
                 exposedFingerprint = localFingerprint(local)
             }
@@ -611,13 +819,13 @@ class PlaybackService : MediaLibraryService() {
             if (!playbackHandoff.isCurrent(ticket)) return@launch
 
             if (queueChanged) {
-                val localUntouched = session.player === local &&
+                val localUntouched = session.player === focusPlayer &&
                     localFingerprint(local) == exposedFingerprint
                 if (!localUntouched) {
                     android.util.Log.d("Cast", "resultado local descartado: el usuario cambió la reproducción")
                 } else if (resolved == null) {
                     // Keep the previous local queue usable when the Cast item vanished.
-                    local.playWhenReady = wasPlayWhenReady
+                    setLocalPlayWhenReadyWithFocus(wasPlayWhenReady)
                     android.util.Log.w(
                         "Cast",
                         "fallback a la cola local previa: falta la pista Cast actual",
@@ -626,7 +834,7 @@ class PlaybackService : MediaLibraryService() {
                     android.util.Log.d("Cast", "la cola cambió en la tele: se rehace en local (${castIds.size})")
                     local.setMediaItems(resolved.items, resolved.currentIndex, position)
                     local.prepare()
-                    local.playWhenReady = wasPlayWhenReady
+                    setLocalPlayWhenReadyWithFocus(wasPlayWhenReady)
                 }
             }
             android.util.Log.d("Cast", "session back to local @$position")
@@ -635,6 +843,15 @@ class PlaybackService : MediaLibraryService() {
 
     private fun localQueueIds(local: ExoPlayer): List<String> =
         (0 until local.mediaItemCount).map { local.getMediaItemAt(it).mediaId }
+
+    private fun setLocalPlayWhenReadyWithFocus(playWhenReady: Boolean) {
+        if (playWhenReady) {
+            dispatchAudioFocusEvent(AudioFocusPolicy.Event.Play)
+        } else {
+            dispatchAudioFocusEvent(AudioFocusPolicy.Event.Stop)
+            localPlayer?.pause()
+        }
+    }
 
     private fun localFingerprint(local: ExoPlayer) = LocalHandoffFingerprint(
         ids = localQueueIds(local),
@@ -658,9 +875,10 @@ class PlaybackService : MediaLibraryService() {
         alignLocalOutput("cast-rollback", forceApply = true)
         if (!playbackHandoff.isCurrent(ticket)) return
         runCatching { cast.stop() }
-        val localExposed = runCatching { session.player = local }
+        val focusPlayer = localSessionPlayer ?: return
+        val localExposed = runCatching { session.player = focusPlayer }
             .onFailure { android.util.Log.e("Cast", "falló exponer local durante rollback", it) }
-            .isSuccess && session.player === local
+            .isSuccess && session.player === focusPlayer
         if (!localExposed) {
             local.playWhenReady = false
             tailPlayer?.playWhenReady = false
@@ -671,7 +889,7 @@ class PlaybackService : MediaLibraryService() {
         com.aar.privatemusic.cast.CastState.castDeviceName.value = null
         val publishedServer = httpServer
         httpServer = null
-        runCatching { local.playWhenReady = wasPlayWhenReady }
+        runCatching { setLocalPlayWhenReadyWithFocus(wasPlayWhenReady) }
         withContext(NonCancellable + Dispatchers.IO) {
             listOfNotNull(previousServer, publishedServer)
                 .filter { it !== candidate }
@@ -694,7 +912,7 @@ class PlaybackService : MediaLibraryService() {
         val routeChanged = !routeTargetInitialized || lastRouteTarget != targetIdentity
         val plan = AudioRoutePlan.evaluate(
             AudioRoutePlan.Input(
-                localActive = mediaSession?.player === main,
+                localActive = isLocalSessionActive(),
                 hasMain = main != null,
                 hasTail = tail != null,
                 mainAlreadyOnTarget = mainRouteApplied && mainRouteTarget == targetIdentity,
@@ -734,7 +952,7 @@ class PlaybackService : MediaLibraryService() {
         }
         android.util.Log.d(
             "AudioRoute",
-            "reason=$reason changed=$routeChanged active=${mediaSession?.player === main} " +
+            "reason=$reason changed=$routeChanged active=${isLocalSessionActive()} " +
                 "target=${target?.productName ?: "default"} id=${target?.id} type=${target?.type} " +
                 "force=$forceApply apply=${plan.applyMain}/${plan.applyTail} " +
                 "invalidate=${plan.invalidateCrossfade}",
@@ -795,13 +1013,13 @@ class PlaybackService : MediaLibraryService() {
                     android.util.Log.e("Crossfade", "volume loop crashed; restarting", e)
                     runCatching {
                         tailPlayer?.let {
-                            it.volume = 0f
+                            it.volume = focusAdjustedVolume(0f)
                             it.stop()
                             it.clearMediaItems()
                             it.setPlaybackSpeed(1f)
                         }
                         incomingAudioTrackId = null
-                        player.volume = 1f
+                        player.volume = focusAdjustedVolume(1f)
                     }
                     delay(500)
                 }
@@ -817,6 +1035,7 @@ class PlaybackService : MediaLibraryService() {
             var gainFactor = 1f
             var gainKey: PlaybackGain.ConfigKey? = null
             var touchedVolume = false
+            var observedAudioFocusMultiplier = audioFocusVolumeMultiplier
             // Active-overlap state.
             var xfEndsAt = 0L
             var xfDurationMs = 1L
@@ -898,7 +1117,7 @@ class PlaybackService : MediaLibraryService() {
 
             fun clearCrossfadeOperation(fade: Float, gain: Float) {
                 tailPlayer?.let {
-                    it.volume = 0f
+                    it.volume = focusAdjustedVolume(0f)
                     it.stop()
                     it.clearMediaItems()
                     it.setPlaybackSpeed(1f)
@@ -917,7 +1136,7 @@ class PlaybackService : MediaLibraryService() {
                 clearArmedNormalization()
                 tailAudioAdvancing = false
                 incomingAudioTrackId = null
-                player.volume = gain * fade
+                player.volume = focusAdjustedVolume(gain * fade)
                 touchedVolume = true
             }
 
@@ -995,6 +1214,11 @@ class PlaybackService : MediaLibraryService() {
             var maxStretch = 0.10f
 
             volumeLoop@ while (isActive) {
+                val currentAudioFocusMultiplier = audioFocusVolumeMultiplier
+                if (currentAudioFocusMultiplier != observedAudioFocusMultiplier) {
+                    observedAudioFocusMultiplier = currentAudioFocusMultiplier
+                    touchedVolume = true
+                }
                 if (applyCrossfadeResetIfNeeded(SleepFade.level, gainFactor)) {
                     continue@volumeLoop
                 }
@@ -1067,7 +1291,7 @@ class PlaybackService : MediaLibraryService() {
                     // Never let the previous track/configuration leak while Room is
                     // resolving the new one.
                     gainFactor = 1f
-                    player.volume = fade
+                    player.volume = focusAdjustedVolume(fade)
                     touchedVolume = true
                     gainKey = null
 
@@ -1126,7 +1350,7 @@ class PlaybackService : MediaLibraryService() {
                 // ni normalización.
                 if (crossfadeMs == 0L && !normalize && !xfActive && fade >= 1f) {
                     if (touchedVolume) {
-                        player.volume = 1f
+                        player.volume = focusAdjustedVolume(1f)
                         touchedVolume = false
                     }
                     delay(500)
@@ -1165,8 +1389,12 @@ class PlaybackService : MediaLibraryService() {
                         // Different tracks here (A on tail, B on main) → uncorrelated
                         // → equal-power (sqrt) keeps perceived loudness flat; headroom
                         // guards the mixer against midpoint peak clipping.
-                        player.volume = xfHeadroom * gainFactor * kotlin.math.sqrt(t) * fade
-                        tail.volume = xfHeadroom * xfGainA * kotlin.math.sqrt(1f - t) * fade
+                        player.volume = focusAdjustedVolume(
+                            xfHeadroom * gainFactor * kotlin.math.sqrt(t) * fade,
+                        )
+                        tail.volume = focusAdjustedVolume(
+                            xfHeadroom * xfGainA * kotlin.math.sqrt(1f - t) * fade,
+                        )
                         android.util.Log.d("Crossfade", "overlap t=$t mainVol=${player.volume} tailVol=${tail.volume}")
                         if (fade < 1f) android.util.Log.d("SleepFade", "overlap fade=$fade mainVol=${player.volume} tailVol=${tail.volume}")
                     }
@@ -1300,7 +1528,7 @@ class PlaybackService : MediaLibraryService() {
                             armedRatio = ratio
                             if (armedAtPos > player.currentPosition + 100) {
                                 tail.playWhenReady = false
-                                tail.volume = 0f
+                                tail.volume = focusAdjustedVolume(0f)
                                 tail.setPlaybackSpeed(if (autoMix) ratio else 1f)
                                 tail.setMediaItem(
                                     MediaItem.Builder().setMediaId(curId).setUri(curUri).build(),
@@ -1355,7 +1583,7 @@ class PlaybackService : MediaLibraryService() {
                             // BUFFERING made the handover blind — the tail came up
                             // seconds late and replayed part of A.
                             tail.playWhenReady = false
-                            tail.volume = 0f
+                            tail.volume = focusAdjustedVolume(0f)
                             // El ratio del pre-armado sigue siendo el bueno (esta
                             // rama sólo entra con armedForId == curId): reponerlo,
                             // o el AutoMix se perdía justo en las transiciones que
@@ -1437,7 +1665,7 @@ class PlaybackService : MediaLibraryService() {
                         // warm-up the main player keeps advancing — an audible
                         // tail would replay that stretch of A. Muted, waiting
                         // longer costs nothing: A keeps sounding on the main.
-                        tail.volume = 0f
+                        tail.volume = focusAdjustedVolume(0f)
                         tailAudioAdvancing = false
                         // Punto de referencia para descontar el tempo del AutoMix
                         // del cálculo de deriva (ver `realDrift`): aún parado, la
@@ -1644,8 +1872,10 @@ class PlaybackService : MediaLibraryService() {
                             }
                             val s = step / 5f
                             val handoverFade = SleepFade.level
-                            tail.volume = xfGainA * s * handoverFade
-                            player.volume = gainFactor * (1f - s) * handoverFade
+                            tail.volume = focusAdjustedVolume(xfGainA * s * handoverFade)
+                            player.volume = focusAdjustedVolume(
+                                gainFactor * (1f - s) * handoverFade,
+                            )
                             delay(20)
                             if (applyCrossfadeResetIfNeeded(SleepFade.level, gainFactor)) {
                                 continue@volumeLoop
@@ -1697,8 +1927,8 @@ class PlaybackService : MediaLibraryService() {
                             speed,
                         )
                         val startGuard = CrossfadeStartGuard(initialWallFadeMs)
-                        tail.volume = xfGainA * SleepFade.level
-                        player.volume = 0f
+                        tail.volume = focusAdjustedVolume(xfGainA * SleepFade.level)
+                        player.volume = focusAdjustedVolume(0f)
                         incomingAudioTrackId = null
                         player.seekToNextMediaItem()
                         gainFactor = armedGainB
@@ -1748,8 +1978,8 @@ class PlaybackService : MediaLibraryService() {
                             ) {
                                 CrossfadeStartGuard.Decision.WAIT -> {
                                     val waitFade = SleepFade.level
-                                    tail.volume = xfGainA * waitFade
-                                    player.volume = 0f
+                                    tail.volume = focusAdjustedVolume(xfGainA * waitFade)
+                                    player.volume = focusAdjustedVolume(0f)
                                     touchedVolume = true
                                     if (applyCrossfadeResetIfNeeded(waitFade, gainFactor)) {
                                         continue@volumeLoop
@@ -1773,8 +2003,8 @@ class PlaybackService : MediaLibraryService() {
                                     xfDurationMs = decision.fadeMs
                                     xfEndsAt = overlapStartedAt + decision.fadeMs
                                     val overlapFade = SleepFade.level
-                                    tail.volume = xfGainA * overlapFade
-                                    player.volume = 0f
+                                    tail.volume = focusAdjustedVolume(xfGainA * overlapFade)
+                                    player.volume = focusAdjustedVolume(0f)
                                     armedForId = null
                                     armedAtPos = 0L
                                     armedGainA = 1f
@@ -1836,7 +2066,7 @@ class PlaybackService : MediaLibraryService() {
                     }
                 }
 
-                player.volume = gainFactor * fade
+                player.volume = focusAdjustedVolume(gainFactor * fade)
                 if (fade < 1f) android.util.Log.d("SleepFade", "normal fade=$fade mainVol=${player.volume}")
                 touchedVolume = true
                 delay(200)
@@ -1860,6 +2090,10 @@ class PlaybackService : MediaLibraryService() {
     override fun onDestroy() {
         // Invalidate first: no suspended handoff may commit during teardown.
         playbackHandoff.begin()
+        serviceDestroyed = true
+        abandonAudioFocusPlatform()
+        audioFocusPolicyState = AudioFocusPolicy.State()
+        audioFocusVolumeMultiplier = AudioFocusPolicy.FULL_VOLUME
         if (audioDeviceCallbackRegistered) {
             runCatching { audioManager.unregisterAudioDeviceCallback(audioDeviceCallback) }
                 .onFailure {
@@ -1884,6 +2118,7 @@ class PlaybackService : MediaLibraryService() {
             release()
         }
         mediaSession = null
+        localSessionPlayer = null
         tailPlayer?.release()
         tailPlayer = null
         castPlayer?.release()
@@ -1893,6 +2128,36 @@ class PlaybackService : MediaLibraryService() {
         EqHolder.release()
         serviceScope.cancel()
         super.onDestroy()
+    }
+}
+
+/**
+ * MediaSession-facing player that preserves the exact controller intent. Internal recovery,
+ * crossfade and focus-loss operations continue to address the wrapped ExoPlayer directly.
+ */
+private class FocusAwarePlayer(
+    player: Player,
+    private val onPlay: () -> Unit,
+    private val onPause: () -> Unit,
+    private val onStop: () -> Unit,
+) : ForwardingPlayer(player) {
+
+    override fun play() = onPlay()
+
+    override fun pause() = onPause()
+
+    override fun setPlayWhenReady(playWhenReady: Boolean) {
+        if (playWhenReady) onPlay() else onPause()
+    }
+
+    override fun stop() {
+        onStop()
+        super.stop()
+    }
+
+    override fun clearMediaItems() {
+        onStop()
+        super.clearMediaItems()
     }
 }
 
