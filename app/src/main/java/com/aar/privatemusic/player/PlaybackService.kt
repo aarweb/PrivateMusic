@@ -52,6 +52,7 @@ class PlaybackService : MediaLibraryService() {
 
     override fun onCreate() {
         super.onCreate()
+        audioManager = getSystemService(AUDIO_SERVICE) as android.media.AudioManager
         AudioDsp.reload(this)
         val player = ExoPlayer.Builder(this)
             .setRenderersFactory(AudioDsp.buildRenderersFactory(this))
@@ -64,6 +65,8 @@ class PlaybackService : MediaLibraryService() {
             )
             .setHandleAudioBecomingNoisy(true)
             .build()
+        localPlayer = player
+        alignLocalOutput("main-created")
         // Sin esto, la CPU puede entrar en reposo profundo con la pantalla apagada
         // y la reproducción se corta. `WAKE_MODE_LOCAL` retiene sólo el wakelock de
         // CPU, y sólo mientras suena algo: los ficheros son locales, así que no hace
@@ -84,7 +87,7 @@ class PlaybackService : MediaLibraryService() {
         // Second player for TRUE crossfade: it plays the tail of the outgoing
         // track while the main player already runs the incoming one, so both
         // songs genuinely overlap. No audio focus: it rides on the main one.
-        tailPlayer = ExoPlayer.Builder(this)
+        val tail = ExoPlayer.Builder(this)
             .setRenderersFactory(AudioDsp.buildRenderersFactory(this))
             .setAudioAttributes(
                 AudioAttributes.Builder()
@@ -94,6 +97,8 @@ class PlaybackService : MediaLibraryService() {
                 /* handleAudioFocus = */ false,
             )
             .build()
+        tailPlayer = tail
+        alignLocalOutput("tail-created")
         // The ONLY reliable "audio is really coming out" signal: currentPosition
         // interpolates with the system clock and lies during AudioTrack warm-up.
         tailPlayer?.addAnalyticsListener(object : androidx.media3.exoplayer.analytics.AnalyticsListener {
@@ -204,8 +209,14 @@ class PlaybackService : MediaLibraryService() {
             }
         })
         startVolumeLoop(player, dao)
-        localPlayer = player
         castDao = dao
+        runCatching {
+            audioManager.registerAudioDeviceCallback(
+                audioDeviceCallback,
+                android.os.Handler(mainLooper),
+            )
+            audioDeviceCallbackRegistered = true
+        }.onFailure { android.util.Log.w("AudioRoute", "no se pudo registrar el callback", it) }
         // Cast support is best-effort: no Play Services -> no cast, no crash.
         runCatching {
             val castContext = com.google.android.gms.cast.framework.CastContext
@@ -233,6 +244,26 @@ class PlaybackService : MediaLibraryService() {
     private var castDao: MusicDao? = null
     private val playbackHandoff = PlaybackHandoff()
     private val handoffServers = mutableSetOf<com.aar.privatemusic.cast.MediaHttpServer>()
+    private lateinit var audioManager: android.media.AudioManager
+    private var audioDeviceCallbackRegistered = false
+    private var routeTargetInitialized = false
+    private var lastRouteTarget: AudioRouteTarget? = null
+    private var mainRouteApplied = false
+    private var mainRouteTarget: AudioRouteTarget? = null
+    private var tailRouteApplied = false
+    private var tailRouteTarget: AudioRouteTarget? = null
+
+    private val audioDeviceCallback = object : android.media.AudioDeviceCallback() {
+        override fun onAudioDevicesAdded(addedDevices: Array<out android.media.AudioDeviceInfo>) {
+            alignLocalOutput("devices-added")
+        }
+
+        override fun onAudioDevicesRemoved(removedDevices: Array<out android.media.AudioDeviceInfo>) {
+            alignLocalOutput("devices-removed")
+        }
+    }
+
+    private data class AudioRouteTarget(val id: Int, val type: Int)
 
     private fun recoverLocalPlaybackError(player: ExoPlayer, error: PlaybackException) {
         val trackId = player.currentMediaItem?.mediaId
@@ -444,6 +475,9 @@ class PlaybackService : MediaLibraryService() {
                 previousServer = httpServer
                 restorePlayWhenReady = wasPlayWhenReady
                 commitAttempted = true
+                // El tail puede seguir sonando aunque el main se pause. Se cancela antes de que
+                // Cast pueda hacerse audible, sin tocar la cola del reproductor local principal.
+                invalidateCrossfadeForRecovery()
                 local.pause()
                 httpServer = candidate
                 // Desde aquí, toda nueva canción debe convertirse en URL Cast.
@@ -520,10 +554,25 @@ class PlaybackService : MediaLibraryService() {
             val index = cast.currentMediaItemIndex
             val position = cast.currentPosition
             val wasPlayWhenReady = cast.playWhenReady
+            // Capturamos primero la intención remota y mantenemos local mudo durante todo el
+            // commit. Ninguna reconstrucción o fallback puede reactivarlo antes de enrutarlo.
+            local.playWhenReady = false
+            tailPlayer?.playWhenReady = false
+            if (!playbackHandoff.isCurrent(ticket)) return@launch
+            alignLocalOutput("cast-to-local", forceApply = true)
+            if (!playbackHandoff.isCurrent(ticket)) return@launch
             runCatching { cast.stop() }
                 .onFailure { android.util.Log.w("Cast", "no se pudo detener Cast", it) }
-            runCatching { session.player = local }
+            if (!playbackHandoff.isCurrent(ticket)) return@launch
+            val localExposed = runCatching { session.player = local }
                 .onFailure { android.util.Log.e("Cast", "no se pudo devolver la sesión a local", it) }
+                .isSuccess && session.player === local
+            if (!localExposed) {
+                local.playWhenReady = false
+                tailPlayer?.playWhenReady = false
+                android.util.Log.e("Cast", "handoff local abortado: la sesión no aceptó el reproductor local")
+                return@launch
+            }
             com.aar.privatemusic.cast.CastState.baseUrl = null
             com.aar.privatemusic.cast.CastState.castDeviceName.value = null
             val server = httpServer
@@ -537,7 +586,6 @@ class PlaybackService : MediaLibraryService() {
                 if (index in 0 until local.mediaItemCount) local.seekTo(index, position)
                 local.playWhenReady = wasPlayWhenReady
             } else {
-                local.playWhenReady = false
                 exposedFingerprint = localFingerprint(local)
             }
 
@@ -581,7 +629,6 @@ class PlaybackService : MediaLibraryService() {
                     local.playWhenReady = wasPlayWhenReady
                 }
             }
-            routeLocalOutput(local, ticket)
             android.util.Log.d("Cast", "session back to local @$position")
         }
     }
@@ -606,8 +653,20 @@ class PlaybackService : MediaLibraryService() {
         wasPlayWhenReady: Boolean,
     ) {
         if (!playbackHandoff.isCurrent(ticket)) return
+        local.playWhenReady = false
+        tailPlayer?.playWhenReady = false
+        alignLocalOutput("cast-rollback", forceApply = true)
+        if (!playbackHandoff.isCurrent(ticket)) return
         runCatching { cast.stop() }
-        runCatching { session.player = local }
+        val localExposed = runCatching { session.player = local }
+            .onFailure { android.util.Log.e("Cast", "falló exponer local durante rollback", it) }
+            .isSuccess && session.player === local
+        if (!localExposed) {
+            local.playWhenReady = false
+            tailPlayer?.playWhenReady = false
+            android.util.Log.e("Cast", "rollback abortado: la sesión no aceptó el reproductor local")
+            return
+        }
         com.aar.privatemusic.cast.CastState.baseUrl = null
         com.aar.privatemusic.cast.CastState.castDeviceName.value = null
         val publishedServer = httpServer
@@ -623,29 +682,97 @@ class PlaybackService : MediaLibraryService() {
         if (publishedServer !== candidate) publishedServer?.let(handoffServers::remove)
     }
 
-    private fun routeLocalOutput(local: ExoPlayer, ticket: PlaybackHandoff.Ticket) {
-        if (!playbackHandoff.isCurrent(ticket)) return
-        // While casting, Android suspends the Bluetooth A2DP link; a fresh
-        // AudioTrack can then land on the loudspeaker even though the user's
-        // headphones are still connected. Route explicitly to the external
-        // output when one exists (null = default routing).
-        runCatching {
-            val am = getSystemService(AUDIO_SERVICE) as android.media.AudioManager
-            val external = am.getDevices(android.media.AudioManager.GET_DEVICES_OUTPUTS)
-                .firstOrNull {
-                    it.type in intArrayOf(
-                        android.media.AudioDeviceInfo.TYPE_BLUETOOTH_A2DP,
-                        android.media.AudioDeviceInfo.TYPE_BLE_HEADSET,
-                        android.media.AudioDeviceInfo.TYPE_WIRED_HEADPHONES,
-                        android.media.AudioDeviceInfo.TYPE_WIRED_HEADSET,
-                        android.media.AudioDeviceInfo.TYPE_USB_HEADSET,
-                        android.media.AudioDeviceInfo.TYPE_HEARING_AID,
-                    )
-                }
-            local.setPreferredAudioDevice(external)
-            android.util.Log.d("Cast", "local output -> ${external?.productName ?: "default"}")
+    /**
+     * Resuelve una sola salida física y aplica exactamente el mismo objeto (o null) a main/tail.
+     * No usa el handoff de Cast: un hot-plug no debe invalidar una transición remota en curso.
+     */
+    private fun alignLocalOutput(reason: String, forceApply: Boolean = false) {
+        val main = localPlayer
+        val tail = tailPlayer
+        val target = resolveLocalOutput()
+        val targetIdentity = target?.let { AudioRouteTarget(it.id, it.type) }
+        val routeChanged = !routeTargetInitialized || lastRouteTarget != targetIdentity
+        val plan = AudioRoutePlan.evaluate(
+            AudioRoutePlan.Input(
+                localActive = mediaSession?.player === main,
+                hasMain = main != null,
+                hasTail = tail != null,
+                mainAlreadyOnTarget = mainRouteApplied && mainRouteTarget == targetIdentity,
+                tailAlreadyOnTarget = tailRouteApplied && tailRouteTarget == targetIdentity,
+                routeChanged = routeChanged,
+                forceApply = forceApply,
+            ),
+        )
+
+        routeTargetInitialized = true
+        lastRouteTarget = targetIdentity
+        if (plan.invalidateCrossfade) {
+            // Primero silencia y vacía el tail; retirar auriculares nunca debe dejarlo sonando.
+            invalidateCrossfadeForRecovery()
         }
+        if (plan.applyMain && main != null) {
+            runCatching { main.setPreferredAudioDevice(target) }
+                .onSuccess {
+                    mainRouteApplied = true
+                    mainRouteTarget = targetIdentity
+                }
+                .onFailure {
+                    mainRouteApplied = false
+                    android.util.Log.w("AudioRoute", "falló ruta main reason=$reason", it)
+                }
+        }
+        if (plan.applyTail && tail != null) {
+            runCatching { tail.setPreferredAudioDevice(target) }
+                .onSuccess {
+                    tailRouteApplied = true
+                    tailRouteTarget = targetIdentity
+                }
+                .onFailure {
+                    tailRouteApplied = false
+                    android.util.Log.w("AudioRoute", "falló ruta tail reason=$reason", it)
+                }
+        }
+        android.util.Log.d(
+            "AudioRoute",
+            "reason=$reason changed=$routeChanged active=${mediaSession?.player === main} " +
+                "target=${target?.productName ?: "default"} id=${target?.id} type=${target?.type} " +
+                "force=$forceApply apply=${plan.applyMain}/${plan.applyTail} " +
+                "invalidate=${plan.invalidateCrossfade}",
+        )
     }
+
+    private fun resolveLocalOutput(): android.media.AudioDeviceInfo? {
+        if (android.os.Build.VERSION.SDK_INT >= 33) {
+            val mediaAttributes = android.media.AudioAttributes.Builder()
+                .setUsage(android.media.AudioAttributes.USAGE_MEDIA)
+                .setContentType(android.media.AudioAttributes.CONTENT_TYPE_MUSIC)
+                .build()
+            val attributedExternal = runCatching {
+                audioManager.getAudioDevicesForAttributes(mediaAttributes)
+                    .filter { it.isSink && it.isSupportedExternalOutput() }
+            }.onFailure {
+                android.util.Log.w("AudioRoute", "falló getAudioDevicesForAttributes", it)
+            }.getOrDefault(emptyList())
+            if (attributedExternal.size == 1) return attributedExternal.single()
+        }
+
+        // getDevices conserva el orden que entrega el sistema: la primera externa soportada
+        // hace determinista el fallback sin consultar dispositivos sólo emparejados.
+        return runCatching {
+            audioManager.getDevices(android.media.AudioManager.GET_DEVICES_OUTPUTS)
+                .firstOrNull { it.isSink && it.isSupportedExternalOutput() }
+        }.onFailure {
+            android.util.Log.w("AudioRoute", "falló fallback getDevices; se usa default", it)
+        }.getOrNull()
+    }
+
+    private fun android.media.AudioDeviceInfo.isSupportedExternalOutput(): Boolean =
+        type == android.media.AudioDeviceInfo.TYPE_BLUETOOTH_A2DP ||
+            type == android.media.AudioDeviceInfo.TYPE_BLE_HEADSET ||
+            type == android.media.AudioDeviceInfo.TYPE_WIRED_HEADPHONES ||
+            type == android.media.AudioDeviceInfo.TYPE_WIRED_HEADSET ||
+            type == android.media.AudioDeviceInfo.TYPE_USB_HEADSET ||
+            type == android.media.AudioDeviceInfo.TYPE_HEARING_AID
 
     /**
      * Drives volume normalization and the REAL crossfade: when the current
@@ -1733,6 +1860,13 @@ class PlaybackService : MediaLibraryService() {
     override fun onDestroy() {
         // Invalidate first: no suspended handoff may commit during teardown.
         playbackHandoff.begin()
+        if (audioDeviceCallbackRegistered) {
+            runCatching { audioManager.unregisterAudioDeviceCallback(audioDeviceCallback) }
+                .onFailure {
+                    android.util.Log.w("AudioRoute", "no se pudo desregistrar el callback", it)
+                }
+            audioDeviceCallbackRegistered = false
+        }
         playbackErrorRecovery.reset()
         recoveringPlaybackError = false
         pendingPlaybackError = null
