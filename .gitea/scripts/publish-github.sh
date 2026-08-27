@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-: "${GITHUB_REF_NAME:?Falta GITHUB_REF_NAME}"
+: "${RELEASE_TAG:=${GITHUB_REF_NAME:-}}"
+: "${RELEASE_TAG:?Falta RELEASE_TAG}"
 : "${GH_RELEASE_TOKEN:?Falta GH_RELEASE_TOKEN}"
 : "${GITHUB_RELEASE_REPOSITORY:?Falta GITHUB_RELEASE_REPOSITORY}"
 
@@ -13,10 +14,10 @@ headers=(
 )
 
 release_json="$(curl --silent --show-error --fail "${headers[@]}" \
-  "$api/releases/tags/$GITHUB_REF_NAME" 2>/dev/null || true)"
+  "$api/releases/tags/$RELEASE_TAG" 2>/dev/null || true)"
 if [[ -z "$release_json" ]]; then
   notes="$(git log -1 --format='%s')"
-  payload="$(jq -n --arg tag "$GITHUB_REF_NAME" --arg name "$GITHUB_REF_NAME" \
+  payload="$(jq -n --arg tag "$RELEASE_TAG" --arg name "$RELEASE_TAG" \
     --arg body "$notes" '{tag_name:$tag,name:$name,body:$body,draft:false,prerelease:false}')"
   release_json="$(curl --silent --show-error --fail "${headers[@]}" \
     -X POST "$api/releases" -d "$payload")"

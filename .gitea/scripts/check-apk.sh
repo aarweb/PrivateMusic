@@ -25,7 +25,7 @@ digest="$($ANDROID_HOME/build-tools/36.0.0/apksigner verify --print-certs "$apk"
 expected=e1fefae098e1bbab44660dc2527184ea3bbc6dac1d524eaf75b86669dc0b8ed4
 [[ "$digest" == "$expected" ]] || { echo "::error::Firma APK incorrecta: $digest"; exit 1; }
 
-version="${GITHUB_REF_NAME#v}"
+tag="${RELEASE_TAG:-$GITHUB_REF_NAME}"
+version="${tag#v}"
 mkdir -p dist
 cp "$apk" "dist/privatemusic-$version.apk"
-

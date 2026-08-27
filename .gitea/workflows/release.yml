@@ -5,6 +5,11 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Tag de GitHub que se publicará; vacío solo compila'
+        required: false
+        default: ''
 
 jobs:
   android:
@@ -13,6 +18,7 @@ jobs:
       GRADLE_USER_HOME: ${{ gitea.workspace }}/.gradle
       ACOUSTID_KEY: ${{ secrets.ACOUSTID_KEY }}
       DEBUG_KEYSTORE_B64: ${{ secrets.DEBUG_KEYSTORE_B64 }}
+      RELEASE_TAG: ${{ inputs.release_tag }}
     steps:
       - name: Descargar código desde Gitea
         env:
@@ -30,7 +36,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          VERSION="${GITHUB_REF_NAME#v}"
+          TAG="${RELEASE_TAG:-$GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
           if [[ "$GITHUB_REF" == refs/tags/* ]] && \
              ! grep -q "versionName = \"$VERSION\"" app/build.gradle.kts; then
             echo "::error::El tag $GITHUB_REF_NAME no coincide con versionName"
@@ -50,7 +57,7 @@ jobs:
         run: .gitea/scripts/check-apk.sh
 
       - name: Publicar APK en GitHub Releases
-        if: startsWith(github.ref, 'refs/tags/')
+        if: startsWith(github.ref, 'refs/tags/') || inputs.release_tag != ''
         env:
           GH_RELEASE_TOKEN: ${{ secrets.GH_RELEASE_TOKEN }}
           GITHUB_RELEASE_REPOSITORY: aarweb/PrivateMusic
