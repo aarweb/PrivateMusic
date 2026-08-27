@@ -1,0 +1,49 @@
+name: Compilar y publicar APK
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  android:
+    runs-on: privatemusic-android
+    env:
+      GRADLE_USER_HOME: ${{ gitea.workspace }}/.gradle
+      ACOUSTID_KEY: ${{ secrets.ACOUSTID_KEY }}
+      DEBUG_KEYSTORE_B64: ${{ secrets.DEBUG_KEYSTORE_B64 }}
+    steps:
+      - name: Descargar código desde Gitea
+        uses: http://git.lan/aar/checkout@v4
+
+      - name: Validar versión y preparar firma
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          if [[ "$GITHUB_REF" == refs/tags/* ]] && \
+             ! grep -q "versionName = \"$VERSION\"" app/build.gradle.kts; then
+            echo "::error::El tag $GITHUB_REF_NAME no coincide con versionName"
+            exit 1
+          fi
+          [[ -n "$DEBUG_KEYSTORE_B64" ]] || { echo "::error::Falta DEBUG_KEYSTORE_B64"; exit 1; }
+          printf '%s' "$DEBUG_KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/debug.keystore"
+          echo "PM_KEYSTORE=$RUNNER_TEMP/debug.keystore" >> "$GITHUB_ENV"
+
+      - name: Tests y compilación release
+        run: |
+          chmod +x gradlew
+          ./gradlew :core:jvmTest assembleRelease --no-daemon
+
+      - name: Comprobar APK
+        shell: bash
+        run: .gitea/scripts/check-apk.sh
+
+      - name: Publicar APK en GitHub Releases
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_RELEASE_TOKEN: ${{ secrets.GH_RELEASE_TOKEN }}
+          GITHUB_RELEASE_REPOSITORY: aarweb/PrivateMusic
+        shell: bash
+        run: .gitea/scripts/publish-github.sh
