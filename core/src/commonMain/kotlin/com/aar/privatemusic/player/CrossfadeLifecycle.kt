@@ -21,6 +21,8 @@ class CrossfadeLifecycle {
         NAVIGATION,
         INSUFFICIENT_CONTENT,
         WINDOW_CLOSED,
+        INCOMING_NO_AUDIO,
+        TAIL_ERROR,
     }
 
     data class State(

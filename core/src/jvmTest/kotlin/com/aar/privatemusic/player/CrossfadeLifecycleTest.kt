@@ -78,6 +78,27 @@ class CrossfadeLifecycleTest {
     }
 
     @Test
+    fun `audio entrante ausente cancela desde handover`() {
+        val lifecycle = lifecycleAt(CrossfadeLifecycle.Phase.HANDOVER)
+
+        assertTrue(lifecycle.cancel(CrossfadeLifecycle.CancelReason.INCOMING_NO_AUDIO).accepted)
+        assertEquals(CrossfadeLifecycle.CancelReason.INCOMING_NO_AUDIO, lifecycle.cancelReason)
+    }
+
+    @Test
+    fun `error del tail cancela desde handover y overlap`() {
+        listOf(
+            CrossfadeLifecycle.Phase.HANDOVER,
+            CrossfadeLifecycle.Phase.OVERLAPPING,
+        ).forEach { phase ->
+            val lifecycle = lifecycleAt(phase)
+
+            assertTrue(lifecycle.cancel(CrossfadeLifecycle.CancelReason.TAIL_ERROR).accepted)
+            assertEquals(CrossfadeLifecycle.CancelReason.TAIL_ERROR, lifecycle.cancelReason)
+        }
+    }
+
+    @Test
     fun `un cambio de pista limpia la cancelacion pero la misma pista no`() {
         val lifecycle = lifecycleAt(CrossfadeLifecycle.Phase.WARMING)
         lifecycle.cancel(CrossfadeLifecycle.CancelReason.TAIL_NO_AUDIO)
