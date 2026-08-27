@@ -1001,6 +1001,25 @@ fun SettingsScreen(app: PrivateMusicApp, onOpenStats: () -> Unit, onOpenEq: () -
             modifier = Modifier.padding(bottom = 8.dp),
         )
 
+        val keepScreenOn by app.settings.keepScreenOn.collectAsState()
+        Row(
+            Modifier.fillMaxWidth().padding(vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text("Mantener pantalla activa", style = MaterialTheme.typography.bodyLarge)
+                Text(
+                    "Evita que la pantalla se apague mientras usas PrivateMusic",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Switch(
+                checked = keepScreenOn,
+                onCheckedChange = { app.settings.setKeepScreenOn(it) },
+            )
+        }
+
         val themeMode by app.settings.themeMode.collectAsState()
         Text("Tema", style = MaterialTheme.typography.bodyLarge)
         Text(

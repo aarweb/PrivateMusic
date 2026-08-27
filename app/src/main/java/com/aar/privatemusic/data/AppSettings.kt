@@ -45,6 +45,14 @@ class AppSettings(context: Context) {
         _themeMode.value = value
     }
 
+    private val _keepScreenOn = MutableStateFlow(prefs.getBoolean(KEY_KEEP_SCREEN_ON, false))
+    val keepScreenOn: StateFlow<Boolean> = _keepScreenOn
+
+    fun setKeepScreenOn(value: Boolean) {
+        prefs.edit().putBoolean(KEY_KEEP_SCREEN_ON, value).apply()
+        _keepScreenOn.value = value
+    }
+
     private val _normalizeVolume = MutableStateFlow(prefs.getBoolean(KEY_NORMALIZE, false))
     val normalizeVolume: StateFlow<Boolean> = _normalizeVolume
 
@@ -285,6 +293,7 @@ class AppSettings(context: Context) {
     companion object {
         private const val KEY_CROSSFADE = "crossfade_sec"
         private const val KEY_THEME = "theme_mode"
+        private const val KEY_KEEP_SCREEN_ON = "keep_screen_on"
         private const val KEY_NORMALIZE = "normalize_volume"
         private const val KEY_SPONSORBLOCK = "sponsorblock"
         private const val KEY_AUTO_VIDEO = "auto_download_video"
