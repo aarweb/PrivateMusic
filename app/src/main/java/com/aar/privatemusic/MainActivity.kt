@@ -65,6 +65,11 @@ class MainActivity : ComponentActivity() {
 
     private val app get() = application as PrivateMusicApp
 
+    override fun onStart() {
+        super.onStart()
+        app.videoAuto.checkMissingOnEntry()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 

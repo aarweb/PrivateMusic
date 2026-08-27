@@ -11,6 +11,7 @@ import com.aar.privatemusic.data.AppSettings
 import com.aar.privatemusic.data.db.MusicDao
 import com.aar.privatemusic.data.db.Song
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
@@ -41,7 +42,12 @@ class VideoAutoManager(
     private val scope: CoroutineScope,
 ) {
     private val gate = Mutex()
+    private val workStateLock = Any()
     private var fillJob: Job? = null
+    private var entryJob: Job? = null
+    private val entryPrefs by lazy {
+        context.getSharedPreferences(ENTRY_PREFS_NAME, Context.MODE_PRIVATE)
+    }
 
     data class Progress(val done: Int, val total: Int)
 
@@ -91,10 +97,17 @@ class VideoAutoManager(
         }
     }
 
-    /** Ya tiene vídeo, o ya se intentó y no había: no hay nada que hacer. */
+    private fun isRealVideo(file: File): Boolean = runCatching {
+        file.isFile && file.length() > 0L
+    }.getOrDefault(false)
+
+    private fun hasVideo(song: Song): Boolean =
+        isRealVideo(videoFile(song.id)) ||
+            song.videoPath?.takeUnless(String::isBlank)?.let { isRealVideo(File(it)) } == true
+
+    /** Ya tiene un vídeo real, o ya se intentó y no había: no hay nada que hacer. */
     private fun settled(song: Song): Boolean {
-        val hasFile = videoFile(song.id).let { it.exists() && it.length() > 0 }
-        return hasFile || !song.videoPath.isNullOrBlank() || marker(song.id).exists()
+        return hasVideo(song) || marker(song.id).exists()
     }
 
     /** Sin datos: WiFi (no medida) siempre; datos móviles solo si el usuario lo permitió. */
@@ -114,6 +127,70 @@ class VideoAutoManager(
         status == BatteryManager.BATTERY_STATUS_CHARGING ||
             status == BatteryManager.BATTERY_STATUS_FULL
     }.getOrDefault(false)
+
+    private fun entryRestrictionsAllow(): Boolean =
+        settings.autoDownloadVideo.value &&
+            networkAllows() &&
+            (!settings.videoOnlyWhileCharging.value || chargingAllows())
+
+    /**
+     * Revisa al entrar en la app una muestra pequeña de vídeos ausentes. No
+     * bloquea al llamante y la ventana sólo se consume después de validar las
+     * restricciones de red y carga.
+     */
+    fun checkMissingOnEntry() {
+        synchronized(workStateLock) {
+            if (entryJob?.isActive == true || fillJob?.isActive == true || _fillProgress.value != null) return
+
+            val job = scope.launch(start = CoroutineStart.LAZY) {
+                try {
+                    if (!entryRestrictionsAllow()) return@launch
+
+                    val now = System.currentTimeMillis()
+                    val lastCheckedAt = entryPrefs.getLong(ENTRY_CHECKED_AT_KEY, 0L)
+                    if (!VideoRetryPolicy.isEntryCheckDue(lastCheckedAt, now)) return@launch
+
+                    val pending = withContext(Dispatchers.IO) {
+                        entryPrefs.edit().putLong(ENTRY_CHECKED_AT_KEY, now).commit()
+
+                        val unmarked = mutableListOf<Song>()
+                        val retryable = mutableListOf<Pair<Song, Long>>()
+                        dao.songsOnce().forEach { song ->
+                            if (hasVideo(song)) return@forEach
+                            val noVideo = marker(song.id)
+                            if (!noVideo.exists()) {
+                                unmarked += song
+                            } else {
+                                val markedAt = noVideo.lastModified()
+                                if (VideoRetryPolicy.canRetryMarker(markedAt, now)) {
+                                    retryable += song to markedAt
+                                }
+                            }
+                        }
+
+                        val orderedUnmarked = unmarked.sortedBy(Song::id)
+                        val orderedRetryable = retryable
+                            .sortedWith(compareBy<Pair<Song, Long>> { it.second }.thenBy { it.first.id })
+                            .map { it.first }
+                        (orderedUnmarked + orderedRetryable).take(VideoRetryPolicy.MAX_BATCH_SIZE)
+                    }
+
+                    Log.d("VideoAuto", "comprobación de entrada: ${pending.size} vídeos pendientes")
+                    for (song in pending) {
+                        if (!entryRestrictionsAllow()) {
+                            Log.d("VideoAuto", "comprobación de entrada detenida por red o carga")
+                            break
+                        }
+                        fetch(song)
+                    }
+                } finally {
+                    synchronized(workStateLock) { entryJob = null }
+                }
+            }
+            entryJob = job
+            job.start()
+        }
+    }
 
     /** Gancho tras una descarga: baja el vídeo si procede. No bloquea al llamante. */
     fun onSongDownloaded(id: String) {
@@ -136,9 +213,15 @@ class VideoAutoManager(
     /** Descarga una y deja marca si no había vídeo. Serializado para no saturar. */
     private suspend fun fetch(song: Song): Boolean = gate.withLock {
         val ok = downloader.downloadVideoClip(song)
-        if (!ok) {
+        if (ok) {
+            clearNoVideoMarker(song.id)
+        } else {
             // No encontrado (o fallo): marca para no reintentar en cada relleno.
-            runCatching { marker(song.id).createNewFile() }
+            runCatching {
+                val noVideo = marker(song.id)
+                noVideo.createNewFile()
+                noVideo.setLastModified(System.currentTimeMillis())
+            }
         }
         ok
     }
@@ -148,39 +231,46 @@ class VideoAutoManager(
      * Secuencial, en [scope]; publica progreso. Devuelve false si no arrancó.
      */
     fun fillMissing(onDone: (Int, Int) -> Unit) {
-        if (_fillProgress.value != null) return
-        fillJob = scope.launch {
-            try {
-                if (!networkAllows()) {
-                    withContext(Dispatchers.Main) { onDone(-1, 0) }
-                    return@launch
+        synchronized(workStateLock) {
+            if (_fillProgress.value != null || fillJob?.isActive == true) return
+            val entryToCancel = entryJob
+            val job = scope.launch(start = CoroutineStart.LAZY) {
+                try {
+                    entryToCancel?.cancelAndJoin()
+                    if (!networkAllows()) {
+                        withContext(Dispatchers.Main) { onDone(-1, 0) }
+                        return@launch
+                    }
+                    if (settings.videoOnlyWhileCharging.value && !chargingAllows()) {
+                        withContext(Dispatchers.Main) { onDone(-2, 0) }
+                        return@launch
+                    }
+                    val pending = withContext(Dispatchers.IO) { dao.songsOnce().filterNot { settled(it) } }
+                    if (pending.isEmpty()) {
+                        withContext(Dispatchers.Main) { onDone(0, 0) }
+                        return@launch
+                    }
+                    var got = 0
+                    for ((i, song) in pending.withIndex()) {
+                        _fillProgress.value = Progress(i, pending.size)
+                        if (!networkAllows()) break // se cortó la WiFi
+                        if (settings.videoOnlyWhileCharging.value && !chargingAllows()) break
+                        if (fetch(song)) got++
+                    }
+                    withContext(Dispatchers.Main) { onDone(got, pending.size) }
+                } finally {
+                    _fillProgress.value = null
+                    synchronized(workStateLock) { fillJob = null }
                 }
-                if (settings.videoOnlyWhileCharging.value && !chargingAllows()) {
-                    withContext(Dispatchers.Main) { onDone(-2, 0) }
-                    return@launch
-                }
-                val pending = withContext(Dispatchers.IO) { dao.songsOnce().filterNot { settled(it) } }
-                if (pending.isEmpty()) {
-                    withContext(Dispatchers.Main) { onDone(0, 0) }
-                    return@launch
-                }
-                var got = 0
-                for ((i, song) in pending.withIndex()) {
-                    _fillProgress.value = Progress(i, pending.size)
-                    if (!networkAllows()) break // se cortó la WiFi
-                    if (settings.videoOnlyWhileCharging.value && !chargingAllows()) break
-                    if (fetch(song)) got++
-                }
-                withContext(Dispatchers.Main) { onDone(got, pending.size) }
-            } finally {
-                _fillProgress.value = null
-                fillJob = null
             }
+            fillJob = job
+            job.start()
         }
     }
 
     /** Borra Canvas, intentos y temporales para poder generarlos de nuevo desde cero. */
     suspend fun deleteAllVideos(): Int {
+        entryJob?.cancelAndJoin()
         fillJob?.cancelAndJoin()
         return gate.withLock {
             withContext(Dispatchers.IO) {
@@ -216,5 +306,10 @@ class VideoAutoManager(
                 cleared
             }
         }
+    }
+
+    private companion object {
+        const val ENTRY_PREFS_NAME = "video_auto"
+        const val ENTRY_CHECKED_AT_KEY = "missing_video_entry_checked_at"
     }
 }
