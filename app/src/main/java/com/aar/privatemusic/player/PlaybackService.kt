@@ -1061,6 +1061,8 @@ class PlaybackService : MediaLibraryService() {
             // de respaldo re-prepara el tail y antes lo dejaba SIEMPRE a 1.0, así
             // que había fundido pero el AutoMix desaparecía en silencio.
             var armedRatio = 1f
+            var armedAutoMix = false
+            var tempoActuallyApplied = false
             // Effective end of the outgoing track (production fade-outs and
             // trailing silence trimmed): crossfading INTO a dying tail sounds
             // like a cut no matter how seamless the engine is.
@@ -1069,6 +1071,7 @@ class PlaybackService : MediaLibraryService() {
             // A failed handover (audio never surfaced / still misaligned) skips
             // the crossfade for THAT track: gapless is better than replaying A.
             var skipXfForId: String? = null
+            var neutralFallbackForId: String? = null
             val lifecycle = CrossfadeLifecycle()
             var observedCrossfadeResetGeneration = crossfadeResetGeneration
 
@@ -1133,6 +1136,8 @@ class PlaybackService : MediaLibraryService() {
                 armedGainB = 1f
                 armedNextId = null
                 armedRatio = 1f
+                armedAutoMix = false
+                tempoActuallyApplied = false
                 armedEffDur = 0L
                 armedAppliedTailSilenceMs = 0L
                 clearArmedNormalization()
@@ -1192,14 +1197,61 @@ class PlaybackService : MediaLibraryService() {
             fun tailFailedForCurrentOperation(): Boolean =
                 tailPlayerErrorGeneration != armedTailErrorGeneration
 
+            fun retryNeutralAutoMixIfEligible(
+                reason: CrossfadeLifecycle.CancelReason,
+                detail: String,
+                fade: Float,
+                gain: Float,
+            ): Boolean {
+                val failedTrackId = lifecycle.trackId ?: armedForId ?: return false
+                val failedPhase = lifecycle.phase
+                val failedRatio = armedRatio
+                if (!CrossfadeAutoMixFallback.shouldRetryNeutral(
+                        phase = failedPhase,
+                        reason = reason,
+                        autoMixApplied = tempoActuallyApplied,
+                        ratio = failedRatio,
+                        retryAlreadyAttempted = neutralFallbackForId == failedTrackId,
+                    )
+                ) {
+                    return false
+                }
+                neutralFallbackForId = failedTrackId
+                clearCrossfadeOperation(fade, gain)
+                lifecycle.reset()
+                android.util.Log.d(
+                    "Crossfade",
+                    "reintento neutral de AutoMix phase=$failedPhase ratio=$failedRatio " +
+                        "reason=$reason track=$failedTrackId detail=$detail",
+                )
+                return true
+            }
+
+            fun setArmedTailPlaybackSpeed(tail: ExoPlayer) {
+                tail.setPlaybackSpeed(armedRatio)
+                if (armedRatio.isFinite() && armedRatio > 0f && armedRatio != 1f) {
+                    tempoActuallyApplied = true
+                }
+            }
+
             fun cancelIfTailFailed(checkpoint: String, fade: Float, gain: Float): Boolean {
                 if (!tailFailedForCurrentOperation()) return false
                 val failedTrackId = lifecycle.trackId ?: armedForId
+                val detail = "checkpoint=$checkpoint track=$failedTrackId " +
+                    "generation=$armedTailErrorGeneration/$tailPlayerErrorGeneration"
+                if (retryNeutralAutoMixIfEligible(
+                        CrossfadeLifecycle.CancelReason.TAIL_ERROR,
+                        detail,
+                        fade,
+                        gain,
+                    )
+                ) {
+                    return true
+                }
                 skipXfForId = failedTrackId
                 cancelCrossfade(
                     CrossfadeLifecycle.CancelReason.TAIL_ERROR,
-                    "checkpoint=$checkpoint track=$failedTrackId " +
-                        "generation=$armedTailErrorGeneration/$tailPlayerErrorGeneration",
+                    detail,
                     fade,
                     gain,
                 )
@@ -1225,6 +1277,9 @@ class PlaybackService : MediaLibraryService() {
                     continue@volumeLoop
                 }
                 val observedId = player.currentMediaItem?.mediaId
+                if (neutralFallbackForId != null && neutralFallbackForId != observedId) {
+                    neutralFallbackForId = null
+                }
                 if (lifecycle.phase != CrossfadeLifecycle.Phase.IDLE &&
                     lifecycle.phase != CrossfadeLifecycle.Phase.CANCELLED &&
                     cancelIfTailFailed(
@@ -1461,6 +1516,8 @@ class PlaybackService : MediaLibraryService() {
                             delay(100)
                             continue
                         }
+                        val effectiveAutoMix = autoMix && neutralFallbackForId != curId
+                        armedAutoMix = effectiveAutoMix
                         // Baseline por operación: un fallo antiguo queda absorbido
                         // aquí y sólo los cambios posteriores invalidan este prearm.
                         armedTailErrorGeneration = tailPlayerErrorGeneration
@@ -1474,7 +1531,7 @@ class PlaybackService : MediaLibraryService() {
                                 val bb = dao.getBpm(nextId)
                                 val ts = dao.getTailSilence(curId) ?: 0L
                                 val decision = decideTempoMatch(ba, bb, maxStretch)
-                                MixInfoHolder.publish(MixInfo(ba, bb, decision, autoMix))
+                                MixInfoHolder.publish(MixInfo(ba, bb, decision, effectiveAutoMix))
                                 Triple(listOf(la, lb, rga, rgb), decision.appliedRatio, ts)
                             }
                         }
@@ -1533,11 +1590,15 @@ class PlaybackService : MediaLibraryService() {
                             armedReplayGainB = gains[3]
                             refreshArmedGains(prearmConfig)
                             armedNextId = nextId
-                            armedRatio = ratio
+                            armedRatio = if (armedAutoMix && ratio.isFinite() && ratio > 0f) {
+                                ratio
+                            } else {
+                                1f
+                            }
                             if (armedAtPos > player.currentPosition + 100) {
                                 tail.playWhenReady = false
                                 tail.volume = focusAdjustedVolume(0f)
-                                tail.setPlaybackSpeed(if (autoMix) ratio else 1f)
+                                setArmedTailPlaybackSpeed(tail)
                                 tail.setMediaItem(
                                     MediaItem.Builder().setMediaId(curId).setUri(curUri).build(),
                                     armedAtPos,
@@ -1551,8 +1612,8 @@ class PlaybackService : MediaLibraryService() {
                             val mix = MixInfoHolder.info.value
                             android.util.Log.d(
                                 "Crossfade",
-                                "pre-armed at $armedAtPos ratio=$ratio requiredRatio=${mix?.requiredRatio} " +
-                                    "autoMix=$autoMix bpm=${mix?.bpmOut}->${mix?.bpmIn} " +
+                                "pre-armed at $armedAtPos ratio=$armedRatio requiredRatio=${mix?.requiredRatio} " +
+                                    "autoMix=$armedAutoMix bpm=${mix?.bpmOut}->${mix?.bpmIn} " +
                                     "tailSilenceMs=$tailSilence configuredMs=$crossfadeMs " +
                                     "technicalTriggerMs=$technicalTriggerMs " +
                                     "appliedTailSilenceMs=$armedAppliedTailSilenceMs " +
@@ -1599,7 +1660,7 @@ class PlaybackService : MediaLibraryService() {
                             // rama sólo entra con armedForId == curId): reponerlo,
                             // o el AutoMix se perdía justo en las transiciones que
                             // más lo necesitan.
-                            tail.setPlaybackSpeed(if (autoMix) armedRatio else 1f)
+                            setArmedTailPlaybackSpeed(tail)
                             tail.setMediaItem(
                                 MediaItem.Builder().setMediaId(curId).setUri(curUri).build(),
                                 player.currentPosition,
@@ -1629,6 +1690,16 @@ class PlaybackService : MediaLibraryService() {
                                 continue@volumeLoop
                             }
                             if (tail.playbackState != Player.STATE_READY) {
+                                if (retryNeutralAutoMixIfEligible(
+                                        CrossfadeLifecycle.CancelReason.PREPARATION_FAILED,
+                                        "track=$curId waitedMs=$prep",
+                                        fade,
+                                        gainFactor,
+                                    )
+                                ) {
+                                    delay(100)
+                                    continue
+                                }
                                 skipXfForId = curId
                                 cancelCrossfade(
                                     CrossfadeLifecycle.CancelReason.PREPARATION_FAILED,
@@ -1697,7 +1768,10 @@ class PlaybackService : MediaLibraryService() {
                         // la espera se come parte del fundido corto, mejor un fundido
                         // breve que un corte: las guardas de "el usuario navegó" y "A ya
                         // no es la actual" (más abajo) cubren que A llegue a su fin.
-                        val warmupCap = maxOf(if (autoMix) 2600 else 1500, (crossfadeMs / 2).toInt())
+                        val warmupCap = maxOf(
+                            if (armedAutoMix) 2600 else 1500,
+                            (crossfadeMs / 2).toInt(),
+                        )
                         var waited = 0
                         while (!tailAudioAdvancing && waited < warmupCap) {
                             if (applyCrossfadeResetIfNeeded(fade, gainFactor)) {
@@ -1739,7 +1813,7 @@ class PlaybackService : MediaLibraryService() {
                         // el tempo es exactamente `avance * (1 - 1/ratio)`: se descuenta
                         // para decidir y calcular el reseek, y también para validar el
                         // resultado final.
-                        val speed = if (autoMix) armedRatio else 1f
+                        val speed = armedRatio
                         var tailPos = tail.currentPosition
                         var drift = player.currentPosition - tailPos
                         var realDrift = CrossfadeAlignment.realDriftMs(
@@ -1758,7 +1832,7 @@ class PlaybackService : MediaLibraryService() {
                             refTailPos = target
                             var rewait = 0
                             val postReseekTimeoutMs =
-                                CrossfadeAlignment.postReseekTimeoutMs(autoMix)
+                                CrossfadeAlignment.postReseekTimeoutMs(armedAutoMix)
                             while (!tailAudioAdvancing && rewait < postReseekTimeoutMs) {
                                 if (applyCrossfadeResetIfNeeded(fade, gainFactor)) {
                                     continue@volumeLoop
@@ -1808,6 +1882,16 @@ class PlaybackService : MediaLibraryService() {
                             // No real audio (cold pipeline) or still misaligned:
                             // a blind handover replays part of A. Skip this
                             // crossfade — plain gapless beats an audible glitch.
+                            if (retryNeutralAutoMixIfEligible(
+                                    CrossfadeLifecycle.CancelReason.TAIL_NO_AUDIO,
+                                    "driftMs=$drift realDriftMs=$realDrift waitedMs=$waited",
+                                    fade,
+                                    gainFactor,
+                                )
+                            ) {
+                                delay(100)
+                                continue
+                            }
                             skipXfForId = curId
                             cancelCrossfade(
                                 CrossfadeLifecycle.CancelReason.TAIL_NO_AUDIO,
@@ -1819,6 +1903,16 @@ class PlaybackService : MediaLibraryService() {
                             continue
                         }
                         if (!CrossfadeAlignment.isFinalAlignmentAcceptable(realDrift)) {
+                            if (retryNeutralAutoMixIfEligible(
+                                    CrossfadeLifecycle.CancelReason.EXCESSIVE_DRIFT,
+                                    "driftMs=$drift realDriftMs=$realDrift waitedMs=$waited",
+                                    fade,
+                                    gainFactor,
+                                )
+                            ) {
+                                delay(100)
+                                continue
+                            }
                             skipXfForId = curId
                             cancelCrossfade(
                                 CrossfadeLifecycle.CancelReason.EXCESSIVE_DRIFT,
@@ -2076,6 +2170,7 @@ class PlaybackService : MediaLibraryService() {
                                             ) {
                                                 continue@volumeLoop
                                             }
+                                            neutralFallbackForId = null
                                             val overlapStartedAt =
                                                 android.os.SystemClock.elapsedRealtime()
                                             xfDurationMs = timingDecision.durationMs
@@ -2089,6 +2184,8 @@ class PlaybackService : MediaLibraryService() {
                                             armedGainB = 1f
                                             armedNextId = null
                                             armedRatio = 1f
+                                            armedAutoMix = false
+                                            tempoActuallyApplied = false
                                             armedEffDur = 0L
                                             armedAppliedTailSilenceMs = 0L
                                             clearArmedNormalization()
