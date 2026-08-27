@@ -61,15 +61,13 @@ fun EqScreen(app: PrivateMusicApp, onBack: () -> Unit = {}) {
             Text("Ecualizador", style = MaterialTheme.typography.titleLarge)
         }
 
-        // Selector de modo: gráfico (sistema) o paramétrico (DSP propio). Sólo uno
-        // activo a la vez para no encadenar dos EQ.
         Row(Modifier.padding(vertical = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             FilterChip(
                 selected = mode == "graphic",
                 onClick = {
                     mode = "graphic"
                     AppSettings.writeEqMode(context, "graphic")
-                    AudioDsp.reload(context) // paramétrico -> passthrough
+                    AudioDsp.reload(context)
                 },
                 label = { Text("Gráfico") },
             )
@@ -78,8 +76,7 @@ fun EqScreen(app: PrivateMusicApp, onBack: () -> Unit = {}) {
                 onClick = {
                     mode = "parametric"
                     AppSettings.writeEqMode(context, "parametric")
-                    EqHolder.setEnabled(context, false) // apaga el del sistema
-                    AudioDsp.reload(context)
+                    EqHolder.setEnabled(context, false)
                 },
                 label = { Text("Paramétrico") },
             )
@@ -106,10 +103,16 @@ private fun GraphicEqSection(app: PrivateMusicApp) {
         return
     }
 
-    var enabled by remember { mutableStateOf(eq.enabled) }
+    var enabled by remember { mutableStateOf(AppSettings.readEqEnabled(context)) }
     Row(Modifier.fillMaxWidth().padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
         Text("Activado", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
-        Switch(checked = enabled, onCheckedChange = { enabled = it; EqHolder.setEnabled(context, it) })
+        Switch(
+            checked = enabled,
+            onCheckedChange = {
+                enabled = it
+                EqHolder.setEnabled(context, it)
+            },
+        )
     }
 
     val presetCount = eq.numberOfPresets.toInt()

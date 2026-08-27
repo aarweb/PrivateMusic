@@ -3,10 +3,12 @@ package com.aar.privatemusic.player
 import android.content.Context
 import android.media.audiofx.Equalizer
 import com.aar.privatemusic.data.AppSettings
+import com.aar.privatemusic.dsp.EqFilter
+import com.aar.privatemusic.dsp.graphicEqFilter
 
 /**
- * System Equalizer attached to the ExoPlayer audio session.
- * Lives in the playback service process; the settings UI drives it directly.
+ * Equalizer del dispositivo usado únicamente para descubrir y editar sus bandas
+ * y presets. El procesamiento se realiza en [AudioDsp] para ambos reproductores.
  */
 object EqHolder {
 
@@ -14,10 +16,12 @@ object EqHolder {
         private set
 
     fun init(context: Context, audioSessionId: Int) {
+        runCatching { equalizer?.enabled = false }
+        runCatching { equalizer?.release() }
+        equalizer = null
         runCatching {
-            equalizer?.release()
             equalizer = Equalizer(0, audioSessionId).apply {
-                enabled = AppSettings.readEqEnabled(context)
+                enabled = false
                 AppSettings.readEqBands(context)?.let { saved ->
                     saved.forEachIndexed { i, level ->
                         if (i < numberOfBands) runCatching { setBandLevel(i.toShort(), level) }
@@ -25,17 +29,20 @@ object EqHolder {
                 }
             }
         }
+        AudioDsp.reload(context)
     }
 
     fun setEnabled(context: Context, value: Boolean) {
-        equalizer?.enabled = value
+        runCatching { equalizer?.enabled = false }
         AppSettings.writeEqEnabled(context, value)
+        AudioDsp.reload(context)
     }
 
     fun setBand(context: Context, band: Int, level: Short) {
         equalizer?.let {
             runCatching { it.setBandLevel(band.toShort(), level) }
             saveBands(context)
+            AudioDsp.reload(context)
         }
     }
 
@@ -43,6 +50,23 @@ object EqHolder {
         equalizer?.let {
             runCatching { it.usePreset(preset) }
             saveBands(context)
+            AudioDsp.reload(context)
+        }
+    }
+
+    fun filters(): List<EqFilter> {
+        val eq = equalizer ?: return emptyList()
+        return (0 until eq.numberOfBands).mapNotNull { band ->
+            runCatching {
+                val index = band.toShort()
+                val range = eq.getBandFreqRange(index)
+                graphicEqFilter(
+                    centerFrequencyMilliHz = eq.getCenterFreq(index),
+                    lowerFrequencyMilliHz = range.getOrElse(0) { 0 },
+                    upperFrequencyMilliHz = range.getOrElse(1) { 0 },
+                    levelMilliBel = eq.getBandLevel(index),
+                )
+            }.getOrNull()
         }
     }
 
@@ -53,6 +77,7 @@ object EqHolder {
     }
 
     fun release() {
+        runCatching { equalizer?.enabled = false }
         runCatching { equalizer?.release() }
         equalizer = null
     }

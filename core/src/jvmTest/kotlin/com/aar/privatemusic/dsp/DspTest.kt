@@ -62,6 +62,32 @@ class DspTest {
     }
 
     @Test
+    fun graphicEqBandConvertsAndroidUnitsToPeakFilter() {
+        val filter = graphicEqFilter(
+            centerFrequencyMilliHz = 1_000_000,
+            lowerFrequencyMilliHz = 800_000,
+            upperFrequencyMilliHz = 1_200_000,
+            levelMilliBel = 350,
+        )
+
+        assertEquals(EqFilterType.PK, filter.type)
+        assertEquals(1000.0, filter.freqHz, 1e-9)
+        assertEquals(3.5, filter.gainDb, 1e-9)
+        assertEquals(2.5, filter.q, 1e-9)
+    }
+
+    @Test
+    fun graphicEqBandUsesSafeQForInvalidOrExtremeRanges() {
+        val invalid = graphicEqFilter(100_000, 200_000, 100_000, (-125).toShort())
+        val narrow = graphicEqFilter(1_000_000, 999_999, 1_000_000, 0)
+
+        assertEquals(100.0, invalid.freqHz, 1e-9)
+        assertEquals(-1.25, invalid.gainDb, 1e-9)
+        assertEquals(1.0, invalid.q, 1e-9)
+        assertEquals(10.0, narrow.q, 1e-9)
+    }
+
+    @Test
     fun autoEqParsesRealProfile() {
         val text = """
             Preamp: -6.7 dB

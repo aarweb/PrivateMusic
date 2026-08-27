@@ -25,9 +25,8 @@ import java.util.concurrent.atomic.AtomicInteger
  * reproductores; [reload] lo actualiza desde Ajustes y sube [version] para que
  * los procesadores reconstruyan sus filtros en el siguiente buffer.
  *
- * El paramétrico corre aquí; el ecualizador "gráfico" (del sistema, en
- * [EqHolder]) va enganchado al audioSessionId. Sólo uno está activo a la vez
- * (lo garantiza la UI) para no encadenar dos EQ.
+ * Tanto el ecualizador paramétrico como el gráfico corren aquí. [EqHolder]
+ * conserva desactivado el Equalizer del sistema y aporta sus metadatos.
  */
 object AudioDsp {
     data class Snapshot(
@@ -44,10 +43,16 @@ object AudioDsp {
     val version = AtomicInteger(0)
 
     fun reload(context: Context) {
+        val parametric = AppSettings.readEqMode(context) == "parametric"
+        val eqEnabled = parametric || AppSettings.readEqEnabled(context)
         snapshot = Snapshot(
-            eqEnabled = AppSettings.readEqMode(context) == "parametric",
-            preampDb = AppSettings.readEqPreamp(context).toDouble(),
-            filters = decodeFilters(AppSettings.readEqFilters(context)),
+            eqEnabled = eqEnabled,
+            preampDb = if (parametric) AppSettings.readEqPreamp(context).toDouble() else 0.0,
+            filters = when {
+                parametric -> decodeFilters(AppSettings.readEqFilters(context))
+                !eqEnabled -> emptyList()
+                else -> EqHolder.filters()
+            },
             crossfeedLevel = AppSettings.readCrossfeedLevel(context),
         )
         version.incrementAndGet()
