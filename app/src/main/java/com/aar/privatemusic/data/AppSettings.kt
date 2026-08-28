@@ -80,6 +80,11 @@ class AppSettings(context: Context) {
     private val _autoMix = MutableStateFlow(prefs.getBoolean(KEY_AUTOMIX, false))
     val autoMix: StateFlow<Boolean> = _autoMix
 
+    private val _spatialAudioAuto = MutableStateFlow(
+        prefs.getBoolean(KEY_SPATIAL_AUDIO_AUTO, true)
+    )
+    val spatialAudioAuto: StateFlow<Boolean> = _spatialAudioAuto
+
     /** Ajuste máximo de tempo del AutoMix, en porcentaje (10, 15 o 20). */
     private val _autoMixMaxPct = MutableStateFlow(prefs.getInt(KEY_AUTOMIX_MAX, 20))
     val autoMixMaxPct: StateFlow<Int> = _autoMixMaxPct
@@ -241,6 +246,11 @@ class AppSettings(context: Context) {
         _autoMix.value = value
     }
 
+    fun setSpatialAudioAuto(value: Boolean) {
+        prefs.edit().putBoolean(KEY_SPATIAL_AUDIO_AUTO, value).apply()
+        _spatialAudioAuto.value = value
+    }
+
     fun setAutoMixMaxPct(value: Int) {
         prefs.edit().putInt(KEY_AUTOMIX_MAX, value).apply()
         _autoMixMaxPct.value = value
@@ -302,6 +312,7 @@ class AppSettings(context: Context) {
         private const val KEY_CANVAS_QUALITY = "canvas_quality"
         private const val KEY_LISTENBRAINZ = "listenbrainz_token"
         private const val KEY_AUTOMIX = "automix"
+        internal const val KEY_SPATIAL_AUDIO_AUTO = "spatial_audio_auto"
         private const val KEY_AUTOMIX_MAX = "automix_max_pct"
         private const val KEY_SHARE_PC = "share_with_pc"
         private const val KEY_SYNC_TOKEN = "sync_token"
@@ -382,6 +393,10 @@ class AppSettings(context: Context) {
 
         fun readAutoMix(context: Context): Boolean =
             context.getSharedPreferences("settings", Context.MODE_PRIVATE).getBoolean(KEY_AUTOMIX, false)
+
+        fun readSpatialAudioAuto(context: Context): Boolean =
+            context.getSharedPreferences("settings", Context.MODE_PRIVATE)
+                .getBoolean(KEY_SPATIAL_AUDIO_AUTO, true)
 
         /**
          * Ajuste máximo de tempo del AutoMix, como fracción (0,20 = ±20%).

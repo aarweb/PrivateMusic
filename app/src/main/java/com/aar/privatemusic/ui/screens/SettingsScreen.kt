@@ -43,6 +43,8 @@ import com.aar.privatemusic.data.FullBackup
 import com.aar.privatemusic.data.HistoryImport
 import com.aar.privatemusic.data.MusicRepository
 import com.aar.privatemusic.downloader.SpotifySync
+import com.aar.privatemusic.player.SpatialAudio
+import com.aar.privatemusic.player.SpatialAudioStatus
 import com.aar.privatemusic.util.AppUpdater
 import com.aar.privatemusic.util.UpdateGate
 import kotlinx.coroutines.launch
@@ -64,6 +66,8 @@ fun SettingsScreen(app: PrivateMusicApp, onOpenStats: () -> Unit, onOpenEq: () -
     val crossfade by app.settings.crossfadeSec.collectAsState()
     val normalize by app.settings.normalizeVolume.collectAsState()
     val autoMix by app.settings.autoMix.collectAsState()
+    val spatialAudioAuto by app.settings.spatialAudioAuto.collectAsState()
+    val spatialAudioState by SpatialAudio.state.collectAsState()
     val shareWithPc by app.settings.shareWithPc.collectAsState()
     val shareAddress by app.libraryShare.address.collectAsState()
     var syncToken by remember { mutableStateOf(app.settings.syncToken) }
@@ -264,6 +268,46 @@ fun SettingsScreen(app: PrivateMusicApp, onOpenStats: () -> Unit, onOpenEq: () -
                     }
                 }
             }
+        }
+
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text("Audio espacial automático", style = MaterialTheme.typography.bodyLarge)
+                Text(
+                    when {
+                        android.os.Build.VERSION.SDK_INT < 32 ->
+                            "No compatible con esta versión de Android"
+                        !spatialAudioAuto -> "Desactivado en la app"
+                        spatialAudioState.status == SpatialAudioStatus.ACTIVE &&
+                            spatialAudioState.headTracking ->
+                            "Activo · seguimiento de cabeza disponible"
+                        spatialAudioState.status == SpatialAudioStatus.ACTIVE -> "Activo"
+                        spatialAudioState.status == SpatialAudioStatus.UNSUPPORTED ->
+                            "No compatible con este dispositivo"
+                        spatialAudioState.status == SpatialAudioStatus.DISABLED_BY_APP ->
+                            "Desactivado en la app"
+                        spatialAudioState.status == SpatialAudioStatus.UNAVAILABLE_ROUTE ->
+                            "La salida actual no admite audio espacial"
+                        spatialAudioState.status == SpatialAudioStatus.DISABLED_BY_SYSTEM ->
+                            "Desactivado en los ajustes del sistema"
+                        spatialAudioState.status == SpatialAudioStatus.WAITING_FOR_TRACK ->
+                            "Esperando una pista de audio"
+                        else -> "La pista actual no es compatible"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Switch(
+                checked = spatialAudioAuto,
+                enabled = android.os.Build.VERSION.SDK_INT >= 32,
+                onCheckedChange = { app.settings.setSpatialAudioAuto(it) },
+            )
         }
 
         Row(

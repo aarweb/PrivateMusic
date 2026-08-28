@@ -5,7 +5,6 @@ import android.app.PendingIntent
 import android.content.Intent
 import android.net.Uri
 import com.aar.privatemusic.MainActivity
-import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.ForwardingPlayer
 import androidx.media3.common.MediaItem
@@ -62,13 +61,13 @@ class PlaybackService : MediaLibraryService() {
         super.onCreate()
         audioManager = getSystemService(AUDIO_SERVICE) as android.media.AudioManager
         AudioDsp.reload(this)
+        val localAudioAttributes = SpatialAudio.musicAudioAttributes(
+            AppSettings.readSpatialAudioAuto(this)
+        )
         val player = ExoPlayer.Builder(this)
             .setRenderersFactory(AudioDsp.buildRenderersFactory(this))
             .setAudioAttributes(
-                AudioAttributes.Builder()
-                    .setUsage(C.USAGE_MEDIA)
-                    .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
-                    .build(),
+                localAudioAttributes,
                 /* handleAudioFocus = */ false,
             )
             .setHandleAudioBecomingNoisy(true)
@@ -109,14 +108,12 @@ class PlaybackService : MediaLibraryService() {
         val tail = ExoPlayer.Builder(this)
             .setRenderersFactory(AudioDsp.buildRenderersFactory(this))
             .setAudioAttributes(
-                AudioAttributes.Builder()
-                    .setUsage(C.USAGE_MEDIA)
-                    .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
-                    .build(),
+                localAudioAttributes,
                 /* handleAudioFocus = */ false,
             )
             .build()
         tailPlayer = tail
+        spatialAudioController = SpatialAudioController(this, player, tail)
         alignLocalOutput("tail-created")
         // The ONLY reliable "audio is really coming out" signal: currentPosition
         // interpolates with the system clock and lies during AudioTrack warm-up.
@@ -132,6 +129,14 @@ class PlaybackService : MediaLibraryService() {
         // reproductor (Main). Guardamos la identidad observada junto a la señal:
         // una notificación antigua de A nunca debe abrir el fade de B.
         player.addAnalyticsListener(object : androidx.media3.exoplayer.analytics.AnalyticsListener {
+            override fun onAudioInputFormatChanged(
+                eventTime: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime,
+                format: androidx.media3.common.Format,
+                decoderReuseEvaluation: androidx.media3.exoplayer.DecoderReuseEvaluation?,
+            ) {
+                spatialAudioController?.onAudioInputFormatChanged(format)
+            }
+
             override fun onAudioPositionAdvancing(
                 eventTime: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime,
                 playoutStartSystemTimeMs: Long,
@@ -286,6 +291,7 @@ class PlaybackService : MediaLibraryService() {
     }
 
     private var tailPlayer: ExoPlayer? = null
+    private var spatialAudioController: SpatialAudioController? = null
     private var tailAudioAdvancing = false
     private var incomingAudioTrackId: String? = null
     private var tailPlayerErrorGeneration = 0L
@@ -2308,6 +2314,8 @@ class PlaybackService : MediaLibraryService() {
         // Invalidate first: no suspended handoff may commit during teardown.
         playbackHandoff.begin()
         serviceDestroyed = true
+        spatialAudioController?.close()
+        spatialAudioController = null
         abandonAudioFocusPlatform()
         audioFocusPolicyState = AudioFocusPolicy.State()
         audioFocusVolumeMultiplier = AudioFocusPolicy.FULL_VOLUME
