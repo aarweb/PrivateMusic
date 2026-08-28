@@ -91,6 +91,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import com.aar.privatemusic.ui.components.AddToPlaylistDialog
 import com.aar.privatemusic.ui.components.ArtImage
+import com.aar.privatemusic.ui.components.MusicCreditsDialog
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
@@ -173,6 +174,7 @@ fun PlayerScreen(
     var showLyrics by remember { mutableStateOf(false) }
     var playerMenuOpen by remember { mutableStateOf(false) }
     var addToPlaylistOpen by remember { mutableStateOf(false) }
+    var songForCredits by remember { mutableStateOf<com.aar.privatemusic.data.db.Song?>(null) }
     var karaokeOpen by remember { mutableStateOf(false) }
     var speedDialogOpen by remember { mutableStateOf(false) }
     var lyricShareFrom by remember { mutableStateOf<Int?>(null) }
@@ -324,7 +326,11 @@ fun PlayerScreen(
             // Lo demás baja aquí: siete iconos en fila no se aciertan con el pulgar.
             Box {
                 IconButton(onClick = { playerMenuOpen = true }, enabled = song != null) {
-                    Icon(Icons.Filled.MoreVert, contentDescription = "Más opciones")
+                    Icon(
+                        Icons.Filled.MoreVert,
+                        contentDescription = song?.let { "Más opciones de ${it.title}" }
+                            ?: "Más opciones",
+                    )
                 }
                 DropdownMenu(expanded = playerMenuOpen, onDismissRequest = { playerMenuOpen = false }) {
                     DropdownMenuItem(
@@ -368,6 +374,13 @@ fun PlayerScreen(
                                     }
                                 }
                             }
+                        },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Créditos y conexiones") },
+                        onClick = {
+                            playerMenuOpen = false
+                            songForCredits = song
                         },
                     )
                     DropdownMenuItem(
@@ -483,6 +496,13 @@ fun PlayerScreen(
         }
         if (karaokeOpen) {
             song?.let { s -> KaraokeDialog(app, s, onDismiss = { karaokeOpen = false }) }
+        }
+        songForCredits?.let { selectedSong ->
+            MusicCreditsDialog(
+                app = app,
+                song = selectedSong,
+                onDismiss = { songForCredits = null },
+            )
         }
         lyricShareFrom?.let { fromIdx ->
             val allLines = lyrics?.lines ?: emptyList()

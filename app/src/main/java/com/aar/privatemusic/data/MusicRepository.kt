@@ -946,6 +946,7 @@ class MusicRepository(
         private val ARTWORK_LYRICS_EXTENSIONS = setOf(
             "jpg", "jpeg", "png", "webp", "lrc", "txt",
             com.aar.privatemusic.lyrics.LyricsTranslationCache.EXTENSION,
+            "pmcredits",
         )
 
         /**

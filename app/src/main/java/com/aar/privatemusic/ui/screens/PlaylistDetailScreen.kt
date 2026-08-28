@@ -52,6 +52,7 @@ import androidx.compose.ui.unit.dp
 import com.aar.privatemusic.PrivateMusicApp
 import com.aar.privatemusic.ui.components.AddToPlaylistDialog
 import com.aar.privatemusic.ui.components.ArtImage
+import com.aar.privatemusic.ui.components.MusicCreditsDialog
 import com.aar.privatemusic.ui.components.PlaylistCover
 import com.aar.privatemusic.ui.components.SongRow
 import kotlinx.coroutines.launch
@@ -90,6 +91,7 @@ fun PlaylistDetailScreen(app: PrivateMusicApp, playlistId: Long, onBack: () -> U
     var sortMenuOpen by remember { mutableStateOf(false) }
     var query by remember { mutableStateOf("") }
     var searching by remember { mutableStateOf(false) }
+    var songForCredits by remember { mutableStateOf<com.aar.privatemusic.data.db.Song?>(null) }
     // Conteos sólo cuando hacen falta: es una consulta, no un Flow.
     var playCounts by remember { mutableStateOf<Map<String, Int>>(emptyMap()) }
     LaunchedEffect(sort) {
@@ -363,7 +365,10 @@ fun PlaylistDetailScreen(app: PrivateMusicApp, playlistId: Long, onBack: () -> U
                         trailing = {
                             Box {
                                 IconButton(onClick = { menuOpen = true }) {
-                                    Icon(Icons.Filled.MoreVert, contentDescription = "Opciones")
+                                    Icon(
+                                        Icons.Filled.MoreVert,
+                                        contentDescription = "Opciones de ${song.title}",
+                                    )
                                 }
                                 DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                                     DropdownMenuItem(
@@ -380,6 +385,13 @@ fun PlaylistDetailScreen(app: PrivateMusicApp, playlistId: Long, onBack: () -> U
                                             menuOpen = false
                                             app.playerController.addToQueue(song)
                                             com.aar.privatemusic.util.Feedback.show("Añadida a la cola")
+                                        },
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("Créditos y conexiones") },
+                                        onClick = {
+                                            menuOpen = false
+                                            songForCredits = song
                                         },
                                     )
                                     DropdownMenuItem(
@@ -431,6 +443,14 @@ fun PlaylistDetailScreen(app: PrivateMusicApp, playlistId: Long, onBack: () -> U
                 exitSelection()
             },
             onDismiss = { showBulkPlaylist = false },
+        )
+    }
+
+    songForCredits?.let { song ->
+        MusicCreditsDialog(
+            app = app,
+            song = song,
+            onDismiss = { songForCredits = null },
         )
     }
 }

@@ -121,6 +121,7 @@ fun LibraryScreen(app: PrivateMusicApp, onOpenArtist: (String) -> Unit = {}) {
     var songForKaraoke by remember { mutableStateOf<Song?>(null) }
     var songForDelete by remember { mutableStateOf<Song?>(null) }
     var songForMetadata by remember { mutableStateOf<Song?>(null) }
+    var songForCredits by remember { mutableStateOf<Song?>(null) }
     var query by remember { mutableStateOf("") }
 
     // Multi-select: long-press a row to enter, tap to toggle.
@@ -411,7 +412,10 @@ fun LibraryScreen(app: PrivateMusicApp, onOpenArtist: (String) -> Unit = {}) {
                         }
                         Box {
                             IconButton(onClick = { menuOpen = true }) {
-                                Icon(Icons.Filled.MoreVert, contentDescription = "Opciones")
+                                Icon(
+                                    Icons.Filled.MoreVert,
+                                    contentDescription = "Opciones de ${song.title}",
+                                )
                             }
                             DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                                 DropdownMenuItem(
@@ -486,6 +490,13 @@ fun LibraryScreen(app: PrivateMusicApp, onOpenArtist: (String) -> Unit = {}) {
                                     onClick = {
                                         menuOpen = false
                                         songForMetadata = song
+                                    },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Créditos y conexiones") },
+                                    onClick = {
+                                        menuOpen = false
+                                        songForCredits = song
                                     },
                                 )
                                 DropdownMenuItem(
@@ -688,6 +699,14 @@ fun LibraryScreen(app: PrivateMusicApp, onOpenArtist: (String) -> Unit = {}) {
 
     songForMetadata?.let { song ->
         MetadataIdentifyDialog(app = app, song = song, onDismiss = { songForMetadata = null })
+    }
+
+    songForCredits?.let { song ->
+        com.aar.privatemusic.ui.components.MusicCreditsDialog(
+            app = app,
+            song = song,
+            onDismiss = { songForCredits = null },
+        )
     }
 
     if (showBulkDelete) {

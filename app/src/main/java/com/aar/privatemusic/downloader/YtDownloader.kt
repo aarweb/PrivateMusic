@@ -85,6 +85,9 @@ class YtDownloader(
 
     val musicDir: File = File(context.getExternalFilesDir(null) ?: context.filesDir, "music")
         .apply { mkdirs() }
+    private val creditsService by lazy {
+        com.aar.privatemusic.metadata.MusicCreditsService(musicDir)
+    }
 
     private val _downloads = MutableStateFlow<Map<String, DownloadState>>(emptyMap())
     val downloads: StateFlow<Map<String, DownloadState>> = _downloads
@@ -905,6 +908,7 @@ class YtDownloader(
         // Companion files: cached lyrics and karaoke instrumental (~40 MB).
         File(musicDir, "${song.id}.lrc").delete()
         com.aar.privatemusic.lyrics.LyricsTranslationCache(musicDir).invalidate(song.id)
+        creditsService.invalidate(song.id)
         File(musicDir, "${song.id}.karaoke.wav").delete()
         File(musicDir, "${song.id}.karaoke.part").delete()
         File(musicDir, "${song.id}.karaoke_hq.wav").delete()

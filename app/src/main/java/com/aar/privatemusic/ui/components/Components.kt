@@ -155,6 +155,7 @@ fun EmptyState(text: String, modifier: Modifier = Modifier) {
 @Composable
 fun SongOverflowMenu(app: PrivateMusicApp, song: Song) {
     var expanded by remember(song.id) { mutableStateOf(false) }
+    var showCredits by remember(song.id) { mutableStateOf(false) }
     val manualDownloadIds by app.videoAuto.manualDownloadIds.collectAsState()
     val canvasActive = song.id in manualDownloadIds
     val hasCanvas = song.videoPath?.let(::File)?.let { file ->
@@ -203,6 +204,13 @@ fun SongOverflowMenu(app: PrivateMusicApp, song: Song) {
                     app.appScope.launch {
                         app.repository.setFavorite(song.id, !song.isFavorite)
                     }
+                },
+            )
+            DropdownMenuItem(
+                text = { Text("Créditos y conexiones") },
+                onClick = {
+                    expanded = false
+                    showCredits = true
                 },
             )
             DropdownMenuItem(
@@ -275,6 +283,13 @@ fun SongOverflowMenu(app: PrivateMusicApp, song: Song) {
                     },
                 )
             }
+        }
+        if (showCredits) {
+            MusicCreditsDialog(
+                app = app,
+                song = song,
+                onDismiss = { showCredits = false },
+            )
         }
     }
 }

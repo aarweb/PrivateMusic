@@ -2,9 +2,6 @@ package com.aar.privatemusic.metadata
 
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.net.HttpURLConnection
@@ -45,10 +42,6 @@ data class MatchResult(
 class MetadataMatcher {
 
     private data class Parsed(val artist: String?, val title: String, val featured: List<String>, val version: String?)
-
-    // MusicBrainz demands <=1 req/s and a descriptive User-Agent.
-    private val mbLock = Mutex()
-    private var lastMbCall = 0L
 
     private val ua =
         "PrivateMusic/${com.aar.privatemusic.BuildConfig.VERSION_NAME} ( aarcarpas@gmail.com )"
@@ -198,12 +191,7 @@ class MetadataMatcher {
     private suspend fun enrichWithMusicBrainz(match: TrackMatch, durationSec: Int): TrackMatch? {
         val q = "recording:\"${match.title}\" AND artist:\"${match.artist}\""
         val url = "https://musicbrainz.org/ws/2/recording?fmt=json&limit=3&query=" + enc(q)
-        val json = mbLock.withLock {
-            val since = System.currentTimeMillis() - lastMbCall
-            if (since < 1100) delay(1100 - since)
-            lastMbCall = System.currentTimeMillis()
-            httpGet(url)
-        } ?: return null
+        val json = MusicBrainzRateLimiter.run { httpGet(url) } ?: return null
         val recs = JSONObject(json).optJSONArray("recordings") ?: return null
         // Pick the recording whose length best matches the file.
         var best: JSONObject? = null

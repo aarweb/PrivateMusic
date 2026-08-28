@@ -48,6 +48,8 @@ class PrivateMusicApp : Application() {
         private set
     lateinit var metadataService: com.aar.privatemusic.metadata.MetadataService
         private set
+    lateinit var creditsService: com.aar.privatemusic.metadata.MusicCreditsService
+        private set
     lateinit var videoAuto: com.aar.privatemusic.downloader.VideoAutoManager
         private set
     lateinit var libraryShare: com.aar.privatemusic.sync.LibraryShare
@@ -89,6 +91,7 @@ class PrivateMusicApp : Application() {
         bandcamp = com.aar.privatemusic.downloader.BandcampDownloader(downloaderEnv, dao, appScope)
         repository = MusicRepository(this, dao, downloader)
         metadataService = com.aar.privatemusic.metadata.MetadataService(this, dao, downloader.musicDir)
+        creditsService = com.aar.privatemusic.metadata.MusicCreditsService(downloader.musicDir)
         libraryShare = com.aar.privatemusic.sync.LibraryShare(this, dao)
         // El interruptor de Ajustes es la única verdad: sobrevive a reinicios.
         appScope.launch {
