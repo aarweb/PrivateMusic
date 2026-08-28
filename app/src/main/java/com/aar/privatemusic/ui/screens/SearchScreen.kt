@@ -82,6 +82,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.io.File
 
 /** Last search kept across navigation so switching tabs doesn't wipe results. */
 private object SearchCache {
@@ -1337,7 +1338,7 @@ private fun GlobalAlbumRow(
     GlobalCatalogRow(
         title = album.key.title,
         subtitle = "${album.key.artist} · ${album.songs.size} canciones",
-        artModel = coverSong?.artPath?.let(::java.io.File) ?: coverSong?.thumbnailUrl,
+        artModel = coverSong?.artPath?.let(::File) ?: coverSong?.thumbnailUrl,
         fallbackIcon = Icons.Filled.Album,
         contentDescription = "Abrir álbum ${album.key.title}",
         onClick = onClick,
@@ -1354,7 +1355,7 @@ private fun GlobalArtistRow(
     GlobalCatalogRow(
         title = artist.name,
         subtitle = "${artist.songs.size} canciones",
-        artModel = coverSong?.artPath?.let(::java.io.File) ?: coverSong?.thumbnailUrl,
+        artModel = coverSong?.artPath?.let(::File) ?: coverSong?.thumbnailUrl,
         fallbackIcon = Icons.Filled.Person,
         contentDescription = "Abrir artista ${artist.name}",
         onClick = onClick,
@@ -1369,7 +1370,7 @@ private fun GlobalPlaylistRow(
     GlobalCatalogRow(
         title = playlist.name,
         subtitle = playlist.description?.takeIf { it.isNotBlank() } ?: "Playlist",
-        artModel = playlist.coverPath?.let(::java.io.File),
+        artModel = playlist.coverPath?.let(::File),
         fallbackIcon = Icons.Filled.QueueMusic,
         contentDescription = "Abrir playlist ${playlist.name}",
         onClick = onClick,
