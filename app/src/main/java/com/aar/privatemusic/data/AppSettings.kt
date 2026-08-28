@@ -25,6 +25,9 @@ enum class LyricStyle(val label: String) {
     MINIMAL("Minimalista"),
 }
 
+/** MIX prioriza DSP/fundidos; NATIVE entrega el formato al dispositivo si puede. */
+enum class AudioOutputProfile { MIX, NATIVE }
+
 /** App-wide playback preferences; read from both the UI and the playback service. */
 class AppSettings(context: Context) {
 
@@ -55,6 +58,9 @@ class AppSettings(context: Context) {
 
     private val _normalizeVolume = MutableStateFlow(prefs.getBoolean(KEY_NORMALIZE, false))
     val normalizeVolume: StateFlow<Boolean> = _normalizeVolume
+
+    private val _audioOutputProfile = MutableStateFlow(readAudioOutputProfile(context))
+    val audioOutputProfile: StateFlow<AudioOutputProfile> = _audioOutputProfile
 
     private val _sponsorBlock = MutableStateFlow(prefs.getBoolean(KEY_SPONSORBLOCK, true))
     val sponsorBlock: StateFlow<Boolean> = _sponsorBlock
@@ -220,6 +226,11 @@ class AppSettings(context: Context) {
         _normalizeVolume.value = value
     }
 
+    fun setAudioOutputProfile(value: AudioOutputProfile) {
+        prefs.edit().putString(KEY_AUDIO_OUTPUT_PROFILE, value.name).apply()
+        _audioOutputProfile.value = value
+    }
+
     fun setSponsorBlock(value: Boolean) {
         prefs.edit().putBoolean(KEY_SPONSORBLOCK, value).apply()
         _sponsorBlock.value = value
@@ -326,6 +337,7 @@ class AppSettings(context: Context) {
         private const val KEY_THEME = "theme_mode"
         private const val KEY_KEEP_SCREEN_ON = "keep_screen_on"
         private const val KEY_NORMALIZE = "normalize_volume"
+        private const val KEY_AUDIO_OUTPUT_PROFILE = "audio_output_profile"
         private const val KEY_SPONSORBLOCK = "sponsorblock"
         private const val KEY_AUTO_VIDEO = "auto_download_video"
         private const val KEY_VIDEO_METERED = "video_on_metered"
@@ -413,6 +425,14 @@ class AppSettings(context: Context) {
 
         fun readNormalizeVolume(context: Context): Boolean =
             context.getSharedPreferences("settings", Context.MODE_PRIVATE).getBoolean(KEY_NORMALIZE, false)
+
+        fun readAudioOutputProfile(context: Context): AudioOutputProfile =
+            runCatching {
+                AudioOutputProfile.valueOf(
+                    context.getSharedPreferences("settings", Context.MODE_PRIVATE)
+                        .getString(KEY_AUDIO_OUTPUT_PROFILE, null) ?: "",
+                )
+            }.getOrDefault(AudioOutputProfile.MIX)
 
         fun readAutoMix(context: Context): Boolean =
             context.getSharedPreferences("settings", Context.MODE_PRIVATE).getBoolean(KEY_AUTOMIX, false)

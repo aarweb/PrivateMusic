@@ -42,8 +42,11 @@ import com.aar.privatemusic.data.BackupManager
 import com.aar.privatemusic.data.FullBackup
 import com.aar.privatemusic.data.HistoryImport
 import com.aar.privatemusic.data.MusicRepository
+import com.aar.privatemusic.data.AudioOutputProfile
 import com.aar.privatemusic.downloader.SpotifySync
 import com.aar.privatemusic.player.AudioDsp
+import com.aar.privatemusic.player.AudioOutputKind
+import com.aar.privatemusic.player.NativeAudioState
 import com.aar.privatemusic.player.SpatialAudio
 import com.aar.privatemusic.player.SpatialAudioStatus
 import com.aar.privatemusic.util.AppUpdater
@@ -66,6 +69,9 @@ fun SettingsScreen(app: PrivateMusicApp, onOpenStats: () -> Unit, onOpenEq: () -
 
     val crossfade by app.settings.crossfadeSec.collectAsState()
     val normalize by app.settings.normalizeVolume.collectAsState()
+    val audioOutputProfile by app.settings.audioOutputProfile.collectAsState()
+    val mixOutput = audioOutputProfile == AudioOutputProfile.MIX
+    val nativeAudioState by NativeAudioState.state.collectAsState()
     val autoMix by app.settings.autoMix.collectAsState()
     val spatialAudioAuto by app.settings.spatialAudioAuto.collectAsState()
     val spatialAudioState by SpatialAudio.state.collectAsState()
@@ -208,9 +214,64 @@ fun SettingsScreen(app: PrivateMusicApp, onOpenStats: () -> Unit, onOpenEq: () -
             modifier = Modifier.padding(top = 24.dp, bottom = 8.dp),
         )
 
+        Text("Perfil de salida", style = MaterialTheme.typography.bodyLarge)
+        Row(Modifier.padding(top = 4.dp)) {
+            listOf(
+                AudioOutputProfile.MIX to "Mezcla",
+                AudioOutputProfile.NATIVE to "Nativo",
+            ).forEach { (profile, label) ->
+                FilterChip(
+                    selected = audioOutputProfile == profile,
+                    onClick = { app.settings.setAudioOutputProfile(profile) },
+                    label = { Text(label) },
+                    modifier = Modifier.padding(end = 8.dp),
+                )
+            }
+        }
+        Text(
+            if (audioOutputProfile == AudioOutputProfile.MIX) {
+                "Fundido, AutoMix, normalización, ecualizador y envolvente activos."
+            } else {
+                "Entrega multicanal y formatos compatibles al dispositivo. En este perfil no " +
+                    "se aplican fundido, AutoMix, normalización ni DSP."
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(
+            "El cambio se aplica al reiniciar el motor o la app.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.primary,
+        )
+
+        val input = nativeAudioState.input
+        val quality = buildList {
+            input?.channelCount?.let { add(if (it == 2) "Estéreo" else "$it canales") }
+            input?.sampleRate?.let { add("${it / 1000f} kHz") }
+            input?.bitrate?.let { add("${it / 1000} kbps") }
+            input?.mimeType?.substringAfter('/')?.uppercase()?.let(::add)
+        }.joinToString(" · ")
+        val outputLabel = when (nativeAudioState.outputKind) {
+            AudioOutputKind.PCM -> "Salida PCM"
+            AudioOutputKind.PASSTHROUGH -> "Salida directa (passthrough)"
+            AudioOutputKind.OFFLOAD -> "Salida nativa con offload"
+            AudioOutputKind.UNKNOWN -> "Esperando reproducción"
+        }
+        Text(
+            listOfNotNull(
+                outputLabel,
+                quality.takeIf { it.isNotEmpty() },
+                "Dolby Atmos (E-AC3 JOC)".takeIf { nativeAudioState.atmos },
+            ).joinToString(" · "),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 4.dp, bottom = 12.dp),
+        )
+
         Text("Fundido entre canciones", style = MaterialTheme.typography.bodyLarge)
         Text(
-            if (crossfade == 0) "Desactivado"
+            if (!mixOutput) "En pausa en el perfil Nativo; se conserva el ajuste"
+            else if (crossfade == 0) "Desactivado"
             else "$crossfade segundos (baja el volumen al final y sube al empezar)",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -220,6 +281,7 @@ fun SettingsScreen(app: PrivateMusicApp, onOpenStats: () -> Unit, onOpenEq: () -
             onValueChange = { app.settings.setCrossfadeSec(it.toInt()) },
             valueRange = 0f..12f,
             steps = 11,
+            enabled = mixOutput,
         )
 
         Row(
@@ -231,7 +293,9 @@ fun SettingsScreen(app: PrivateMusicApp, onOpenStats: () -> Unit, onOpenEq: () -
             Column(Modifier.weight(1f)) {
                 Text("AutoMix (igualar BPM)", style = MaterialTheme.typography.bodyLarge)
                 Text(
-                    if (crossfade == 0)
+                    if (!mixOutput)
+                        "En pausa en el perfil Nativo; se conserva el ajuste"
+                    else if (crossfade == 0)
                         "Requiere el fundido activado"
                     else "Al mezclar, desliza el tempo de la canción saliente hasta el BPM de la siguiente (sin cambiar el tono)",
                     style = MaterialTheme.typography.bodySmall,
@@ -240,12 +304,12 @@ fun SettingsScreen(app: PrivateMusicApp, onOpenStats: () -> Unit, onOpenEq: () -
             }
             Switch(
                 checked = autoMix,
-                enabled = crossfade > 0,
+                enabled = mixOutput && crossfade > 0,
                 onCheckedChange = { app.settings.setAutoMix(it) },
             )
         }
 
-        if (autoMix && crossfade > 0) {
+        if (mixOutput && autoMix && crossfade > 0) {
             val autoMixMax by app.settings.autoMixMaxPct.collectAsState()
             Column(Modifier.fillMaxWidth().padding(start = 16.dp, bottom = 8.dp)) {
                 Text(
@@ -317,6 +381,7 @@ fun SettingsScreen(app: PrivateMusicApp, onOpenStats: () -> Unit, onOpenEq: () -
             Text(
                 when {
                     stereoSurroundLevel == 0 -> "Desactivado"
+                    !mixOutput -> "En pausa en el perfil Nativo; se conserva el ajuste"
                     spatialAudioState.status == SpatialAudioStatus.ACTIVE ->
                         "En pausa temporal porque Android ya espacializa el audio"
                     else -> "Amplía el escenario de las canciones estéreo"
@@ -328,6 +393,7 @@ fun SettingsScreen(app: PrivateMusicApp, onOpenStats: () -> Unit, onOpenEq: () -
                 listOf(0 to "Off", 1 to "Suave", 2 to "Medio", 3 to "Fuerte").forEach { (level, label) ->
                     FilterChip(
                         selected = stereoSurroundLevel == level,
+                        enabled = mixOutput,
                         onClick = {
                             app.settings.setStereoSurroundLevel(level)
                             AudioDsp.reload(context)

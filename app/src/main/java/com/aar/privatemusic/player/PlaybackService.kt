@@ -11,11 +11,14 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.TrackSelectionParameters
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.media3.session.LibraryResult
 import androidx.media3.session.MediaLibraryService
 import androidx.media3.session.MediaSession
 import com.aar.privatemusic.data.AppSettings
+import com.aar.privatemusic.data.AudioOutputProfile
 import com.aar.privatemusic.data.db.MusicDao
 import com.aar.privatemusic.data.db.MusicDatabase
 import com.aar.privatemusic.data.db.Song
@@ -56,16 +59,42 @@ class PlaybackService : MediaLibraryService() {
     private var currentAudioFocusRequest: android.media.AudioFocusRequest? = null
     private var currentLegacyFocusListener: android.media.AudioManager.OnAudioFocusChangeListener? = null
     private var serviceDestroyed = false
+    private var audioOutputProfile = AudioOutputProfile.MIX
+
+    private fun nativeTrackSelector(nativeOutput: Boolean): DefaultTrackSelector {
+        val selector = DefaultTrackSelector(this)
+        if (nativeOutput) {
+            selector.setParameters(
+                selector.buildUponParameters()
+                    .setConstrainAudioChannelCountToDeviceCapabilities(false)
+                    .setAudioOffloadPreferences(
+                        TrackSelectionParameters.AudioOffloadPreferences.Builder()
+                            .setAudioOffloadMode(
+                                TrackSelectionParameters.AudioOffloadPreferences.AUDIO_OFFLOAD_MODE_ENABLED,
+                            )
+                            .setIsGaplessSupportRequired(false)
+                            .setIsSpeedChangeSupportRequired(false)
+                            .build(),
+                    )
+                    .build(),
+            )
+        }
+        return selector
+    }
 
     override fun onCreate() {
         super.onCreate()
         audioManager = getSystemService(AUDIO_SERVICE) as android.media.AudioManager
+        audioOutputProfile = AppSettings.readAudioOutputProfile(this)
+        val nativeOutput = audioOutputProfile == AudioOutputProfile.NATIVE
         AudioDsp.reload(this)
         val localAudioAttributes = SpatialAudio.musicAudioAttributes(
             AppSettings.readSpatialAudioAuto(this)
         )
+        val mainTrackSelector = nativeTrackSelector(nativeOutput)
         val player = ExoPlayer.Builder(this)
-            .setRenderersFactory(AudioDsp.buildRenderersFactory(this))
+            .setRenderersFactory(AudioDsp.buildRenderersFactory(this, audioOutputProfile))
+            .setTrackSelector(mainTrackSelector)
             .setAudioAttributes(
                 localAudioAttributes,
                 /* handleAudioFocus = */ false,
@@ -106,7 +135,8 @@ class PlaybackService : MediaLibraryService() {
         // track while the main player already runs the incoming one, so both
         // songs genuinely overlap. No audio focus: it rides on the main one.
         val tail = ExoPlayer.Builder(this)
-            .setRenderersFactory(AudioDsp.buildRenderersFactory(this))
+            .setRenderersFactory(AudioDsp.buildRenderersFactory(this, audioOutputProfile))
+            .setTrackSelector(nativeTrackSelector(nativeOutput))
             .setAudioAttributes(
                 localAudioAttributes,
                 /* handleAudioFocus = */ false,
@@ -135,6 +165,21 @@ class PlaybackService : MediaLibraryService() {
                 decoderReuseEvaluation: androidx.media3.exoplayer.DecoderReuseEvaluation?,
             ) {
                 spatialAudioController?.onAudioInputFormatChanged(format)
+                NativeAudioState.onInputFormat(format)
+            }
+
+            override fun onAudioTrackInitialized(
+                eventTime: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime,
+                audioTrackConfig: androidx.media3.exoplayer.audio.AudioSink.AudioTrackConfig,
+            ) {
+                NativeAudioState.onAudioTrackInitialized(audioTrackConfig)
+            }
+
+            override fun onAudioTrackReleased(
+                eventTime: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime,
+                audioTrackConfig: androidx.media3.exoplayer.audio.AudioSink.AudioTrackConfig,
+            ) {
+                NativeAudioState.onAudioTrackReleased(audioTrackConfig)
             }
 
             override fun onAudioPositionAdvancing(
@@ -1084,7 +1129,8 @@ class PlaybackService : MediaLibraryService() {
             fun currentGainConfig(trackId: String? = player.currentMediaItem?.mediaId) =
                 PlaybackGain.configKey(
                     trackId = trackId,
-                    enabled = AppSettings.readNormalizeVolume(this@PlaybackService),
+                    enabled = audioOutputProfile == AudioOutputProfile.MIX &&
+                        AppSettings.readNormalizeVolume(this@PlaybackService),
                     mode = AppSettings.readNormalizeMode(this@PlaybackService),
                 )
 
@@ -1337,11 +1383,16 @@ class PlaybackService : MediaLibraryService() {
                     continue
                 }
                 val tail = tailPlayer
-                val crossfadeMs = AppSettings.readCrossfadeSec(this@PlaybackService) * 1000L
-                val normalize = AppSettings.readNormalizeVolume(this@PlaybackService)
+                val mixOutput = audioOutputProfile == AudioOutputProfile.MIX
+                val crossfadeMs = if (mixOutput) {
+                    AppSettings.readCrossfadeSec(this@PlaybackService) * 1000L
+                } else {
+                    0L
+                }
+                val normalize = mixOutput && AppSettings.readNormalizeVolume(this@PlaybackService)
                 val normalizeMode = AppSettings.readNormalizeMode(this@PlaybackService)
                 maxStretch = AppSettings.readAutoMixMaxStretch(this@PlaybackService)
-                val autoMix = AppSettings.readAutoMix(this@PlaybackService)
+                val autoMix = mixOutput && AppSettings.readAutoMix(this@PlaybackService)
                 val technicalTriggerMs = CrossfadeTiming.technicalTriggerMs(crossfadeMs, autoMix)
                 val xfActive = xfEndsAt != 0L
                 // Fundido del temporizador de apagado (0..1): multiplicador global
@@ -2316,6 +2367,7 @@ class PlaybackService : MediaLibraryService() {
         serviceDestroyed = true
         spatialAudioController?.close()
         spatialAudioController = null
+        NativeAudioState.clear()
         abandonAudioFocusPlatform()
         audioFocusPolicyState = AudioFocusPolicy.State()
         audioFocusVolumeMultiplier = AudioFocusPolicy.FULL_VOLUME

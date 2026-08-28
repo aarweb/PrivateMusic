@@ -8,6 +8,7 @@ import androidx.media3.exoplayer.RenderersFactory
 import androidx.media3.exoplayer.audio.AudioSink
 import androidx.media3.exoplayer.audio.DefaultAudioSink
 import com.aar.privatemusic.data.AppSettings
+import com.aar.privatemusic.data.AudioOutputProfile
 import com.aar.privatemusic.dsp.Crossfeed
 import com.aar.privatemusic.dsp.EqFilter
 import com.aar.privatemusic.dsp.EqFilterType
@@ -72,7 +73,10 @@ object AudioDsp {
         version.incrementAndGet()
     }
 
-    fun buildRenderersFactory(context: Context): RenderersFactory =
+    fun buildRenderersFactory(
+        context: Context,
+        profile: AudioOutputProfile = AudioOutputProfile.MIX,
+    ): RenderersFactory =
         object : DefaultRenderersFactory(context) {
             override fun buildAudioSink(
                 context: Context,
@@ -83,7 +87,7 @@ object AudioDsp {
                     .setEnableFloatOutput(enableFloatOutput)
                     .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
                     .setAudioProcessors(
-                        arrayOf(
+                        if (profile == AudioOutputProfile.NATIVE) emptyArray<AudioProcessor>() else arrayOf<AudioProcessor>(
                             EqAudioProcessor(),
                             StereoWidenerAudioProcessor(),
                             CrossfeedAudioProcessor(),
