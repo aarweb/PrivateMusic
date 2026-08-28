@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -24,13 +25,19 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items as gridItems
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Album
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.PlaylistAdd
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
@@ -58,10 +65,13 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.aar.privatemusic.PrivateMusicApp
+import com.aar.privatemusic.data.AlbumCollection
+import com.aar.privatemusic.data.AlbumLogic
 import com.aar.privatemusic.data.db.Song
 import com.aar.privatemusic.ui.components.AddToPlaylistDialog
 import com.aar.privatemusic.ui.components.ArtImage
@@ -70,6 +80,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.CancellationException
 import java.io.File
+import coil.compose.AsyncImage
 
 /**
  * [chip] es el nombre corto: "Añadidas recientemente" no cabe en el chip y se
@@ -82,14 +93,86 @@ private enum class SortMode(val label: String, val chip: String) {
     DURATION("Duración", "Duración"),
 }
 
+private enum class LibraryView { SONGS, ALBUMS, ARTISTS }
+
 private data class LyricSearchUiState(
     val query: String = "",
     val hits: List<com.aar.privatemusic.lyrics.LyricSearchHit> = emptyList(),
     val searching: Boolean = false,
 )
 
+private fun AlbumCollection.matchesAlbumQuery(query: String): Boolean {
+    fun String.matches(): Boolean =
+        com.aar.privatemusic.lyrics.LyricSearch.normalize(this).contains(query)
+    return key.title.matches() || key.artist.matches() || year?.toString()?.contains(query) == true ||
+        songs.any { it.title.matches() || it.artist.matches() }
+}
+
 @Composable
-fun LibraryScreen(app: PrivateMusicApp, onOpenArtist: (String) -> Unit = {}) {
+private fun AlbumGridItem(album: AlbumCollection, onClick: () -> Unit) {
+    val coverSong = album.songs.firstOrNull { !it.artPath.isNullOrBlank() }
+        ?: album.songs.firstOrNull()
+    val cover = coverSong?.artPath?.let(::File)
+        ?: coverSong?.thumbnailUrl?.takeIf { it.isNotBlank() }
+    Column(
+        modifier = Modifier.clickable(onClick = onClick),
+    ) {
+        Surface(
+            modifier = Modifier.fillMaxWidth().aspectRatio(1f),
+            shape = RoundedCornerShape(10.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant,
+        ) {
+            if (cover != null) {
+                AsyncImage(
+                    model = cover,
+                    contentDescription = "Portada de ${album.key.title}",
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            } else {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Icon(
+                        Icons.Filled.Album,
+                        contentDescription = null,
+                        modifier = Modifier.size(48.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+        Text(
+            album.key.title,
+            style = MaterialTheme.typography.bodyLarge,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(top = 6.dp),
+        )
+        Text(
+            album.key.artist,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Text(
+            listOfNotNull(
+                album.year?.toString(),
+                "${album.songs.size} canciones",
+            ).joinToString(" · "),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+@Composable
+fun LibraryScreen(
+    app: PrivateMusicApp,
+    onOpenArtist: (String) -> Unit = {},
+    onOpenAlbum: (title: String, artist: String) -> Unit = { _, _ -> },
+) {
     val songs by app.repository.observeSongs().collectAsState(initial = emptyList())
     val nowPlaying by app.playerController.nowPlaying.collectAsState()
     val recent by app.repository.observeRecentlyPlayed(10).collectAsState(initial = emptyList())
@@ -190,7 +273,12 @@ fun LibraryScreen(app: PrivateMusicApp, onOpenArtist: (String) -> Unit = {}) {
         )
     ) { mutableStateOf(SortMode.RECENT) }
     var onlyFavorites by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
-    var artistView by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
+    var libraryView by androidx.compose.runtime.saveable.rememberSaveable(
+        stateSaver = androidx.compose.runtime.saveable.Saver(
+            save = { it.name },
+            restore = { LibraryView.valueOf(it) },
+        )
+    ) { mutableStateOf(LibraryView.SONGS) }
 
     val trimmedQuery = query.trim()
     val normalizedLyricQueryLength = remember(trimmedQuery) {
@@ -198,11 +286,13 @@ fun LibraryScreen(app: PrivateMusicApp, onOpenArtist: (String) -> Unit = {}) {
     }
     val songIds = remember(songs) { songs.map { it.id } }
     var lyricSearchState by remember { mutableStateOf(LyricSearchUiState()) }
-    LaunchedEffect(trimmedQuery, selectionMode, artistView, songIds) {
+    LaunchedEffect(trimmedQuery, selectionMode, libraryView, songIds) {
         // El query forma parte del estado: un resultado anterior nunca puede
         // mezclarse durante los 250 ms de espera de la consulta nueva.
         lyricSearchState = LyricSearchUiState(query = trimmedQuery)
-        if (selectionMode || artistView || normalizedLyricQueryLength < 3) return@LaunchedEffect
+        if (selectionMode || libraryView != LibraryView.SONGS || normalizedLyricQueryLength < 3) {
+            return@LaunchedEffect
+        }
         lyricSearchState = LyricSearchUiState(query = trimmedQuery, searching = true)
         delay(250)
         val hits = try {
@@ -215,12 +305,14 @@ fun LibraryScreen(app: PrivateMusicApp, onOpenArtist: (String) -> Unit = {}) {
         lyricSearchState = LyricSearchUiState(query = trimmedQuery, hits = hits)
     }
 
-    val validLyricHits = remember(lyricSearchState, trimmedQuery, selectionMode, artistView) {
-        if (!selectionMode && !artistView && lyricSearchState.query == trimmedQuery) {
+    val validLyricHits = remember(lyricSearchState, trimmedQuery, selectionMode, libraryView) {
+        if (!selectionMode && libraryView == LibraryView.SONGS &&
+            lyricSearchState.query == trimmedQuery
+        ) {
             lyricSearchState.hits.associateBy { it.songId }
         } else emptyMap()
     }
-    val searchingLyrics = !selectionMode && !artistView &&
+    val searchingLyrics = !selectionMode && libraryView == LibraryView.SONGS &&
         lyricSearchState.query == trimmedQuery && lyricSearchState.searching
 
     val visibleSongs = remember(songs, query, sortMode, onlyFavorites, validLyricHits) {
@@ -294,14 +386,30 @@ fun LibraryScreen(app: PrivateMusicApp, onOpenArtist: (String) -> Unit = {}) {
                 leadingIcon = { Icon(Icons.Filled.Favorite, contentDescription = null) },
             )
             FilterChip(
-                selected = artistView,
-                onClick = { artistView = !artistView },
+                selected = libraryView == LibraryView.SONGS,
+                onClick = { libraryView = LibraryView.SONGS },
+                label = { Text("Canciones") },
+                leadingIcon = {
+                    Icon(Icons.Filled.LibraryMusic, contentDescription = null)
+                },
+            )
+            FilterChip(
+                selected = libraryView == LibraryView.ALBUMS,
+                onClick = { libraryView = LibraryView.ALBUMS },
+                label = { Text("Álbumes") },
+                leadingIcon = {
+                    Icon(Icons.Filled.Album, contentDescription = null)
+                },
+            )
+            FilterChip(
+                selected = libraryView == LibraryView.ARTISTS,
+                onClick = { libraryView = LibraryView.ARTISTS },
                 label = { Text("Artistas") },
                 leadingIcon = {
                     Icon(Icons.Filled.Person, contentDescription = null)
                 },
             )
-            Box {
+            if (libraryView == LibraryView.SONGS) Box {
                 var sortMenuOpen by remember { mutableStateOf(false) }
                 FilterChip(
                     selected = false,
@@ -324,32 +432,92 @@ fun LibraryScreen(app: PrivateMusicApp, onOpenArtist: (String) -> Unit = {}) {
         }
         } // end if (!selectionMode)
 
-        if (artistView && !selectionMode) {
-            val artists = remember(songs, query) {
+        if (libraryView == LibraryView.ALBUMS && !selectionMode) {
+            val favoriteSongs = remember(songs, onlyFavorites) {
+                songs.filter { !onlyFavorites || it.isFavorite }
+            }
+            val allAlbums = remember(favoriteSongs) { AlbumLogic.group(favoriteSongs) }
+            val normalizedQuery = remember(trimmedQuery) {
+                com.aar.privatemusic.lyrics.LyricSearch.normalize(trimmedQuery)
+            }
+            val albums = remember(allAlbums, normalizedQuery) {
+                allAlbums.filter { album ->
+                    normalizedQuery.isBlank() || album.matchesAlbumQuery(normalizedQuery)
+                }.sortedByDescending { it.latestAddedAt }
+            }
+            if (albums.isEmpty()) {
+                com.aar.privatemusic.ui.components.EmptyState(
+                    if (allAlbums.isEmpty()) {
+                        "No hay álbumes con metadatos en esta vista."
+                    } else {
+                        "No hay álbumes que coincidan con la búsqueda."
+                    },
+                    Modifier.fillMaxSize(),
+                )
+            } else {
+                LazyVerticalGrid(
+                    columns = GridCells.Adaptive(minSize = 150.dp),
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp),
+                ) {
+                    gridItems(
+                        albums,
+                        key = { "${it.key.artist}\u0000${it.key.title}" },
+                    ) { album ->
+                        AlbumGridItem(
+                            album = album,
+                            onClick = { onOpenAlbum(album.key.title, album.key.artist) },
+                        )
+                    }
+                }
+            }
+            return@Column
+        }
+
+        if (libraryView == LibraryView.ARTISTS && !selectionMode) {
+            val normalizedQuery = remember(trimmedQuery) {
+                com.aar.privatemusic.lyrics.LyricSearch.normalize(trimmedQuery)
+            }
+            val artists = remember(songs, onlyFavorites, normalizedQuery) {
                 songs
-                    .filter { query.isBlank() || it.artist.contains(query, ignoreCase = true) }
+                    .filter { !onlyFavorites || it.isFavorite }
+                    .filter {
+                        normalizedQuery.isBlank() ||
+                            com.aar.privatemusic.lyrics.LyricSearch.normalize(it.artist)
+                                .contains(normalizedQuery)
+                    }
                     .groupBy { it.artist.trim() }
                     .entries
                     .sortedByDescending { it.value.size }
             }
-            LazyColumn(Modifier.fillMaxSize()) {
-                items(artists, key = { it.key }) { (artist, artistSongs) ->
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { onOpenArtist(artist) }
-                            .padding(horizontal = 16.dp, vertical = 10.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        ArtImage(artistSongs.firstOrNull()?.artPath?.let { File(it) }, 48.dp)
-                        Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
-                            Text(artist, style = MaterialTheme.typography.bodyLarge, maxLines = 1,
-                                overflow = TextOverflow.Ellipsis)
-                            Text(
-                                "${artistSongs.size} canciones",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
+            if (artists.isEmpty()) {
+                com.aar.privatemusic.ui.components.EmptyState(
+                    if (query.isBlank()) "No hay artistas en esta vista."
+                    else "No hay artistas que coincidan con la búsqueda.",
+                    Modifier.fillMaxSize(),
+                )
+            } else {
+                LazyColumn(Modifier.fillMaxSize()) {
+                    items(artists, key = { it.key }) { (artist, artistSongs) ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onOpenArtist(artist) }
+                                .padding(horizontal = 16.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            ArtImage(artistSongs.firstOrNull()?.artPath?.let { File(it) }, 48.dp)
+                            Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
+                                Text(artist, style = MaterialTheme.typography.bodyLarge, maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis)
+                                Text(
+                                    "${artistSongs.size} canciones",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
                         }
                     }
                 }

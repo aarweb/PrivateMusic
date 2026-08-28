@@ -30,6 +30,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.aar.privatemusic.PrivateMusicApp
 import com.aar.privatemusic.ui.components.ArtImage
+import com.aar.privatemusic.ui.components.SongOverflowMenu
 import com.aar.privatemusic.ui.components.SongRow
 import com.aar.privatemusic.util.Feedback
 import kotlinx.coroutines.launch
@@ -40,7 +41,11 @@ import java.io.File
 fun ArtistScreen(app: PrivateMusicApp, artistName: String, onBack: () -> Unit = {}) {
     val allSongs by app.repository.observeSongs().collectAsState(initial = emptyList())
     val songs = remember(allSongs, artistName) {
-        allSongs.filter { it.artist.equals(artistName, ignoreCase = true) }
+        val wanted = cleanArtistName(artistName)
+        allSongs.filter { song ->
+            cleanArtistName(song.artist).equals(wanted, ignoreCase = true) ||
+                song.albumArtist?.let(::cleanArtistName)?.equals(wanted, ignoreCase = true) == true
+        }
     }
     val nowPlaying by app.playerController.nowPlaying.collectAsState()
     val scope = rememberCoroutineScope()
@@ -118,7 +123,11 @@ fun ArtistScreen(app: PrivateMusicApp, artistName: String, onBack: () -> Unit = 
                 song = song,
                 isCurrent = song.id == nowPlaying?.songId,
                 onClick = { app.playerController.playQueue(songs, index) },
+                trailing = { SongOverflowMenu(app, song) },
             )
         }
     }
 }
+
+private fun cleanArtistName(value: String): String =
+    value.trim().replace(Regex("\\s+"), " ")

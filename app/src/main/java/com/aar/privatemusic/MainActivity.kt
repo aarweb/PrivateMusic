@@ -47,6 +47,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.aar.privatemusic.ui.components.MiniPlayer
 import com.aar.privatemusic.ui.screens.ArtistScreen
+import com.aar.privatemusic.ui.screens.AlbumScreen
 import com.aar.privatemusic.ui.screens.AutoPlaylistScreen
 import com.aar.privatemusic.ui.screens.AutoPlaylistType
 import com.aar.privatemusic.ui.screens.EqScreen
@@ -153,7 +154,7 @@ private fun MainScaffold(app: PrivateMusicApp) {
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route
     val selectedSection = when (currentRoute) {
-        "artist/{name}" -> "library"
+        "artist/{name}", "album/{artist}/{title}" -> "library"
         "playlist/{id}", "auto/{type}", "smart/{id}" -> "playlists"
         "stats", "eq" -> "settings"
         else -> currentRoute
@@ -299,9 +300,17 @@ private fun MainScaffold(app: PrivateMusicApp) {
             }
             composable("search") { SearchScreen(app) }
             composable("library") {
-                LibraryScreen(app, onOpenArtist = { name ->
-                    navController.navigate("artist/" + android.net.Uri.encode(name))
-                })
+                LibraryScreen(
+                    app,
+                    onOpenArtist = { name ->
+                        navController.navigate("artist/" + android.net.Uri.encode(name))
+                    },
+                    onOpenAlbum = { title, artist ->
+                        navController.navigate(
+                            "album/${android.net.Uri.encode(artist)}/${android.net.Uri.encode(title)}"
+                        )
+                    },
+                )
             }
             composable("artist/{name}") { entry ->
                 val name = entry.arguments?.getString("name")
@@ -310,6 +319,21 @@ private fun MainScaffold(app: PrivateMusicApp) {
                     app,
                     artistName = name,
                     onBack = { navController.popBackStack() },
+                )
+            }
+            composable("album/{artist}/{title}") { entry ->
+                val artist = entry.arguments?.getString("artist")
+                    ?.let { android.net.Uri.decode(it) } ?: return@composable
+                val title = entry.arguments?.getString("title")
+                    ?.let { android.net.Uri.decode(it) } ?: return@composable
+                AlbumScreen(
+                    app = app,
+                    albumTitle = title,
+                    albumArtist = artist,
+                    onBack = { navController.popBackStack() },
+                    onOpenArtist = { name ->
+                        navController.navigate("artist/" + android.net.Uri.encode(name))
+                    },
                 )
             }
             composable("playlists") {

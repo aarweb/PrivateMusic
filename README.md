@@ -30,7 +30,7 @@ Requiere Android 8.0+ (arm64).
 - Comparte cualquier enlace desde otra app hacia PrivateMusic.
 
 **Biblioteca y playlists**
-- Favoritos, historial, búsqueda en vivo, ordenación, snooze de canciones.
+- Favoritos, historial, búsqueda en vivo, ordenación, snooze de canciones y vista propia de álbumes en la Biblioteca.
 - Playlists normales (drag & drop, portadas personalizadas, pins), **carpetas** para organizarlas, **smart playlists** por reglas y automáticas (Más escuchadas, Olvidadas, Top de tu temporada, **Mix de hoy**).
 - **Mix a medida**: describe lo que te apetece ("algo tranquilo de los 90 sin voz que no haya sonado en un mes") y la app lo convierte, sin nube ni modelo de lenguaje, en una cola de tu biblioteca; se puede guardar como smart playlist.
 - **Importar historial** de Spotify (exportación GDPR), Last.fm (CSV) y YouTube Takeout, para que el Recap y las playlists automáticas tengan memoria desde el primer día.
