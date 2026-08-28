@@ -52,6 +52,8 @@ import com.aar.privatemusic.player.EqHolder
 fun EqScreen(app: PrivateMusicApp, onBack: () -> Unit = {}) {
     val context = LocalContext.current
     var mode by remember { mutableStateOf(AppSettings.readEqMode(context)) }
+    val activeAudioDeviceProfileLabel by
+        app.settings.activeAudioDeviceProfileLabel.collectAsState()
 
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
@@ -62,6 +64,17 @@ fun EqScreen(app: PrivateMusicApp, onBack: () -> Unit = {}) {
             }
             Text("Ecualizador", style = MaterialTheme.typography.titleLarge)
         }
+
+        Text(
+            "Perfil: $activeAudioDeviceProfileLabel",
+            style = MaterialTheme.typography.bodyMedium,
+            modifier = Modifier.padding(top = 8.dp),
+        )
+        Text(
+            "Los cambios se guardan para esta salida.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
 
         Row(Modifier.padding(vertical = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             FilterChip(

@@ -42,6 +42,7 @@ Requiere Android 8.0+ (arm64).
 **Reproducción**
 - Media3/ExoPlayer en segundo plano, Android Auto, widget de pantalla de inicio.
 - Cola editable (reproducir a continuación, reordenar, rebarajar).
+- **Perfiles de audio por dispositivo**: recuerda y cambia automáticamente ecualizador, crossfeed, envolvente, normalización, fundido, AutoMix y audio espacial para el altavoz, cada Bluetooth, cable o DAC USB.
 - Canvas de vídeo gestionable por canción: descargar, reemplazar, elegir un archivo local o borrar desde la Biblioteca y el reproductor.
 - Panel de almacenamiento por categorías e indicadores de Canvas; las descargas automáticas pueden limitarse a Wi‑Fi y a cuando el móvil está cargando.
 - **Letras sincronizadas offline** (LRCLIB, cacheadas al descargar) con salto por línea.

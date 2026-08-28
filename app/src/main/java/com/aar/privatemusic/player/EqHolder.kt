@@ -38,6 +38,21 @@ object EqHolder {
         AudioDsp.reload(context)
     }
 
+    fun applySavedProfile(context: Context) {
+        val eq = equalizer
+        runCatching { eq?.enabled = false }
+        runCatching {
+            if (eq != null) {
+                val saved = AppSettings.readEqBands(context)
+                repeat(eq.numberOfBands.toInt()) { index ->
+                    eq.setBandLevel(index.toShort(), saved?.getOrNull(index) ?: 0.toShort())
+                }
+            }
+        }
+        runCatching { eq?.enabled = false }
+        AudioDsp.reload(context)
+    }
+
     fun setBand(context: Context, band: Int, level: Short) {
         equalizer?.let {
             runCatching { it.setBandLevel(band.toShort(), level) }

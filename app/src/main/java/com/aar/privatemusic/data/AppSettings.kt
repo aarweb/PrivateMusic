@@ -2,6 +2,11 @@ package com.aar.privatemusic.data
 
 import android.content.Context
 import android.content.SharedPreferences
+import com.aar.privatemusic.player.AudioDeviceProfileCodec
+import com.aar.privatemusic.player.AudioDeviceProfiles
+import com.aar.privatemusic.player.AudioProfileSettings
+import com.aar.privatemusic.player.AudioRouteDescriptor
+import com.aar.privatemusic.player.SavedAudioDeviceProfile
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import java.security.SecureRandom
@@ -36,6 +41,14 @@ class AppSettings(context: Context) {
 
     private val _crossfadeSec = MutableStateFlow(prefs.getInt(KEY_CROSSFADE, 0))
     val crossfadeSec: StateFlow<Int> = _crossfadeSec
+
+    private val _activeAudioDeviceProfileLabel = MutableStateFlow(
+        prefs.getString(KEY_ACTIVE_AUDIO_DEVICE_PROFILE_LABEL, null)
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+            ?: DEFAULT_AUDIO_DEVICE_PROFILE_LABEL,
+    )
+    val activeAudioDeviceProfileLabel: StateFlow<String> = _activeAudioDeviceProfileLabel
 
     private val _themeMode = MutableStateFlow(
         runCatching { ThemeMode.valueOf(prefs.getString(KEY_THEME, null) ?: "") }
@@ -217,12 +230,12 @@ class AppSettings(context: Context) {
     val deezerQuality: StateFlow<String> = _deezerQuality
 
     fun setCrossfadeSec(value: Int) {
-        prefs.edit().putInt(KEY_CROSSFADE, value).apply()
+        profiledWrite(prefs) { putInt(KEY_CROSSFADE, value) }
         _crossfadeSec.value = value
     }
 
     fun setNormalizeVolume(value: Boolean) {
-        prefs.edit().putBoolean(KEY_NORMALIZE, value).apply()
+        profiledWrite(prefs) { putBoolean(KEY_NORMALIZE, value) }
         _normalizeVolume.value = value
     }
 
@@ -258,34 +271,122 @@ class AppSettings(context: Context) {
     }
 
     fun setAutoMix(value: Boolean) {
-        prefs.edit().putBoolean(KEY_AUTOMIX, value).apply()
+        profiledWrite(prefs) { putBoolean(KEY_AUTOMIX, value) }
         _autoMix.value = value
     }
 
     fun setSpatialAudioAuto(value: Boolean) {
-        prefs.edit().putBoolean(KEY_SPATIAL_AUDIO_AUTO, value).apply()
+        profiledWrite(prefs) { putBoolean(KEY_SPATIAL_AUDIO_AUTO, value) }
         _spatialAudioAuto.value = value
     }
 
     fun setStereoSurroundLevel(value: Int) {
         val safe = value.coerceIn(0, 3)
-        val edit = prefs.edit().putInt(KEY_STEREO_SURROUND_LEVEL, safe)
-        if (safe > 0) edit.putInt(KEY_CROSSFEED_LEVEL, 0)
-        edit.apply()
+        profiledWrite(prefs) {
+            putInt(KEY_STEREO_SURROUND_LEVEL, safe)
+            if (safe > 0) putInt(KEY_CROSSFEED_LEVEL, 0)
+        }
         _stereoSurroundLevel.value = safe
     }
 
     fun setCrossfeedLevel(value: Int) {
         val safe = value.coerceIn(0, 3)
-        val edit = prefs.edit().putInt(KEY_CROSSFEED_LEVEL, safe)
-        if (safe > 0) edit.putInt(KEY_STEREO_SURROUND_LEVEL, 0)
-        edit.apply()
+        profiledWrite(prefs) {
+            putInt(KEY_CROSSFEED_LEVEL, safe)
+            if (safe > 0) putInt(KEY_STEREO_SURROUND_LEVEL, 0)
+        }
         if (safe > 0) _stereoSurroundLevel.value = 0
     }
 
     fun setAutoMixMaxPct(value: Int) {
-        prefs.edit().putInt(KEY_AUTOMIX_MAX, value).apply()
+        profiledWrite(prefs) { putInt(KEY_AUTOMIX_MAX, value) }
         _autoMixMaxPct.value = value
+    }
+
+    fun savedAudioDeviceProfiles(): List<SavedAudioDeviceProfile> = synchronized(PROFILE_LOCK) {
+        readAudioDeviceProfiles(prefs)
+    }
+
+    fun activeAudioDeviceProfileKey(): String? = synchronized(PROFILE_LOCK) {
+        readActiveAudioDeviceProfileKey(prefs)
+    }
+
+    fun activateAudioDeviceProfile(route: AudioRouteDescriptor): Boolean =
+        synchronized(PROFILE_LOCK) {
+            val key = route.key
+            val label = route.displayLabel
+            val activeKey = readActiveAudioDeviceProfileKey(prefs)
+            val originalProfiles = readAudioDeviceProfiles(prefs)
+            val currentSettings = snapshotProfileSettings(prefs)
+            val now = System.currentTimeMillis()
+
+            if (key == activeKey) {
+                val profiles = AudioDeviceProfiles.upsert(
+                    originalProfiles,
+                    SavedAudioDeviceProfile(key, label, currentSettings, now),
+                )
+                prefs.edit()
+                    .putString(KEY_AUDIO_DEVICE_PROFILES_JSON, AudioDeviceProfileCodec.encode(profiles))
+                    .putString(KEY_ACTIVE_AUDIO_DEVICE_PROFILE_KEY, key)
+                    .putString(KEY_ACTIVE_AUDIO_DEVICE_PROFILE_LABEL, label)
+                    .commit()
+                _activeAudioDeviceProfileLabel.value = label
+                return@synchronized false
+            }
+
+            // La referencia se conserva antes del upsert saliente para que el límite no la expulse.
+            val incomingProfile = originalProfiles.firstOrNull { it.key == key }
+            var profiles = originalProfiles
+            if (activeKey != null) {
+                val activeLabel = readActiveAudioDeviceProfileLabel(prefs)
+                profiles = AudioDeviceProfiles.upsert(
+                    profiles,
+                    SavedAudioDeviceProfile(activeKey, activeLabel, currentSettings, now),
+                )
+            }
+
+            val incomingSettings = incomingProfile?.settings
+                ?.let(AudioDeviceProfiles::sanitize)
+                ?: currentSettings
+            val applySettings = incomingProfile != null && incomingSettings != currentSettings
+            profiles = AudioDeviceProfiles.upsert(
+                profiles,
+                SavedAudioDeviceProfile(key, label, incomingSettings, now),
+            )
+
+            prefs.edit().also { editor ->
+                if (applySettings) writeProfileSettings(editor, incomingSettings)
+                editor
+                    .putString(KEY_AUDIO_DEVICE_PROFILES_JSON, AudioDeviceProfileCodec.encode(profiles))
+                    .putString(KEY_ACTIVE_AUDIO_DEVICE_PROFILE_KEY, key)
+                    .putString(KEY_ACTIVE_AUDIO_DEVICE_PROFILE_LABEL, label)
+                    .commit()
+            }
+
+            if (applySettings) {
+                _crossfadeSec.value = incomingSettings.crossfadeSec
+                _normalizeVolume.value = incomingSettings.normalizeVolume
+                _autoMix.value = incomingSettings.autoMix
+                _autoMixMaxPct.value = incomingSettings.autoMixMaxPct
+                _spatialAudioAuto.value = incomingSettings.spatialAudioAuto
+                _stereoSurroundLevel.value = incomingSettings.stereoSurroundLevel
+            }
+            _activeAudioDeviceProfileLabel.value = label
+            applySettings
+        }
+
+    fun removeAudioDeviceProfile(key: String): Boolean = synchronized(PROFILE_LOCK) {
+        val normalizedKey = key.trim()
+        if (normalizedKey.isEmpty() || normalizedKey == readActiveAudioDeviceProfileKey(prefs)) {
+            return@synchronized false
+        }
+        val profiles = readAudioDeviceProfiles(prefs)
+        if (profiles.none { it.key == normalizedKey }) return@synchronized false
+        val remaining = AudioDeviceProfiles.remove(profiles, normalizedKey)
+        prefs.edit()
+            .putString(KEY_AUDIO_DEVICE_PROFILES_JSON, AudioDeviceProfileCodec.encode(remaining))
+            .apply()
+        true
     }
 
     fun setShareWithPc(value: Boolean) {
@@ -366,7 +467,89 @@ class AppSettings(context: Context) {
         private const val KEY_DZ_HAS_FLAC = "deezer_has_flac"
         private const val KEY_DZ_HAS_HQ = "deezer_has_hq"
         private const val KEY_DZ_EXPIRED = "deezer_arl_expired"
+        private const val KEY_AUDIO_DEVICE_PROFILES_JSON = "audio_device_profiles_json"
+        private const val KEY_ACTIVE_AUDIO_DEVICE_PROFILE_KEY = "active_audio_device_profile_key"
+        private const val KEY_ACTIVE_AUDIO_DEVICE_PROFILE_LABEL = "active_audio_device_profile_label"
+        private const val DEFAULT_AUDIO_DEVICE_PROFILE_LABEL = "Salida actual"
         private val SYNC_TOKEN_LOCK = Any()
+        private val PROFILE_LOCK = Any()
+
+        private fun readAudioDeviceProfiles(prefs: SharedPreferences): List<SavedAudioDeviceProfile> =
+            AudioDeviceProfileCodec.decode(prefs.getString(KEY_AUDIO_DEVICE_PROFILES_JSON, null))
+
+        private fun readActiveAudioDeviceProfileKey(prefs: SharedPreferences): String? =
+            prefs.getString(KEY_ACTIVE_AUDIO_DEVICE_PROFILE_KEY, null)
+                ?.trim()
+                ?.takeIf { it.isNotEmpty() }
+
+        private fun readActiveAudioDeviceProfileLabel(prefs: SharedPreferences): String =
+            prefs.getString(KEY_ACTIVE_AUDIO_DEVICE_PROFILE_LABEL, null)
+                ?.trim()
+                ?.takeIf { it.isNotEmpty() }
+                ?: DEFAULT_AUDIO_DEVICE_PROFILE_LABEL
+
+        private fun snapshotProfileSettings(prefs: SharedPreferences): AudioProfileSettings =
+            AudioDeviceProfiles.sanitize(
+                AudioProfileSettings(
+                    crossfadeSec = prefs.getInt(KEY_CROSSFADE, 0),
+                    normalizeVolume = prefs.getBoolean(KEY_NORMALIZE, false),
+                    normalizeMode = prefs.getString("normalize_mode", "rms") ?: "rms",
+                    autoMix = prefs.getBoolean(KEY_AUTOMIX, false),
+                    autoMixMaxPct = prefs.getInt(KEY_AUTOMIX_MAX, 20),
+                    spatialAudioAuto = prefs.getBoolean(KEY_SPATIAL_AUDIO_AUTO, true),
+                    stereoSurroundLevel = prefs.getInt(KEY_STEREO_SURROUND_LEVEL, 0),
+                    crossfeedLevel = prefs.getInt(KEY_CROSSFEED_LEVEL, 0),
+                    eqEnabled = prefs.getBoolean("eq_enabled", false),
+                    eqMode = prefs.getString("eq_mode", "graphic") ?: "graphic",
+                    eqBands = prefs.getString("eq_bands", null),
+                    eqPreamp = prefs.getFloat("eq_param_preamp", 0f),
+                    eqFilters = prefs.getString("eq_param_filters", null),
+                ),
+            )
+
+        private fun writeProfileSettings(
+            editor: SharedPreferences.Editor,
+            settings: AudioProfileSettings,
+        ) {
+            editor
+                .putInt(KEY_CROSSFADE, settings.crossfadeSec)
+                .putBoolean(KEY_NORMALIZE, settings.normalizeVolume)
+                .putString("normalize_mode", settings.normalizeMode)
+                .putBoolean(KEY_AUTOMIX, settings.autoMix)
+                .putInt(KEY_AUTOMIX_MAX, settings.autoMixMaxPct)
+                .putBoolean(KEY_SPATIAL_AUDIO_AUTO, settings.spatialAudioAuto)
+                .putInt(KEY_STEREO_SURROUND_LEVEL, settings.stereoSurroundLevel)
+                .putInt(KEY_CROSSFEED_LEVEL, settings.crossfeedLevel)
+                .putBoolean("eq_enabled", settings.eqEnabled)
+                .putString("eq_mode", settings.eqMode)
+                .putFloat("eq_param_preamp", settings.eqPreamp)
+            settings.eqBands?.let { editor.putString("eq_bands", it) }
+                ?: editor.remove("eq_bands")
+            settings.eqFilters?.let { editor.putString("eq_param_filters", it) }
+                ?: editor.remove("eq_param_filters")
+        }
+
+        private fun updateActiveProfileLocked(prefs: SharedPreferences) {
+            val activeKey = readActiveAudioDeviceProfileKey(prefs) ?: return
+            val profile = SavedAudioDeviceProfile(
+                key = activeKey,
+                label = readActiveAudioDeviceProfileLabel(prefs),
+                settings = snapshotProfileSettings(prefs),
+                updatedAt = System.currentTimeMillis(),
+            )
+            val profiles = AudioDeviceProfiles.upsert(readAudioDeviceProfiles(prefs), profile)
+            prefs.edit()
+                .putString(KEY_AUDIO_DEVICE_PROFILES_JSON, AudioDeviceProfileCodec.encode(profiles))
+                .apply()
+        }
+
+        private inline fun profiledWrite(
+            prefs: SharedPreferences,
+            update: SharedPreferences.Editor.() -> Unit,
+        ) = synchronized(PROFILE_LOCK) {
+            prefs.edit().apply(update).apply()
+            updateActiveProfileLocked(prefs)
+        }
 
         private fun newSyncToken(): String = ByteArray(16).also(SecureRandom()::nextBytes)
             .joinToString("") { "%02X".format(it) }
@@ -406,18 +589,18 @@ class AppSettings(context: Context) {
             context.getSharedPreferences("settings", Context.MODE_PRIVATE)
                 .getBoolean("eq_enabled", false)
 
-        fun writeEqEnabled(context: Context, value: Boolean) =
-            context.getSharedPreferences("settings", Context.MODE_PRIVATE)
-                .edit().putBoolean("eq_enabled", value).apply()
+        fun writeEqEnabled(context: Context, value: Boolean) = profiledWrite(
+            context.getSharedPreferences("settings", Context.MODE_PRIVATE),
+        ) { putBoolean("eq_enabled", value) }
 
         fun readEqBands(context: Context): List<Short>? =
             context.getSharedPreferences("settings", Context.MODE_PRIVATE)
                 .getString("eq_bands", null)
                 ?.split(",")?.mapNotNull { it.toShortOrNull() }
 
-        fun writeEqBands(context: Context, levels: List<Short>) =
-            context.getSharedPreferences("settings", Context.MODE_PRIVATE)
-                .edit().putString("eq_bands", levels.joinToString(",")).apply()
+        fun writeEqBands(context: Context, levels: List<Short>) = profiledWrite(
+            context.getSharedPreferences("settings", Context.MODE_PRIVATE),
+        ) { putString("eq_bands", levels.joinToString(",")) }
 
         /** Static readers used by the playback service without holding an instance. */
         fun readCrossfadeSec(context: Context): Int =
@@ -457,52 +640,60 @@ class AppSettings(context: Context) {
             context.getSharedPreferences("settings", Context.MODE_PRIVATE)
                 .getString("eq_mode", "graphic") ?: "graphic"
 
-        fun writeEqMode(context: Context, mode: String) =
-            context.getSharedPreferences("settings", Context.MODE_PRIVATE)
-                .edit().putString("eq_mode", mode).apply()
+        fun writeEqMode(context: Context, mode: String) = profiledWrite(
+            context.getSharedPreferences("settings", Context.MODE_PRIVATE),
+        ) { putString("eq_mode", mode) }
 
         fun readEqPreamp(context: Context): Float =
             context.getSharedPreferences("settings", Context.MODE_PRIVATE)
                 .getFloat("eq_param_preamp", 0f)
 
-        fun writeEqPreamp(context: Context, value: Float) =
-            context.getSharedPreferences("settings", Context.MODE_PRIVATE)
-                .edit().putFloat("eq_param_preamp", value).apply()
+        fun writeEqPreamp(context: Context, value: Float) = profiledWrite(
+            context.getSharedPreferences("settings", Context.MODE_PRIVATE),
+        ) { putFloat("eq_param_preamp", value) }
 
         fun readEqFilters(context: Context): String? =
             context.getSharedPreferences("settings", Context.MODE_PRIVATE)
                 .getString("eq_param_filters", null)
 
-        fun writeEqFilters(context: Context, json: String) =
-            context.getSharedPreferences("settings", Context.MODE_PRIVATE)
-                .edit().putString("eq_param_filters", json).apply()
+        fun writeEqFilters(context: Context, json: String) = profiledWrite(
+            context.getSharedPreferences("settings", Context.MODE_PRIVATE),
+        ) { putString("eq_param_filters", json) }
 
         fun readCrossfeedLevel(context: Context): Int =
             context.getSharedPreferences("settings", Context.MODE_PRIVATE)
                 .getInt(KEY_CROSSFEED_LEVEL, 0)
                 .coerceIn(0, 3)
 
-        fun writeCrossfeedLevel(context: Context, level: Int) =
-            context.getSharedPreferences("settings", Context.MODE_PRIVATE)
-                .edit().putInt(KEY_CROSSFEED_LEVEL, level.coerceIn(0, 3)).apply()
+        fun writeCrossfeedLevel(context: Context, level: Int) = profiledWrite(
+            context.getSharedPreferences("settings", Context.MODE_PRIVATE),
+        ) {
+            val safe = level.coerceIn(0, 3)
+            putInt(KEY_CROSSFEED_LEVEL, safe)
+            if (safe > 0) putInt(KEY_STEREO_SURROUND_LEVEL, 0)
+        }
 
         fun readStereoSurroundLevel(context: Context): Int =
             context.getSharedPreferences("settings", Context.MODE_PRIVATE)
                 .getInt(KEY_STEREO_SURROUND_LEVEL, 0)
                 .coerceIn(0, 3)
 
-        fun writeStereoSurroundLevel(context: Context, level: Int) =
-            context.getSharedPreferences("settings", Context.MODE_PRIVATE)
-                .edit().putInt(KEY_STEREO_SURROUND_LEVEL, level.coerceIn(0, 3)).apply()
+        fun writeStereoSurroundLevel(context: Context, level: Int) = profiledWrite(
+            context.getSharedPreferences("settings", Context.MODE_PRIVATE),
+        ) {
+            val safe = level.coerceIn(0, 3)
+            putInt(KEY_STEREO_SURROUND_LEVEL, safe)
+            if (safe > 0) putInt(KEY_CROSSFEED_LEVEL, 0)
+        }
 
         /** Modo de normalización: "rms" (medida propia) o "replaygain" (tag). */
         fun readNormalizeMode(context: Context): String =
             context.getSharedPreferences("settings", Context.MODE_PRIVATE)
                 .getString("normalize_mode", "rms") ?: "rms"
 
-        fun writeNormalizeMode(context: Context, mode: String) =
-            context.getSharedPreferences("settings", Context.MODE_PRIVATE)
-                .edit().putString("normalize_mode", mode).apply()
+        fun writeNormalizeMode(context: Context, mode: String) = profiledWrite(
+            context.getSharedPreferences("settings", Context.MODE_PRIVATE),
+        ) { putString("normalize_mode", mode) }
 
         /** Spotify-style target loudness; louder tracks are attenuated down to it. */
         const val TARGET_LOUDNESS_DB = com.aar.privatemusic.player.PlaybackGain.TARGET_LOUDNESS_DB

@@ -966,6 +966,51 @@ class PlaybackService : MediaLibraryService() {
         val target = resolveLocalOutput()
         val targetIdentity = target?.let { AudioRouteTarget(it.id, it.type) }
         val routeChanged = !routeTargetInitialized || lastRouteTarget != targetIdentity
+        if (routeChanged) {
+            runCatching {
+                val descriptor = if (target == null) {
+                    AudioRouteDescriptor(
+                        kind = AudioRouteKind.BUILTIN,
+                        label = "Altavoz del dispositivo",
+                    )
+                } else {
+                    val kind = when (target.type) {
+                        android.media.AudioDeviceInfo.TYPE_BLUETOOTH_A2DP,
+                        android.media.AudioDeviceInfo.TYPE_BLE_HEADSET,
+                        -> AudioRouteKind.BLUETOOTH
+                        android.media.AudioDeviceInfo.TYPE_WIRED_HEADPHONES,
+                        android.media.AudioDeviceInfo.TYPE_WIRED_HEADSET,
+                        -> AudioRouteKind.WIRED
+                        android.media.AudioDeviceInfo.TYPE_USB_HEADSET,
+                        android.media.AudioDeviceInfo.TYPE_USB_DEVICE,
+                        android.media.AudioDeviceInfo.TYPE_USB_ACCESSORY,
+                        -> AudioRouteKind.USB
+                        android.media.AudioDeviceInfo.TYPE_HEARING_AID -> AudioRouteKind.HEARING_AID
+                        else -> AudioRouteKind.OTHER
+                    }
+                    val fallbackLabel = AudioRouteDescriptor(kind, "").displayLabel
+                    val label = target.productName.toString().trim()
+                        .takeIf { it.isNotEmpty() }
+                        ?: fallbackLabel
+                    val address = if (android.os.Build.VERSION.SDK_INT >= 28) {
+                        target.address.trim().takeIf {
+                            val compact = it.replace(":", "").replace("-", "").lowercase()
+                            it.isNotEmpty() && compact != "000000000000" && compact != "020000000000"
+                        }
+                    } else {
+                        null
+                    }
+                    AudioRouteDescriptor(kind, label, address)
+                }
+                val settings =
+                    (application as com.aar.privatemusic.PrivateMusicApp).settings
+                if (settings.activateAudioDeviceProfile(descriptor)) {
+                    EqHolder.applySavedProfile(this)
+                }
+            }.onFailure {
+                android.util.Log.w("AudioRoute", "falló activar perfil de salida", it)
+            }
+        }
         val plan = AudioRoutePlan.evaluate(
             AudioRoutePlan.Input(
                 localActive = isLocalSessionActive(),
@@ -1046,6 +1091,8 @@ class PlaybackService : MediaLibraryService() {
             type == android.media.AudioDeviceInfo.TYPE_WIRED_HEADPHONES ||
             type == android.media.AudioDeviceInfo.TYPE_WIRED_HEADSET ||
             type == android.media.AudioDeviceInfo.TYPE_USB_HEADSET ||
+            type == android.media.AudioDeviceInfo.TYPE_USB_DEVICE ||
+            type == android.media.AudioDeviceInfo.TYPE_USB_ACCESSORY ||
             type == android.media.AudioDeviceInfo.TYPE_HEARING_AID
 
     /**

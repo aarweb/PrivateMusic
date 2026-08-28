@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -20,6 +21,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
@@ -69,6 +71,15 @@ fun SettingsScreen(app: PrivateMusicApp, onOpenStats: () -> Unit, onOpenEq: () -
 
     val crossfade by app.settings.crossfadeSec.collectAsState()
     val normalize by app.settings.normalizeVolume.collectAsState()
+    val activeAudioDeviceProfileLabel by app.settings.activeAudioDeviceProfileLabel.collectAsState()
+    val activeAudioDeviceProfileKey = app.settings.activeAudioDeviceProfileKey()
+    var audioDeviceProfilesOpen by remember { mutableStateOf(false) }
+    var savedAudioDeviceProfiles by remember {
+        mutableStateOf(app.settings.savedAudioDeviceProfiles())
+    }
+    LaunchedEffect(activeAudioDeviceProfileLabel) {
+        savedAudioDeviceProfiles = app.settings.savedAudioDeviceProfiles()
+    }
     val audioOutputProfile by app.settings.audioOutputProfile.collectAsState()
     val mixOutput = audioOutputProfile == AudioOutputProfile.MIX
     val nativeAudioState by NativeAudioState.state.collectAsState()
@@ -213,6 +224,95 @@ fun SettingsScreen(app: PrivateMusicApp, onOpenStats: () -> Unit, onOpenEq: () -
             color = MaterialTheme.colorScheme.primary,
             modifier = Modifier.padding(top = 24.dp, bottom = 8.dp),
         )
+
+        OutlinedCard(Modifier.fillMaxWidth().padding(bottom = 16.dp)) {
+            Column(Modifier.padding(16.dp)) {
+                Text("Ajustes por dispositivo", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "Perfil activo: $activeAudioDeviceProfileLabel",
+                    style = MaterialTheme.typography.bodyLarge,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
+                Text(
+                    "El ecualizador, el fundido, AutoMix, la normalización y el audio espacial " +
+                        "se guardan y cambian automáticamente al conectar cada salida.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                TextButton(
+                    onClick = {
+                        savedAudioDeviceProfiles = app.settings.savedAudioDeviceProfiles()
+                        audioDeviceProfilesOpen = true
+                    },
+                ) {
+                    Text("Gestionar perfiles (${savedAudioDeviceProfiles.size})")
+                }
+            }
+        }
+
+        if (audioDeviceProfilesOpen) {
+            AlertDialog(
+                onDismissRequest = { audioDeviceProfilesOpen = false },
+                title = { Text("Perfiles por dispositivo") },
+                text = {
+                    if (savedAudioDeviceProfiles.isEmpty()) {
+                        Text(
+                            "Todavía no hay perfiles guardados.",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    } else {
+                        Column(
+                            Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 400.dp)
+                                .verticalScroll(rememberScrollState()),
+                        ) {
+                            savedAudioDeviceProfiles.forEach { profile ->
+                                val active = profile.key == activeAudioDeviceProfileKey
+                                Row(
+                                    Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Column(Modifier.weight(1f)) {
+                                        Text(profile.label, style = MaterialTheme.typography.bodyLarge)
+                                        if (active) {
+                                            Text(
+                                                "En uso",
+                                                style = MaterialTheme.typography.labelMedium,
+                                                color = MaterialTheme.colorScheme.primary,
+                                            )
+                                        }
+                                    }
+                                    if (!active) {
+                                        IconButton(
+                                            onClick = {
+                                                if (app.settings.removeAudioDeviceProfile(profile.key)) {
+                                                    savedAudioDeviceProfiles =
+                                                        app.settings.savedAudioDeviceProfiles()
+                                                    if (savedAudioDeviceProfiles.isEmpty()) {
+                                                        audioDeviceProfilesOpen = false
+                                                    }
+                                                }
+                                            },
+                                        ) {
+                                            Icon(
+                                                Icons.Filled.Delete,
+                                                contentDescription = "Borrar perfil de ${profile.label}",
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = { audioDeviceProfilesOpen = false }) {
+                        Text("Cerrar")
+                    }
+                },
+            )
+        }
 
         Text("Perfil de salida", style = MaterialTheme.typography.bodyLarge)
         Row(Modifier.padding(top = 4.dp)) {
