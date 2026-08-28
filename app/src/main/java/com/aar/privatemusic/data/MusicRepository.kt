@@ -28,6 +28,12 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
 import java.io.File
 
+data class SavedQueuePlayback(
+    val songs: List<Song>,
+    val index: Int,
+    val positionMs: Long,
+)
+
 class MusicRepository(
     private val context: Context,
     private val dao: MusicDao,
@@ -81,17 +87,52 @@ class MusicRepository(
         dao.observeSavedQueues()
 
     /** Guarda [songIds] como una cola con nombre; devuelve su id. */
-    suspend fun saveQueue(name: String, songIds: List<String>): Long {
+    suspend fun saveQueue(
+        name: String,
+        songIds: List<String>,
+        currentIndex: Int = 0,
+        positionMs: Long = 0L,
+    ): Long {
         val clean = name.trim().ifEmpty { "Cola" }
         val id = dao.insertSavedQueue(
             com.aar.privatemusic.data.db.SavedQueue(name = clean, createdAt = System.currentTimeMillis())
         )
-        dao.replaceSavedQueueSongs(id, songIds)
+        dao.replaceSavedQueueSnapshot(id, songIds, currentIndex, positionMs)
         return id
     }
 
-    /** Las canciones de una cola guardada, en su orden. */
-    suspend fun savedQueueSongs(queueId: Long): List<Song> = dao.savedQueueSongs(queueId)
+    /**
+     * Resuelve la instantánea sin perder orden ni repeticiones. Si faltan
+     * canciones, remapea el índice contando posiciones, no buscando por id.
+     */
+    suspend fun savedQueuePlayback(queueId: Long): SavedQueuePlayback? {
+        val queue = dao.savedQueue(queueId) ?: return null
+        val ids = dao.savedQueueSongIds(queueId)
+        val found = ids.map { dao.getSong(it) }
+        val present = found.map { it != null }
+        val songs = found.filterNotNull()
+        val index = com.aar.privatemusic.player.QueueLogic.restoreIndex(present, queue.currentIndex)
+        val position = com.aar.privatemusic.player.QueueLogic.restorePositionMs(
+            present, queue.currentIndex, queue.positionMs,
+        )
+        return SavedQueuePlayback(songs, index, position)
+    }
+
+    /** Compatibilidad para añadir una cola al final sin activar su memoria. */
+    suspend fun savedQueueSongs(queueId: Long): List<Song> =
+        savedQueuePlayback(queueId)?.songs.orEmpty()
+
+    suspend fun updateSavedQueueSnapshot(
+        id: Long,
+        songIds: List<String>,
+        currentIndex: Int,
+        positionMs: Long,
+    ) = dao.replaceSavedQueueSnapshot(id, songIds, currentIndex, positionMs)
+
+    suspend fun updateSavedQueueProgress(id: Long, currentIndex: Int, positionMs: Long) =
+        dao.updateSavedQueueProgress(id, currentIndex, positionMs)
+
+    suspend fun savedQueueExists(id: Long): Boolean = dao.savedQueueExists(id)
 
     suspend fun renameSavedQueue(id: Long, name: String) {
         val clean = name.trim()

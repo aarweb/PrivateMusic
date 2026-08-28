@@ -125,6 +125,12 @@ class PrivateMusicApp : Application() {
             // Compartiendo con la tele, el reproductor sólo devuelve el id: el
             // resto de datos de la canción salen de aquí.
             resolveSong = { songId -> dao.getSong(songId) },
+            persistSavedQueueSnapshot = { id, ids, index, position ->
+                repository.updateSavedQueueSnapshot(id, ids, index, position)
+            },
+            persistSavedQueueProgress = { id, index, position ->
+                repository.updateSavedQueueProgress(id, index, position)
+            },
         )
         runningMode = com.aar.privatemusic.player.RunningMode(this, dao, playerController, appScope)
         dj = com.aar.privatemusic.player.DjManager(this, dao, repository, playerController, settings, appScope)
@@ -179,14 +185,21 @@ class PrivateMusicApp : Application() {
                 // el índice guardado a secas, al arrancar sonaría otra canción.
                 val found = saved.ids.map { musicDao.getSong(it) }
                 val songs = found.filterNotNull()
-                if (songs.isEmpty()) return@launch
+                val activeId = saved.activeSavedQueueId
+                    ?.takeIf { repository.savedQueueExists(it) }
+                if (songs.isEmpty()) {
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                        playerController.restoreQueue(emptyList(), 0, 0L, activeId)
+                    }
+                    return@launch
+                }
                 val present = found.map { it != null }
                 val index = com.aar.privatemusic.player.QueueLogic
                     .restoreIndex(present, saved.index)
                 val position = com.aar.privatemusic.player.QueueLogic
                     .restorePositionMs(present, saved.index, saved.positionMs)
                 kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-                    playerController.restoreQueue(songs, index, position)
+                    playerController.restoreQueue(songs, index, position, activeId)
                 }
             } finally {
                 restoringQueue.set(false)

@@ -51,7 +51,7 @@ object QueueLogic {
      * está, heredarla haría que la siguiente empezara por la mitad.
      */
     fun restorePositionMs(present: List<Boolean>, savedIndex: Int, savedPositionMs: Long): Long =
-        if (present.getOrNull(savedIndex) == true) savedPositionMs else 0L
+        if (present.getOrNull(savedIndex) == true) savedPositionMs.coerceAtLeast(0L) else 0L
 
     // ---- Aleatorio ----
     //

@@ -47,12 +47,19 @@ class PlayerController(
      * completos: al recuperar la cola desde Chromecast sólo sobreviven el id, el
      * título y la URL — el artista y la carátula se pierden por el camino. Sin
      * esto, la pantalla del reproductor se queda en blanco mientras se comparte.
-     */
+    */
     private val resolveSong: (suspend (String) -> Song?)? = null,
+    /** Persistencia inyectada: el controlador no conoce Room ni repositorios. */
+    private val persistSavedQueueSnapshot: (
+        suspend (Long, List<String>, Int, Long) -> Unit
+    )? = null,
+    private val persistSavedQueueProgress: (suspend (Long, Int, Long) -> Unit)? = null,
 ) {
 
     private var controller: MediaController? = null
     private val mainScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private val persistenceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var persistenceTail: Job? = null
     private var lastPlayedId: String? = null
     // Resume-position store for long tracks (mixes, DJ sets, audiobooks).
     private val resumePrefs = context.getSharedPreferences("resume_positions", Context.MODE_PRIVATE)
@@ -60,11 +67,13 @@ class PlayerController(
     // Session queue persistence: restore what you were listening to on relaunch.
     private val queuePrefs = context.getSharedPreferences("queue_state", Context.MODE_PRIVATE)
     private var lastQueueSaveAt = 0L
+    private var activeProgressJob: Job? = null
     private var pendingRestore: (() -> Unit)? = null
 
     companion object {
         /** Tracks longer than this remember their playback position. */
         const val RESUME_MIN_DURATION_SEC = QueueLogic.RESUME_MIN_DURATION_SEC
+        private const val ACTIVE_SAVED_QUEUE_KEY = "active_saved_queue_id"
     }
 
     private val _nowPlaying = MutableStateFlow<NowPlaying?>(null)
@@ -94,6 +103,12 @@ class PlayerController(
     private val _currentIndex = MutableStateFlow(0)
     val currentIndex: StateFlow<Int> = _currentIndex
 
+    // Se activa sólo después de que Application valide contra la BD el id del
+    // snapshot frío; así nunca escribimos en una cola que ya fue borrada.
+    private val _activeSavedQueueId = MutableStateFlow<Long?>(null)
+    val activeSavedQueueId: StateFlow<Long?> = _activeSavedQueueId
+    private var activeIdentityInitialized = false
+
     init {
         val token = SessionToken(context, ComponentName(context, PlaybackService::class.java))
         val future = MediaController.Builder(context, token).buildAsync()
@@ -105,7 +120,9 @@ class PlayerController(
             if (_playbackSpeed.value != 1f || _pitchSemitones.value != 0) applyPlaybackParameters()
             pendingRestore?.let { restore ->
                 pendingRestore = null
-                if (c.mediaItemCount == 0) restore()
+                // La propia restauración decide si sustituye una cola vacía o
+                // sólo hidrata una identidad aún desconocida.
+                restore()
             }
             c.addListener(object : Player.Listener {
                 override fun onEvents(player: Player, events: Player.Events) {
@@ -139,11 +156,11 @@ class PlayerController(
                     // Mirror the timeline for the queue screen — but only when it
                     // actually changed: volume ticks fire onEvents ~5x/second and
                     // rebuilding a 300-item list each time churns the main thread.
-                    if (events.containsAny(
+                    val timelineChanged = events.containsAny(
                             Player.EVENT_TIMELINE_CHANGED,
                             Player.EVENT_MEDIA_ITEM_TRANSITION,
                         )
-                    ) {
+                    if (timelineChanged) {
                         val items = (0 until player.mediaItemCount).map { i ->
                             val mi = player.getMediaItemAt(i)
                             QueueItem(
@@ -182,12 +199,35 @@ class PlayerController(
                         lastQueueSaveAt = now
                         val ids = (0 until player.mediaItemCount)
                             .joinToString(",") { player.getMediaItemAt(it).mediaId }
-                        queuePrefs.edit()
+                        val editor = queuePrefs.edit()
                             .putString("ids", ids)
                             .putInt("index", player.currentMediaItemIndex)
                             .putLong("pos", player.currentPosition)
-                            .apply()
+                        if (activeIdentityInitialized) {
+                            _activeSavedQueueId.value?.let {
+                                editor.putLong(ACTIVE_SAVED_QUEUE_KEY, it)
+                            } ?: editor.remove(ACTIVE_SAVED_QUEUE_KEY)
+                        }
+                        editor.apply()
                     }
+
+                    // Una cola guardada activa es viva: cualquier cambio del
+                    // timeline guarda lista y punto; mientras reproduce basta
+                    // actualizar el punto como máximo una vez cada cinco segundos.
+                    if (id != null && !id.startsWith("preview:") && player.mediaItemCount > 0 &&
+                        _activeSavedQueueId.value != null
+                    ) {
+                        when {
+                            timelineChanged -> {
+                                persistActiveSnapshot(player)
+                                restartActiveProgressTicker(player)
+                            }
+                            events.contains(Player.EVENT_IS_PLAYING_CHANGED) && !player.isPlaying -> {
+                                persistActiveProgress(player)
+                            }
+                        }
+                    }
+                    refreshActiveProgressTicker(player)
                 }
 
                 override fun onMediaItemTransition(item: MediaItem?, reason: Int) {
@@ -224,6 +264,129 @@ class PlayerController(
     }
 
     val positionMs: Long get() = controller?.currentPosition ?: 0L
+
+    /** Ejecuta escrituras en orden y fuera del hilo principal. */
+    private fun enqueuePersistence(block: suspend () -> Unit) {
+        val previous = persistenceTail
+        persistenceTail = persistenceScope.launch {
+            previous?.join()
+            runCatching { block() }
+        }
+    }
+
+    private fun persistActiveSnapshot(player: Player) {
+        val queueId = _activeSavedQueueId.value ?: return
+        if (player.currentMediaItem?.mediaId?.startsWith("preview:") == true) return
+        val callback = persistSavedQueueSnapshot
+        val ids = (0 until player.mediaItemCount)
+            .map { player.getMediaItemAt(it).mediaId }
+            .filterNot { it.startsWith("preview:") }
+        if (ids.isEmpty()) return
+        val index = player.currentMediaItemIndex.coerceIn(0, ids.lastIndex)
+        val position = player.currentPosition.coerceAtLeast(0L)
+        persistColdQueueState(queueId, ids, index, position)
+        if (callback != null) enqueuePersistence { callback(queueId, ids, index, position) }
+    }
+
+    private fun persistActiveProgress(player: Player) {
+        val queueId = _activeSavedQueueId.value ?: return
+        if (player.currentMediaItem?.mediaId?.startsWith("preview:") == true) return
+        val callback = persistSavedQueueProgress
+        val size = player.mediaItemCount
+        if (size == 0) return
+        val index = player.currentMediaItemIndex.coerceIn(0, size - 1)
+        val position = player.currentPosition.coerceAtLeast(0L)
+        persistColdQueueState(queueId, null, index, position)
+        if (callback != null) enqueuePersistence { callback(queueId, index, position) }
+    }
+
+    /** Mantiene el snapshot frío al mismo punto que la copia viva de Room. */
+    private fun persistColdQueueState(
+        queueId: Long,
+        ids: List<String>?,
+        index: Int,
+        positionMs: Long,
+    ) {
+        val editor = queuePrefs.edit()
+            .putInt("index", index.coerceAtLeast(0))
+            .putLong("pos", positionMs.coerceAtLeast(0L))
+            .putLong(ACTIVE_SAVED_QUEUE_KEY, queueId)
+        if (!ids.isNullOrEmpty()) editor.putString("ids", ids.joinToString(","))
+        editor.apply()
+    }
+
+    /**
+     * Media3 no emite eventos durante una reproducción estable. Este ticker es
+     * la garantía real de que el punto avanza cada cinco segundos.
+     */
+    private fun refreshActiveProgressTicker(player: Player? = controller) {
+        val shouldRun = player != null && player.isPlaying &&
+            _activeSavedQueueId.value != null &&
+            player.currentMediaItem?.mediaId?.startsWith("preview:") != true
+        if (!shouldRun) {
+            stopActiveProgressTicker()
+            return
+        }
+        if (activeProgressJob?.isActive == true) return
+        activeProgressJob = mainScope.launch {
+            while (true) {
+                delay(5_000L)
+                val current = controller ?: break
+                if (!current.isPlaying || _activeSavedQueueId.value == null ||
+                    current.currentMediaItem?.mediaId?.startsWith("preview:") == true
+                ) break
+                persistActiveProgress(current)
+            }
+        }
+    }
+
+    private fun restartActiveProgressTicker(player: Player? = controller) {
+        stopActiveProgressTicker()
+        refreshActiveProgressTicker(player)
+    }
+
+    private fun stopActiveProgressTicker() {
+        activeProgressJob?.cancel()
+        activeProgressJob = null
+    }
+
+    /** Guarda la cola real escondida detrás de una preescucha, nunca el preview. */
+    private fun persistQueueBehindPreview() {
+        val queueId = _activeSavedQueueId.value ?: return
+        val callback = persistSavedQueueSnapshot ?: return
+        val ids = savedQueue.map { it.mediaId }.filterNot { it.startsWith("preview:") }
+        if (ids.isEmpty()) return
+        val index = savedIndex.coerceIn(0, ids.lastIndex)
+        val position = savedPositionMs.coerceAtLeast(0L)
+        enqueuePersistence { callback(queueId, ids, index, position) }
+    }
+
+    private fun setActiveSavedQueue(id: Long?) {
+        activeIdentityInitialized = true
+        _activeSavedQueueId.value = id
+        val editor = queuePrefs.edit()
+        if (id == null) editor.remove(ACTIVE_SAVED_QUEUE_KEY)
+        else editor.putLong(ACTIVE_SAVED_QUEUE_KEY, id)
+        editor.apply()
+        restartActiveProgressTicker()
+    }
+
+    /** La cola actual acaba de guardarse con [id] y pasa a ser su copia viva. */
+    fun activateSavedQueue(id: Long) {
+        if (previewing) return
+        val c = controller
+        if (c != null && _activeSavedQueueId.value != id) persistActiveSnapshot(c)
+        setActiveSavedQueue(id)
+    }
+
+    /**
+     * Desacopla antes de borrar y espera escrituras anteriores sin bloquear el
+     * hilo principal, evitando que una instantánea tardía recree filas huérfanas.
+     */
+    suspend fun detachSavedQueue(id: Long) {
+        if (_activeSavedQueueId.value == id) setActiveSavedQueue(null)
+        persistenceTail?.join()
+    }
 
     /** Última canción cuyos datos ya se completaron desde la biblioteca. */
     private var lastEnrichedId: String? = null
@@ -286,6 +449,25 @@ class PlayerController(
         startFresh(c, songs.map { it.toMediaItem() }, startIndex, resumeMs, shuffled = false)
     }
 
+    /** Restaura una cola con memoria, la activa y comienza a reproducir. */
+    fun playSavedQueue(
+        id: Long,
+        songs: List<Song>,
+        startIndex: Int,
+        startPositionMs: Long,
+    ) {
+        val c = controller ?: return
+        if (songs.isEmpty()) return
+        startFresh(
+            c = c,
+            items = songs.map { it.toMediaItem() },
+            startIndex = startIndex,
+            startPositionMs = startPositionMs.coerceAtLeast(0L),
+            shuffled = false,
+            activeSavedQueueId = id,
+        )
+    }
+
     /** Plays the whole list in shuffle mode starting from a random song. */
     fun playQueueShuffled(songs: List<Song>) {
         val c = controller ?: return
@@ -329,7 +511,16 @@ class PlayerController(
         startPositionMs: Long,
         shuffled: Boolean,
         original: List<MediaItem>? = null,
+        activeSavedQueueId: Long? = null,
     ) {
+        if (items.isEmpty()) return
+        // Una cola normal desacopla; otra guardada cambia de identidad. Antes se
+        // fotografía la activa. La preescucha ya conserva su copia por separado.
+        if (previewing) {
+            persistQueueBehindPreview()
+            savedQueue = emptyList()
+        } else persistActiveSnapshot(c)
+        setActiveSavedQueue(activeSavedQueueId)
         // Nunca se enciende el aleatorio de ExoPlayer: si estuviera puesto,
         // barajaría por encima de nuestro orden y la cola de la pantalla dejaría
         // de ser la que suena.
@@ -337,7 +528,11 @@ class PlayerController(
         orderBeforeShuffle = if (shuffled) original else null
         queuedIds.clear()
         _shuffle.value = shuffled
-        c.setMediaItems(items, startIndex, startPositionMs)
+        c.setMediaItems(
+            items,
+            startIndex.coerceIn(0, items.lastIndex),
+            startPositionMs.coerceAtLeast(0L),
+        )
         c.prepare()
         c.play()
     }
@@ -626,6 +821,8 @@ class PlayerController(
 
     fun release() {
         cancelSleepTimer()
+        stopActiveProgressTicker()
+        controller?.let { persistActiveSnapshot(it) }
         controller?.release()
         controller = null
     }
@@ -641,10 +838,12 @@ class PlayerController(
         // Previews hijack the session player; remember what was playing so the
         // queue comes back when the preview ends (or errors out).
         if (c.mediaItemCount > 0 && c.currentMediaItem?.mediaId?.startsWith("preview:") != true) {
+            persistActiveSnapshot(c)
             savedQueue = (0 until c.mediaItemCount).map { c.getMediaItemAt(it) }
             savedIndex = c.currentMediaItemIndex
             savedPositionMs = c.currentPosition
         }
+        stopActiveProgressTicker()
         val uri = Uri.parse(streamUrl)
         val item = MediaItem.Builder()
             .setMediaId("preview:$id")
@@ -664,27 +863,53 @@ class PlayerController(
     }
 
     /** Saved-session snapshot for cold-start restore. */
-    data class SavedQueue(val ids: List<String>, val index: Int, val positionMs: Long)
+    data class SavedQueue(
+        val ids: List<String>,
+        val index: Int,
+        val positionMs: Long,
+        val activeSavedQueueId: Long?,
+    )
 
     fun savedQueue(): SavedQueue? {
         val ids = queuePrefs.getString("ids", null)?.split(",")?.filter { it.isNotBlank() }
             ?: return null
         if (ids.isEmpty()) return null
-        return SavedQueue(ids, queuePrefs.getInt("index", 0), queuePrefs.getLong("pos", 0L))
+        return SavedQueue(
+            ids,
+            queuePrefs.getInt("index", 0),
+            queuePrefs.getLong("pos", 0L),
+            queuePrefs.getLong(ACTIVE_SAVED_QUEUE_KEY, -1L).takeIf { it >= 0L },
+        )
     }
 
     /** Restores [songs] as the queue, PAUSED, once the controller connects. */
-    fun restoreQueue(songs: List<Song>, index: Int, positionMs: Long) {
+    fun restoreQueue(
+        songs: List<Song>,
+        index: Int,
+        positionMs: Long,
+        activeSavedQueueId: Long? = null,
+    ) {
         val doRestore = {
             val c = controller
-            if (c != null && c.mediaItemCount == 0 && songs.isNotEmpty()) {
-                c.setMediaItems(
-                    songs.map { it.toMediaItem() },
-                    index.coerceIn(0, songs.size - 1),
-                    positionMs,
-                )
-                c.prepare()
-                c.pause()
+            if (c != null) {
+                when {
+                    c.mediaItemCount == 0 && songs.isNotEmpty() -> {
+                        setActiveSavedQueue(activeSavedQueueId)
+                        c.setMediaItems(
+                            songs.map { it.toMediaItem() },
+                            index.coerceIn(0, songs.size - 1),
+                            positionMs.coerceAtLeast(0L),
+                        )
+                        c.prepare()
+                        c.pause()
+                    }
+                    c.mediaItemCount == 0 -> setActiveSavedQueue(null)
+                    !activeIdentityInitialized && songs.isNotEmpty() -> {
+                        // El servicio conservó la sesión entre dos Activity: se
+                        // hidrata una vez, pero nunca se pisa una identidad viva.
+                        setActiveSavedQueue(activeSavedQueueId)
+                    }
+                }
             }
         }
         if (controller != null) doRestore() else pendingRestore = doRestore
@@ -697,12 +922,18 @@ class PlayerController(
         c.setMediaItems(savedQueue, savedIndex.coerceAtMost(savedQueue.size - 1), savedPositionMs)
         c.prepare()
         c.pause()
+        stopActiveProgressTicker()
         savedQueue = emptyList()
     }
 
     /** Plays [file] (e.g. an instrumental WAV) as if it were the song itself. */
     fun playKaraoke(song: Song, file: File) {
         val c = controller ?: return
+        if (previewing) {
+            persistQueueBehindPreview()
+            savedQueue = emptyList()
+        } else persistActiveSnapshot(c)
+        setActiveSavedQueue(null)
         val uri = Uri.fromFile(file)
         val item = MediaItem.Builder()
             .setMediaId(song.id)

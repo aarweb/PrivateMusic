@@ -75,6 +75,20 @@ class QueueLogicTest {
         assertEquals(0, QueueLogic.restoreIndex(listOf(false, false), savedIndex = 1))
     }
 
+    @Test
+    fun `indices fuera de rango se acotan a una superviviente`() {
+        val present = listOf(true, false, true)
+        assertEquals(0, QueueLogic.restoreIndex(present, savedIndex = -9))
+        assertEquals(1, QueueLogic.restoreIndex(present, savedIndex = 99))
+        assertEquals(0L, QueueLogic.restorePositionMs(present, -9, 12_000L))
+        assertEquals(0L, QueueLogic.restorePositionMs(present, 99, 12_000L))
+    }
+
+    @Test
+    fun `una posicion negativa nunca se restaura`() {
+        assertEquals(0L, QueueLogic.restorePositionMs(listOf(true), 0, -500L))
+    }
+
     /**
      * Buscar por id se equivocaría aquí: la cola tiene la misma canción dos
      * veces y sonaba la segunda copia.

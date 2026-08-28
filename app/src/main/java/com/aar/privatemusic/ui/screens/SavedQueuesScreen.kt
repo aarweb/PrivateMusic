@@ -1,6 +1,7 @@
 package com.aar.privatemusic.ui.screens
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -48,6 +49,7 @@ import java.util.Locale
 @Composable
 fun SavedQueuesScreen(app: PrivateMusicApp, onBack: () -> Unit) {
     val queues by app.repository.observeSavedQueues().collectAsState(initial = emptyList())
+    val activeQueueId by app.playerController.activeSavedQueueId.collectAsState()
     val scope = rememberCoroutineScope()
     var renaming by remember { mutableStateOf<SavedQueueWithCount?>(null) }
 
@@ -82,13 +84,19 @@ fun SavedQueuesScreen(app: PrivateMusicApp, onBack: () -> Unit) {
             items(queues, key = { it.queue.id }) { item ->
                 SavedQueueRow(
                     item = item,
+                    active = item.queue.id == activeQueueId,
                     onPlay = {
                         scope.launch {
-                            val songs = app.repository.savedQueueSongs(item.queue.id)
-                            if (songs.isEmpty()) {
+                            val playback = app.repository.savedQueuePlayback(item.queue.id)
+                            if (playback == null || playback.songs.isEmpty()) {
                                 Feedback.show("Esa cola ya no tiene canciones")
                             } else {
-                                app.playerController.playQueue(songs, 0)
+                                app.playerController.playSavedQueue(
+                                    item.queue.id,
+                                    playback.songs,
+                                    playback.index,
+                                    playback.positionMs,
+                                )
                                 Feedback.show("Reproduciendo \"${item.queue.name}\"")
                             }
                         }
@@ -103,6 +111,7 @@ fun SavedQueuesScreen(app: PrivateMusicApp, onBack: () -> Unit) {
                     onRename = { renaming = item },
                     onDelete = {
                         scope.launch {
+                            app.playerController.detachSavedQueue(item.queue.id)
                             app.repository.deleteSavedQueue(item.queue.id)
                             Feedback.show("Cola \"${item.queue.name}\" borrada")
                         }
@@ -142,6 +151,7 @@ fun SavedQueuesScreen(app: PrivateMusicApp, onBack: () -> Unit) {
 @Composable
 private fun SavedQueueRow(
     item: SavedQueueWithCount,
+    active: Boolean,
     onPlay: () -> Unit,
     onAppend: () -> Unit,
     onRename: () -> Unit,
@@ -152,14 +162,35 @@ private fun SavedQueueRow(
         SimpleDateFormat("d MMM yyyy", Locale.getDefault()).format(Date(item.queue.createdAt))
     }
     Row(
-        Modifier.fillMaxWidth().clickable { onPlay() }.padding(horizontal = 16.dp, vertical = 12.dp),
+        Modifier
+            .fillMaxWidth()
+            .background(
+                if (active) MaterialTheme.colorScheme.primary.copy(alpha = 0.10f)
+                else androidx.compose.ui.graphics.Color.Transparent,
+            )
+            .clickable { onPlay() }
+            .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(Icons.Filled.QueueMusic, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+        Icon(
+            Icons.Filled.QueueMusic,
+            contentDescription = null,
+            tint = if (active) MaterialTheme.colorScheme.primary
+            else MaterialTheme.colorScheme.onSurfaceVariant,
+        )
         Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
             Text(item.queue.name, style = MaterialTheme.typography.bodyLarge, maxLines = 1)
             Text(
-                "${item.songCount} canciones · $date",
+                buildString {
+                    append("${item.songCount} canciones · $date")
+                    if (item.queue.currentIndex > 0 || item.queue.positionMs > 0L) {
+                        append(" · ")
+                        append(item.queue.currentIndex + 1)
+                        append("ª · ")
+                        append(formatSavedPosition(item.queue.positionMs))
+                    }
+                    if (active) append(" · Activa")
+                },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -178,4 +209,9 @@ private fun SavedQueueRow(
             }
         }
     }
+}
+
+private fun formatSavedPosition(positionMs: Long): String {
+    val totalSeconds = positionMs.coerceAtLeast(0L) / 1000L
+    return "%d:%02d".format(totalSeconds / 60L, totalSeconds % 60L)
 }

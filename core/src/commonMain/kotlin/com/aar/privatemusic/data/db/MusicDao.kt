@@ -588,10 +588,47 @@ interface MusicDao {
     @Query("DELETE FROM saved_queue_songs WHERE queueId = :queueId")
     suspend fun clearSavedQueue(queueId: Long)
 
+    @Query("SELECT * FROM saved_queues WHERE id = :id LIMIT 1")
+    suspend fun savedQueue(id: Long): SavedQueue?
+
+    @Query("SELECT EXISTS(SELECT 1 FROM saved_queues WHERE id = :id)")
+    suspend fun savedQueueExists(id: Long): Boolean
+
+    @Query("SELECT songId FROM saved_queue_songs WHERE queueId = :queueId ORDER BY position ASC")
+    suspend fun savedQueueSongIds(queueId: Long): List<String>
+
+    @Query("SELECT COUNT(*) FROM saved_queue_songs WHERE queueId = :queueId")
+    suspend fun savedQueueSize(queueId: Long): Int
+
+    @Query("UPDATE saved_queues SET currentIndex = :currentIndex, positionMs = :positionMs WHERE id = :id")
+    suspend fun setSavedQueueProgress(id: Long, currentIndex: Int, positionMs: Long)
+
+    /** Actualiza el punto de escucha sin tocar ni reinsertar la lista. */
     @Transaction
-    suspend fun replaceSavedQueueSongs(queueId: Long, songIds: List<String>) {
+    suspend fun updateSavedQueueProgress(queueId: Long, currentIndex: Int, positionMs: Long) {
+        val size = savedQueueSize(queueId)
+        val safeIndex = if (size == 0) 0 else currentIndex.coerceIn(0, size - 1)
+        setSavedQueueProgress(queueId, safeIndex, positionMs.coerceAtLeast(0L))
+    }
+
+    /** Lista y progreso forman una sola instantánea transaccional. */
+    @Transaction
+    suspend fun replaceSavedQueueSnapshot(
+        queueId: Long,
+        songIds: List<String>,
+        currentIndex: Int,
+        positionMs: Long,
+    ) {
         clearSavedQueue(queueId)
         songIds.forEachIndexed { i, songId -> addToSavedQueue(SavedQueueSongCrossRef(queueId, songId, i)) }
+        val safeIndex = if (songIds.isEmpty()) 0 else currentIndex.coerceIn(0, songIds.lastIndex)
+        setSavedQueueProgress(queueId, safeIndex, positionMs.coerceAtLeast(0L))
+    }
+
+    /** Compatibilidad para importaciones antiguas que sólo traen la lista. */
+    @Transaction
+    suspend fun replaceSavedQueueSongs(queueId: Long, songIds: List<String>) {
+        replaceSavedQueueSnapshot(queueId, songIds, 0, 0L)
     }
 
     /** Colas guardadas con su número de canciones, la más reciente primero. */

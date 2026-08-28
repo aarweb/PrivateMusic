@@ -96,7 +96,8 @@ fun QueueScreen(app: PrivateMusicApp, onBack: () -> Unit, onOpenSavedQueues: () 
                 Icon(Icons.Filled.Casino, contentDescription = "Rebarajar lo siguiente")
             }
             Box {
-                IconButton(onClick = { saveMenu = true }, enabled = queue.isNotEmpty()) {
+                val savableQueue = queue.filterNot { it.mediaId.startsWith("preview:") }
+                IconButton(onClick = { saveMenu = true }, enabled = savableQueue.isNotEmpty()) {
                     Icon(Icons.Filled.PlaylistAdd, contentDescription = "Guardar cola")
                 }
                 androidx.compose.material3.DropdownMenu(
@@ -139,10 +140,16 @@ fun QueueScreen(app: PrivateMusicApp, onBack: () -> Unit, onOpenSavedQueues: () 
                     androidx.compose.material3.TextButton(onClick = {
                         val trimmed = name.trim()
                         if (trimmed.isNotEmpty()) {
-                            val ids = queue.map { it.mediaId }
+                            val snapshot = queue.filterNot { it.mediaId.startsWith("preview:") }
+                            val ids = snapshot.map { it.mediaId }
+                            val snapshotIndex = currentIndex.coerceIn(0, (ids.size - 1).coerceAtLeast(0))
+                            val snapshotPosition = controller.positionMs.coerceAtLeast(0L)
                             scope.launch {
                                 if (asQueue) {
-                                    app.repository.saveQueue(trimmed, ids)
+                                    val id = app.repository.saveQueue(
+                                        trimmed, ids, snapshotIndex, snapshotPosition,
+                                    )
+                                    controller.activateSavedQueue(id)
                                     com.aar.privatemusic.util.Feedback.show("Cola \"$trimmed\" guardada")
                                 } else {
                                     val plId = app.repository.createPlaylist(trimmed)

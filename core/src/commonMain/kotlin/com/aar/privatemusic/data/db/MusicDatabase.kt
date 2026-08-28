@@ -10,7 +10,7 @@ import androidx.sqlite.execSQL
 
 @Database(
     entities = [Song::class, Playlist::class, PlaylistSongCrossRef::class, PlayEvent::class, SmartPlaylist::class, WatchedSource::class, PlaylistFolder::class, PendingDownload::class, SavedQueue::class, SavedQueueSongCrossRef::class],
-    version = 20,
+    version = 21,
     exportSchema = false,
 )
 @ConstructedBy(MusicDatabaseConstructor::class)
@@ -227,6 +227,14 @@ internal val MUSIC_MIGRATIONS: Array<Migration> = arrayOf(
     object : Migration(19, 20) {
         override fun migrate(connection: SQLiteConnection) {
             connection.execSQL("ALTER TABLE songs ADD COLUMN videoPath TEXT")
+        }
+    },
+    // Las colas guardadas dejan de ser una foto estática: recuerdan qué canción
+    // sonaba y el punto exacto para continuar otro día.
+    object : Migration(20, 21) {
+        override fun migrate(connection: SQLiteConnection) {
+            connection.execSQL("ALTER TABLE saved_queues ADD COLUMN currentIndex INTEGER NOT NULL DEFAULT 0")
+            connection.execSQL("ALTER TABLE saved_queues ADD COLUMN positionMs INTEGER NOT NULL DEFAULT 0")
         }
     },
 )

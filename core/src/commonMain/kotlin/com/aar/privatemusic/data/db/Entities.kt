@@ -160,6 +160,8 @@ data class SavedQueue(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val name: String,
     val createdAt: Long,
+    val currentIndex: Int = 0,
+    val positionMs: Long = 0,
 )
 
 /** Las canciones de una cola guardada, en orden. Sin clave foránea, como playlist_songs. */
