@@ -44,6 +44,8 @@ class PrivateMusicApp : Application() {
         private set
     lateinit var repository: MusicRepository
         private set
+    lateinit var lyricsSearchIndex: com.aar.privatemusic.lyrics.LyricsSearchIndex
+        private set
     lateinit var playerController: PlayerController
         private set
     lateinit var metadataService: com.aar.privatemusic.metadata.MetadataService
@@ -90,6 +92,7 @@ class PrivateMusicApp : Application() {
         ) { settings.subsonicConfig() }
         bandcamp = com.aar.privatemusic.downloader.BandcampDownloader(downloaderEnv, dao, appScope)
         repository = MusicRepository(this, dao, downloader)
+        lyricsSearchIndex = com.aar.privatemusic.lyrics.LyricsSearchIndex(repository.musicDir)
         metadataService = com.aar.privatemusic.metadata.MetadataService(this, dao, downloader.musicDir)
         creditsService = com.aar.privatemusic.metadata.MusicCreditsService(downloader.musicDir)
         libraryShare = com.aar.privatemusic.sync.LibraryShare(this, dao)

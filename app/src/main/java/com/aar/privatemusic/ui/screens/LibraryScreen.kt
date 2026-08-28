@@ -67,6 +67,8 @@ import com.aar.privatemusic.ui.components.AddToPlaylistDialog
 import com.aar.privatemusic.ui.components.ArtImage
 import com.aar.privatemusic.ui.components.SongRow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.CancellationException
 import java.io.File
 
 /**
@@ -79,6 +81,12 @@ private enum class SortMode(val label: String, val chip: String) {
     ARTIST("Artista", "Artista"),
     DURATION("Duración", "Duración"),
 }
+
+private data class LyricSearchUiState(
+    val query: String = "",
+    val hits: List<com.aar.privatemusic.lyrics.LyricSearchHit> = emptyList(),
+    val searching: Boolean = false,
+)
 
 @Composable
 fun LibraryScreen(app: PrivateMusicApp, onOpenArtist: (String) -> Unit = {}) {
@@ -184,14 +192,46 @@ fun LibraryScreen(app: PrivateMusicApp, onOpenArtist: (String) -> Unit = {}) {
     var onlyFavorites by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
     var artistView by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
 
-    val visibleSongs = remember(songs, query, sortMode, onlyFavorites) {
+    val trimmedQuery = query.trim()
+    val normalizedLyricQueryLength = remember(trimmedQuery) {
+        com.aar.privatemusic.lyrics.LyricSearch.normalize(trimmedQuery).length
+    }
+    val songIds = remember(songs) { songs.map { it.id } }
+    var lyricSearchState by remember { mutableStateOf(LyricSearchUiState()) }
+    LaunchedEffect(trimmedQuery, selectionMode, artistView, songIds) {
+        // El query forma parte del estado: un resultado anterior nunca puede
+        // mezclarse durante los 250 ms de espera de la consulta nueva.
+        lyricSearchState = LyricSearchUiState(query = trimmedQuery)
+        if (selectionMode || artistView || normalizedLyricQueryLength < 3) return@LaunchedEffect
+        lyricSearchState = LyricSearchUiState(query = trimmedQuery, searching = true)
+        delay(250)
+        val hits = try {
+            app.lyricsSearchIndex.search(songs, trimmedQuery)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            emptyList()
+        }
+        lyricSearchState = LyricSearchUiState(query = trimmedQuery, hits = hits)
+    }
+
+    val validLyricHits = remember(lyricSearchState, trimmedQuery, selectionMode, artistView) {
+        if (!selectionMode && !artistView && lyricSearchState.query == trimmedQuery) {
+            lyricSearchState.hits.associateBy { it.songId }
+        } else emptyMap()
+    }
+    val searchingLyrics = !selectionMode && !artistView &&
+        lyricSearchState.query == trimmedQuery && lyricSearchState.searching
+
+    val visibleSongs = remember(songs, query, sortMode, onlyFavorites, validLyricHits) {
         songs
             .filter { !onlyFavorites || it.isFavorite }
             .filter {
                 query.isBlank() ||
                     it.title.contains(query, ignoreCase = true) ||
                     it.artist.contains(query, ignoreCase = true) ||
-                    it.note?.contains(query, ignoreCase = true) == true
+                    it.note?.contains(query, ignoreCase = true) == true ||
+                    it.id in validLyricHits
             }
             .let { list ->
                 when (sortMode) {
@@ -316,6 +356,20 @@ fun LibraryScreen(app: PrivateMusicApp, onOpenArtist: (String) -> Unit = {}) {
             }
             return@Column
         }
+        if (searchingLyrics) {
+            Row(
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
+                Text(
+                    "Buscando en letras…",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
         LazyColumn(Modifier.fillMaxSize()) {
             if (failedDownloads.isNotEmpty() && query.isBlank() && !selectionMode) {
                 item(key = "dl-errors-header") {
@@ -380,12 +434,29 @@ fun LibraryScreen(app: PrivateMusicApp, onOpenArtist: (String) -> Unit = {}) {
                 }
             }
 
+            if (visibleSongs.isEmpty() && query.isNotBlank() && !searchingLyrics) {
+                item(key = "empty-search") {
+                    Text(
+                        if (normalizedLyricQueryLength >= 3)
+                            "No hay coincidencias en títulos, artistas, notas ni letras."
+                        else
+                            "No hay coincidencias en títulos, artistas ni notas.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(32.dp),
+                    )
+                }
+            }
+
             items(visibleSongs, key = { it.id }, contentType = { "song" }) { song ->
                 var menuOpen by remember { mutableStateOf(false) }
                 val hasCanvas = !song.videoPath.isNullOrBlank()
                 val canvasActive = song.id in manualCanvasIds
                 SongRow(
                     song = song,
+                    supportingText = validLyricHits[song.id]?.let { hit ->
+                        if (hit.translated) "Traducción: “${hit.snippet}”" else "“${hit.snippet}”"
+                    },
                     isCurrent = song.id == nowPlaying?.songId,
                     selectionMode = selectionMode,
                     selected = song.id in selectedIds,

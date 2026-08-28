@@ -18,6 +18,19 @@ import java.util.UUID
  */
 class LyricsTranslationCache(private val musicDir: File) {
 
+    /**
+     * Huella opaca y de sólo lectura de la caché. No expone una ruta derivada
+     * del id y permite detectar sustituciones sin abrir el contenido.
+     */
+    fun cacheStamp(songId: String, targetLanguage: String): Long {
+        val file = cacheFileFor(songId, targetLanguage)
+        if (!file.isFile) return 0L
+        var stamp = 17L
+        stamp = stamp * 31 + file.lastModified()
+        stamp = stamp * 31 + file.length()
+        return if (stamp == 0L) 1L else stamp
+    }
+
     fun read(songId: String, targetLanguage: String, source: Lyrics): Lyrics? {
         val file = cacheFileFor(songId, targetLanguage)
         if (!file.isFile) return null

@@ -304,6 +304,7 @@ fun SongRow(
     selected: Boolean = false,
     onLongClick: (() -> Unit)? = null,
     onSwipeToQueue: (() -> Unit)? = null,
+    supportingText: String? = null,
     trailing: (@Composable () -> Unit)? = null,
 ) {
     // Deslizar hacia la derecha encola la canción. La fila NO se va: vuelve a su
@@ -345,12 +346,18 @@ fun SongRow(
             // Opaca a propósito: la fila es transparente y dejaría ver el fondo
             // verde deslizándose por debajo.
             Surface(color = MaterialTheme.colorScheme.surface) {
-                SongRowContent(song, onClick, isCurrent, selectionMode, selected, onLongClick, trailing)
+                SongRowContent(
+                    song, onClick, isCurrent, selectionMode, selected, onLongClick,
+                    supportingText, trailing,
+                )
             }
         }
         return
     }
-    SongRowContent(song, onClick, isCurrent, selectionMode, selected, onLongClick, trailing)
+    SongRowContent(
+        song, onClick, isCurrent, selectionMode, selected, onLongClick,
+        supportingText, trailing,
+    )
 }
 
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
@@ -362,6 +369,7 @@ private fun SongRowContent(
     selectionMode: Boolean,
     selected: Boolean,
     onLongClick: (() -> Unit)?,
+    supportingText: String?,
     trailing: (@Composable () -> Unit)?,
 ) {
     Row(
@@ -424,6 +432,15 @@ private fun SongRowContent(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            if (supportingText != null) {
+                Text(
+                    supportingText,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.82f),
+                )
+            }
         }
         if (!selectionMode) {
             if (trailing != null) {

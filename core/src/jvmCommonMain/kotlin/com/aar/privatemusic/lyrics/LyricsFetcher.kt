@@ -33,6 +33,9 @@ data class Lyrics(val synced: Boolean, val lines: List<LyricLine>) {
  */
 object LyricsFetcher {
 
+    /** Letra local y fichero que realmente se pudo interpretar. */
+    data class CachedLyrics(val lyrics: Lyrics, val sourceFile: File)
+
     private const val UA = "PrivateMusic (https://github.com/aarweb/PrivateMusic)"
 
     /**
@@ -67,6 +70,52 @@ object LyricsFetcher {
                 }
             }.also { if (it == null) misses.add(song.id) }
         }
+    }
+
+    /**
+     * Lee únicamente la caché local. No consulta LRCLIB, no registra un fallo y
+     * no escribe nada. Un TTML roto no oculta el LRC/TXT que haya debajo.
+     */
+    fun readCached(songId: String, dir: File): Lyrics? =
+        readCachedWithSource(songId, dir)?.lyrics
+
+    /** Igual que [readCached], indicando qué fichero válido ganó la prioridad. */
+    fun readCachedWithSource(songId: String, dir: File): CachedLyrics? {
+        val candidates = cachedCandidates(songId, dir)
+        candidates.forEach { file ->
+            if (!file.isFile) return@forEach
+            val lyrics = runCatching {
+                when (file.extension.lowercase()) {
+                    "ttml" -> parseTtml(file.readText())
+                    "lrc" -> parseLrc(file.readText())
+                    "txt" -> plain(file.readText())
+                    else -> null
+                }
+            }.getOrNull()
+            if (lyrics != null) return CachedLyrics(lyrics, file)
+        }
+        return null
+    }
+
+    /**
+     * Metadatos baratos de los candidatos. Sirven para no volver a parsear una
+     * biblioteca que no ha cambiado; no leen contenido ni tocan [misses].
+     */
+    fun cachedCandidatesStamp(songId: String, dir: File): Long {
+        var hash = 1_125_899_906_842_597L
+        cachedCandidates(songId, dir).forEach { file ->
+            hash = hash * 31 + file.name.hashCode()
+            hash = hash * 31 + if (file.isFile) file.lastModified() else 0L
+            hash = hash * 31 + if (file.isFile) file.length() else 0L
+        }
+        return hash
+    }
+
+    private fun cachedCandidates(songId: String, dir: File): List<File> {
+        // Los ids normales son ids de vídeo. Rechazar separadores impide que un
+        // id importado lea fuera de la carpeta de música.
+        if (songId.isBlank() || songId.contains('/') || songId.contains('\\')) return emptyList()
+        return listOf("ttml", "lrc", "txt").map { File(dir, "$songId.$it") }
     }
 
     /**
