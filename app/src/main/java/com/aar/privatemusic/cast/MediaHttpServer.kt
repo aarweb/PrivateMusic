@@ -131,6 +131,7 @@ class MediaHttpServer(
                     song.trackNumber?.let { put("trackNumber", it) }
                     putOpt("mbid", song.mbid)
                     putOpt("isrc", song.isrc)
+                    putOpt("genresJson", song.genresJson)
                     put("metadataResolved", song.metadataResolved)
                 },
             )

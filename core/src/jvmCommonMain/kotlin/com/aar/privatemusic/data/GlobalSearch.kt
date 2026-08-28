@@ -34,7 +34,11 @@ object GlobalSearch {
                 song.albumArtist,
                 song.note,
             )
-            val rank = metadataRank ?: if (song.id in lyricSongIds) LYRIC_RANK else null
+            val genreRank = GenreCodec.decode(song.genresJson)
+                .mapNotNull { genre -> rank(genre, wanted) }
+                .minOrNull()
+            val rank = listOfNotNull(metadataRank, genreRank).minOrNull()
+                ?: if (song.id in lyricSongIds) LYRIC_RANK else null
             rank?.let { Ranked(song, it) }
         }.sortedWith(
             rankedComparator(

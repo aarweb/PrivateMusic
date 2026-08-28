@@ -10,12 +10,12 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 /**
- * Las doce migraciones, ejecutadas de verdad.
+ * Todas las migraciones, ejecutadas de verdad.
  *
- * Una base de datos nueva nace en la versión 19 y no migra nada: el camino que
+ * Una base de datos nueva nace en la versión actual y no migra nada: el camino que
  * de verdad usa la gente —abrir una biblioteca vieja y subirla— no se prueba
  * solo. Aquí se escribe a mano el esquema de la v1, se mete música dentro, y se
- * comprueba que Room llega a la 20 sin perder una fila.
+ * comprueba que Room llega a la 22 sin perder una fila.
  *
  * Si Room aceptase la base pero el esquema resultante no coincidiera con las
  * entidades, la validación de Room al abrir la haría fallar. Esa validación
@@ -66,7 +66,7 @@ class MigrationTest {
     }
 
     @Test
-    fun `sube de la version 1 a la 20 sin perder datos`(): Unit = runBlocking {
+    fun `sube de la version 1 a la 22 sin perder datos`(): Unit = runBlocking {
         val dir = Files.createTempDirectory("pm-migration").toFile()
         createVersion1(dir)
 
@@ -90,6 +90,7 @@ class MigrationTest {
         assertEquals(null, song.replayGainDb, "la 17→18 añade el ReplayGain sin leer")
         assertEquals(0, song.analysisTries, "la 18→19 añade el contador de análisis a cero")
         assertEquals(null, song.videoPath, "la 19→20 añade la ruta de vídeo sin poner")
+        assertEquals(null, song.genresJson, "la 21→22 deja los géneros pendientes")
 
         // La playlist y su relación siguen en pie.
         val playlists = dao.playlistsOnce()

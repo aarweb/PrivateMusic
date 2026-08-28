@@ -3,6 +3,7 @@ package com.aar.privatemusic.util
 import android.content.Context
 import android.media.MediaMetadataRetriever
 import android.provider.MediaStore
+import com.aar.privatemusic.data.GenreCodec
 import com.aar.privatemusic.data.db.MusicDao
 import com.aar.privatemusic.data.db.Song
 import kotlinx.coroutines.Dispatchers
@@ -56,17 +57,41 @@ object LocalImporter {
                     // Dedup: no reimportar si ya tienes la misma canción (otra fuente).
                     if (dao.findByTitleArtist(title, artist) != null) continue
 
-                    // Embedded cover art → cached copy next to our music.
+                    // Tags embebidos y portada. Cada lectura es best-effort: un
+                    // fichero con metadatos dañados sigue entrando en la biblioteca.
                     var artPath: String? = null
-                    runCatching {
-                        val mmr = MediaMetadataRetriever()
-                        mmr.setDataSource(path)
-                        mmr.embeddedPicture?.let { bytes ->
-                            val out = File(musicDir, "$id.jpg")
-                            out.writeBytes(bytes)
-                            artPath = out.absolutePath
+                    var album: String? = null
+                    var albumArtist: String? = null
+                    var year: Int? = null
+                    var trackNumber: Int? = null
+                    var genresJson: String? = null
+                    runCatching { MediaMetadataRetriever() }.getOrNull()?.let { mmr ->
+                        try {
+                            mmr.setDataSource(path)
+                            album = mmr.textTag(MediaMetadataRetriever.METADATA_KEY_ALBUM)
+                            albumArtist = mmr.textTag(MediaMetadataRetriever.METADATA_KEY_ALBUMARTIST)
+                            year = mmr.textTag(MediaMetadataRetriever.METADATA_KEY_YEAR)
+                                ?.take(4)
+                                ?.toIntOrNull()
+                                ?.takeIf { it in 1000..2100 }
+                            trackNumber = mmr.textTag(MediaMetadataRetriever.METADATA_KEY_CD_TRACK_NUMBER)
+                                ?.substringBefore('/')
+                                ?.trim()
+                                ?.toIntOrNull()
+                                ?.takeIf { it > 0 }
+                            genresJson = GenreCodec.encodeRaw(
+                                mmr.textTag(MediaMetadataRetriever.METADATA_KEY_GENRE),
+                            )
+                            runCatching { mmr.embeddedPicture }.getOrNull()?.let { bytes ->
+                                val out = File(musicDir, "$id.jpg")
+                                runCatching { out.writeBytes(bytes) }
+                                    .onSuccess { artPath = out.absolutePath }
+                            }
+                        } catch (_: Exception) {
+                            // MediaStore conserva título/artista aunque los tags no se puedan leer.
+                        } finally {
+                            runCatching { mmr.release() }
                         }
-                        mmr.release()
                     }
 
                     dao.insertSong(
@@ -79,6 +104,11 @@ object LocalImporter {
                             artPath = artPath,
                             thumbnailUrl = null,
                             addedAt = System.currentTimeMillis(),
+                            album = album,
+                            albumArtist = albumArtist,
+                            year = year,
+                            trackNumber = trackNumber,
+                            genresJson = genresJson,
                         )
                     )
                     added++
@@ -86,4 +116,10 @@ object LocalImporter {
             }
             added
         }
+
+    private fun MediaMetadataRetriever.textTag(key: Int): String? =
+        runCatching { extractMetadata(key) }
+            .getOrNull()
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
 }

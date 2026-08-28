@@ -31,7 +31,8 @@ Requiere Android 8.0+ (arm64).
 
 **Biblioteca y playlists**
 - Favoritos, historial, ordenación, snooze de canciones y vista propia de álbumes en la Biblioteca.
-- **Búsqueda global unificada**: encuentra al instante canciones, álbumes, artistas, playlists y texto de letras locales; al enviar la consulta añade resultados online debajo sin ocultar tu biblioteca.
+- **Explorar por géneros, décadas, años y carpetas**, con reproducción completa o aleatoria. Lee los tags locales y permite completar bajo demanda los géneros que falten con MusicBrainz.
+- **Búsqueda global unificada**: encuentra al instante canciones, álbumes, artistas, géneros, playlists y texto de letras locales; al enviar la consulta añade resultados online debajo sin ocultar tu biblioteca.
 - Playlists normales (drag & drop, portadas personalizadas, pins), **carpetas** para organizarlas, **smart playlists** por reglas y automáticas (Más escuchadas, Olvidadas, Top de tu temporada, **Mix de hoy**).
 - **Mix a medida**: describe lo que te apetece ("algo tranquilo de los 90 sin voz que no haya sonado en un mes") y la app lo convierte, sin nube ni modelo de lenguaje, en una cola de tu biblioteca; se puede guardar como smart playlist.
 - **Importar historial** de Spotify (exportación GDPR), Last.fm (CSV) y YouTube Takeout, para que el Recap y las playlists automáticas tengan memoria desde el primer día.

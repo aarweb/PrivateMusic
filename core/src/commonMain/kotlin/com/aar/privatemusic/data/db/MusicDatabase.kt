@@ -10,7 +10,7 @@ import androidx.sqlite.execSQL
 
 @Database(
     entities = [Song::class, Playlist::class, PlaylistSongCrossRef::class, PlayEvent::class, SmartPlaylist::class, WatchedSource::class, PlaylistFolder::class, PendingDownload::class, SavedQueue::class, SavedQueueSongCrossRef::class],
-    version = 21,
+    version = 22,
     exportSchema = false,
 )
 @ConstructedBy(MusicDatabaseConstructor::class)
@@ -29,7 +29,7 @@ expect object MusicDatabaseConstructor : RoomDatabaseConstructor<MusicDatabase> 
 }
 
 /**
- * Las mismas doce migraciones que en Android, con la firma de Room KMP:
+ * Las mismas migraciones en Android y escritorio, con la firma de Room KMP:
  * `SQLiteConnection` en vez de `SupportSQLiteDatabase`. El SQL es idéntico
  * — si alguna sentencia se separa de la del móvil, las dos bibliotecas dejan
  * de ser la misma y no hay forma de sincronizarlas.
@@ -235,6 +235,13 @@ internal val MUSIC_MIGRATIONS: Array<Migration> = arrayOf(
         override fun migrate(connection: SQLiteConnection) {
             connection.execSQL("ALTER TABLE saved_queues ADD COLUMN currentIndex INTEGER NOT NULL DEFAULT 0")
             connection.execSQL("ALTER TABLE saved_queues ADD COLUMN positionMs INTEGER NOT NULL DEFAULT 0")
+        }
+    },
+    // Géneros obtenidos de tags locales o MusicBrainz. Null distingue una
+    // canción pendiente de una resuelta correctamente sin géneros (`[]`).
+    object : Migration(21, 22) {
+        override fun migrate(connection: SQLiteConnection) {
+            connection.execSQL("ALTER TABLE songs ADD COLUMN genresJson TEXT")
         }
     },
 )

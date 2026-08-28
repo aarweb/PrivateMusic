@@ -95,6 +95,7 @@ class SyncClient(
                     trackNumber = s.optIntOrNull("trackNumber"),
                     mbid = s.optStringOrNull("mbid"),
                     isrc = s.optStringOrNull("isrc"),
+                    genresJson = s.optStringOrNull("genresJson"),
                     metadataResolved = s.optBoolean("metadataResolved"),
                 ),
             )

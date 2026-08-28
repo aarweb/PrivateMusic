@@ -52,6 +52,8 @@ class PrivateMusicApp : Application() {
         private set
     lateinit var creditsService: com.aar.privatemusic.metadata.MusicCreditsService
         private set
+    lateinit var genreEnricher: com.aar.privatemusic.metadata.GenreEnricher
+        private set
     lateinit var videoAuto: com.aar.privatemusic.downloader.VideoAutoManager
         private set
     lateinit var libraryShare: com.aar.privatemusic.sync.LibraryShare
@@ -94,7 +96,10 @@ class PrivateMusicApp : Application() {
         repository = MusicRepository(this, dao, downloader)
         lyricsSearchIndex = com.aar.privatemusic.lyrics.LyricsSearchIndex(repository.musicDir)
         metadataService = com.aar.privatemusic.metadata.MetadataService(this, dao, downloader.musicDir)
-        creditsService = com.aar.privatemusic.metadata.MusicCreditsService(downloader.musicDir)
+        creditsService = com.aar.privatemusic.metadata.MusicCreditsService(downloader.musicDir) { songId, genresJson ->
+            dao.updateGenres(songId, genresJson)
+        }
+        genreEnricher = com.aar.privatemusic.metadata.GenreEnricher(dao, creditsService, appScope)
         libraryShare = com.aar.privatemusic.sync.LibraryShare(this, dao)
         // El interruptor de Ajustes es la única verdad: sobrevive a reinicios.
         appScope.launch {
@@ -108,7 +113,18 @@ class PrivateMusicApp : Application() {
             this, downloader, dao, settings, appScope,
         )
         downloader.onDownloadComplete = { id ->
-            appScope.launch { dao.getSong(id)?.let { metadataService.autoIdentify(it) } }
+            appScope.launch {
+                try {
+                    dao.getSong(id)?.let { metadataService.autoIdentify(it) }
+                } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                    throw cancelled
+                } catch (error: Throwable) {
+                    // Los géneros aún pueden resolverse con los metadatos de la descarga.
+                    Log.w("PrivateMusicApp", "autoIdentify failed for $id", error)
+                }
+                // Relee la fila después de autoIdentify para usar título, artista y MBID canónicos.
+                genreEnricher.enrichSong(id)
+            }
             // Baja el vídeo de fondo si el ajuste está activo y la red lo permite.
             videoAuto.onSongDownloaded(id)
         }

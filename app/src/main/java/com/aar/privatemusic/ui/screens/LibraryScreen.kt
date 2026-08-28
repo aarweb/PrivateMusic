@@ -34,6 +34,7 @@ import androidx.compose.material.icons.filled.Album
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DoneAll
+import androidx.compose.material.icons.filled.Explore
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Person
@@ -93,7 +94,7 @@ private enum class SortMode(val label: String, val chip: String) {
     DURATION("Duración", "Duración"),
 }
 
-private enum class LibraryView { SONGS, ALBUMS, ARTISTS }
+private enum class LibraryView { SONGS, ALBUMS, ARTISTS, EXPLORE }
 
 private data class LyricSearchUiState(
     val query: String = "",
@@ -409,6 +410,14 @@ fun LibraryScreen(
                     Icon(Icons.Filled.Person, contentDescription = null)
                 },
             )
+            FilterChip(
+                selected = libraryView == LibraryView.EXPLORE,
+                onClick = { libraryView = LibraryView.EXPLORE },
+                label = { Text("Explorar") },
+                leadingIcon = {
+                    Icon(Icons.Filled.Explore, contentDescription = null)
+                },
+            )
             if (libraryView == LibraryView.SONGS) Box {
                 var sortMenuOpen by remember { mutableStateOf(false) }
                 FilterChip(
@@ -431,6 +440,18 @@ fun LibraryScreen(
             }
         }
         } // end if (!selectionMode)
+
+        if (libraryView == LibraryView.EXPLORE && !selectionMode) {
+            val favoriteSongs = remember(songs, onlyFavorites) {
+                songs.filter { !onlyFavorites || it.isFavorite }
+            }
+            LibraryBrowseScreen(
+                app = app,
+                songs = favoriteSongs,
+                query = trimmedQuery,
+            )
+            return@Column
+        }
 
         if (libraryView == LibraryView.ALBUMS && !selectionMode) {
             val favoriteSongs = remember(songs, onlyFavorites) {

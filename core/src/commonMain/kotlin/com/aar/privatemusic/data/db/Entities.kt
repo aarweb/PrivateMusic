@@ -43,6 +43,8 @@ data class Song(
     val trackNumber: Int? = null,
     val mbid: String? = null,        // MusicBrainz recording id
     val isrc: String? = null,        // international standard recording code
+    // Géneros canónicos serializados por GenreCodec; null = aún sin resolver.
+    val genresJson: String? = null,
     // True once the online identify pipeline ran (avoids re-running forever).
     val metadataResolved: Boolean = false,
     // Nota personal del usuario ("la de la boda", "versión del directo de 2019").

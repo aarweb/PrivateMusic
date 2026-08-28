@@ -46,7 +46,8 @@ interface MusicDao {
 
     @Query("""UPDATE songs SET title = :title, artist = :artist, album = :album,
         albumArtist = :albumArtist, year = :year, trackNumber = :trackNumber,
-        mbid = :mbid, isrc = :isrc, metadataResolved = 1 WHERE id = :id""")
+        mbid = :mbid, isrc = :isrc, genresJson = NULL,
+        metadataResolved = 1 WHERE id = :id""")
     suspend fun updateCanonicalMeta(
         id: String, title: String, artist: String, album: String?, albumArtist: String?,
         year: Int?, trackNumber: Int?, mbid: String?, isrc: String?,
@@ -54,6 +55,12 @@ interface MusicDao {
 
     @Query("UPDATE songs SET metadataResolved = :resolved WHERE id = :id")
     suspend fun setMetadataResolved(id: String, resolved: Boolean)
+
+    @Query("UPDATE songs SET genresJson = :json WHERE id = :id")
+    suspend fun updateGenres(id: String, json: String)
+
+    @Query("SELECT * FROM songs WHERE genresJson IS NULL ORDER BY addedAt ASC")
+    suspend fun songsMissingGenres(): List<Song>
 
     // ---- Play history ----
 

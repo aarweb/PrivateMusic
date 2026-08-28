@@ -139,6 +139,23 @@ class GlobalSearchTest {
         assertTrue(results.playlists.isEmpty())
     }
 
+    @Test
+    fun `canciones coinciden por cualquiera de sus generos`() {
+        val songs = listOf(
+            song("rock", "Uno", genres = listOf("Rock alternativo", "Indie")),
+            song("jazz", "Dos", genres = listOf("Jazz")),
+        )
+
+        assertEquals(
+            listOf("rock"),
+            GlobalSearch.search(songs, emptyList(), "indie").songs.map { it.id },
+        )
+        assertEquals(
+            listOf("rock"),
+            GlobalSearch.search(songs, emptyList(), "róck alter").songs.map { it.id },
+        )
+    }
+
     private fun song(
         id: String,
         title: String,
@@ -147,6 +164,7 @@ class GlobalSearchTest {
         albumArtist: String? = null,
         year: Int? = null,
         note: String? = null,
+        genres: List<String> = emptyList(),
     ) = Song(
         id = id,
         title = title,
@@ -160,6 +178,7 @@ class GlobalSearchTest {
         albumArtist = albumArtist,
         year = year,
         note = note,
+        genresJson = GenreCodec.encode(genres),
     )
 
     private fun playlist(id: Long, name: String, description: String? = null) = Playlist(

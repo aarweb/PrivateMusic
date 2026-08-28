@@ -1,6 +1,7 @@
 package com.aar.privatemusic.metadata
 
 import com.aar.privatemusic.BuildConfig
+import com.aar.privatemusic.data.GenreCodec
 import com.aar.privatemusic.data.db.Song
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -22,33 +23,46 @@ import org.json.JSONObject
 data class CreditsLoad(val credits: MusicCredits, val fromCache: Boolean)
 
 /** Consulta MusicBrainz bajo demanda y conserva su respuesta original sin caducidad. */
-class MusicCreditsService(private val musicDir: File) {
+class MusicCreditsService(
+    private val musicDir: File,
+    private val onGenresResolved: (suspend (songId: String, genresJson: String) -> Unit)? = null,
+) {
 
     suspend fun load(song: Song, forceRefresh: Boolean = false): Result<CreditsLoad> =
         withContext(Dispatchers.IO) {
             val sourceKey = sourceKey(song)
             val cached = readCache(song.id, sourceKey)
-            if (cached != null && !forceRefresh) {
-                return@withContext Result.success(CreditsLoad(cached, fromCache = true))
+            val loaded = if (cached != null && !forceRefresh) {
+                CreditsLoad(cached, fromCache = true)
+            } else {
+                try {
+                    val mbid = song.mbid?.takeIf(::isMbid) ?: searchRecording(song)
+                        ?: error("MusicBrainz no encontró una grabación compatible")
+                    val raw = musicBrainzGet(
+                        "$BASE_URL/recording/$mbid" +
+                            "?inc=artist-rels+label-rels+work-rels+work-level-rels+recording-rels+genres+isrcs&fmt=json",
+                    ) ?: error("MusicBrainz no devolvió los créditos")
+                    val credits = MusicCreditsParser.parseRecording(raw)
+                        ?: error("Respuesta de créditos no válida")
+                    writeCache(song.id, sourceKey, raw)
+                    CreditsLoad(credits, fromCache = false)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Throwable) {
+                    // Forzar es best-effort: una caída de red no inutiliza lo que ya funcionaba.
+                    cached?.let { CreditsLoad(it, fromCache = true) }
+                        ?: return@withContext Result.failure(error)
+                }
             }
 
             try {
-                val mbid = song.mbid?.takeIf(::isMbid) ?: searchRecording(song)
-                    ?: error("MusicBrainz no encontró una grabación compatible")
-                val raw = musicBrainzGet(
-                    "$BASE_URL/recording/$mbid" +
-                        "?inc=artist-rels+label-rels+work-rels+work-level-rels+recording-rels+genres+isrcs&fmt=json",
-                ) ?: error("MusicBrainz no devolvió los créditos")
-                val credits = MusicCreditsParser.parseRecording(raw)
-                    ?: error("Respuesta de créditos no válida")
-                writeCache(song.id, sourceKey, raw)
-                Result.success(CreditsLoad(credits, fromCache = false))
+                // También se guarda `[]`: null significa pendiente, no "sin géneros".
+                onGenresResolved?.invoke(song.id, GenreCodec.encode(loaded.credits.genres))
+                Result.success(loaded)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Throwable) {
-                // Forzar es best-effort: una caída de red no inutiliza lo que ya funcionaba.
-                if (cached != null) Result.success(CreditsLoad(cached, fromCache = true))
-                else Result.failure(error)
+                Result.failure(error)
             }
         }
 
