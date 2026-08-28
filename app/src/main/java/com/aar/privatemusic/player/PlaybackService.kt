@@ -2,9 +2,12 @@ package com.aar.privatemusic.player
 
 import com.aar.privatemusic.data.db.openMusicDatabase
 import android.app.PendingIntent
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.Bundle
 import com.aar.privatemusic.MainActivity
+import androidx.core.content.FileProvider
 import androidx.media3.common.C
 import androidx.media3.common.ForwardingPlayer
 import androidx.media3.common.MediaItem
@@ -15,6 +18,7 @@ import androidx.media3.common.TrackSelectionParameters
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.media3.session.LibraryResult
+import androidx.media3.session.MediaConstants
 import androidx.media3.session.MediaLibraryService
 import androidx.media3.session.MediaSession
 import com.aar.privatemusic.data.AppSettings
@@ -22,6 +26,7 @@ import com.aar.privatemusic.data.AudioOutputProfile
 import com.aar.privatemusic.data.db.MusicDao
 import com.aar.privatemusic.data.db.MusicDatabase
 import com.aar.privatemusic.data.db.Song
+import com.aar.privatemusic.player.CarMediaSearch
 import com.google.common.collect.ImmutableList
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
@@ -126,7 +131,7 @@ class PlaybackService : MediaLibraryService() {
         mediaSession = MediaLibrarySession.Builder(
             this,
             focusPlayer,
-            LibraryCallback(dao, serviceScope),
+            LibraryCallback(this, dao, serviceScope),
         )
             .setSessionActivity(sessionActivity)
             .build()
@@ -2442,9 +2447,12 @@ private const val ROOT_ID = "root"
 private const val ALL_ID = "all"
 private const val FAVS_ID = "favs"
 private const val RECENT_ID = "recent"
+private const val PLAYLISTS_ID = "playlists"
 private const val PLAYLIST_PREFIX = "playlist/"
+private const val CAR_RECENT_LIMIT = 50
 
 private class LibraryCallback(
+    private val context: Context,
     private val dao: MusicDao,
     private val scope: CoroutineScope,
 ) : MediaLibraryService.MediaLibrarySession.Callback {
@@ -2454,7 +2462,9 @@ private class LibraryCallback(
         browser: MediaSession.ControllerInfo,
         params: MediaLibraryService.LibraryParams?,
     ): ListenableFuture<LibraryResult<MediaItem>> =
-        Futures.immediateFuture(LibraryResult.ofItem(folder(ROOT_ID, "PrivateMusic"), params))
+        Futures.immediateFuture(
+            LibraryResult.ofItem(folder(ROOT_ID, "PrivateMusic", MediaMetadata.MEDIA_TYPE_FOLDER_MIXED), params)
+        )
 
     override fun onGetChildren(
         session: MediaLibraryService.MediaLibrarySession,
@@ -2464,24 +2474,56 @@ private class LibraryCallback(
         pageSize: Int,
         params: MediaLibraryService.LibraryParams?,
     ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> = scope.future {
-        val children: List<MediaItem> = when {
-            parentId == ROOT_ID -> buildList {
-                add(folder(ALL_ID, "Biblioteca"))
-                add(folder(FAVS_ID, "Favoritas"))
-                add(folder(RECENT_ID, "Recientes"))
-                dao.playlistsOnce().forEach { add(folder("$PLAYLIST_PREFIX${it.id}", it.name)) }
+        val allChildren: List<MediaItem> = when {
+            parentId == ROOT_ID -> listOf(
+                folder(ALL_ID, "Biblioteca", MediaMetadata.MEDIA_TYPE_FOLDER_MIXED),
+                folder(FAVS_ID, "Favoritas", MediaMetadata.MEDIA_TYPE_FOLDER_MIXED),
+                folder(RECENT_ID, "Recientes", MediaMetadata.MEDIA_TYPE_FOLDER_MIXED),
+                folder(PLAYLISTS_ID, "Playlists", MediaMetadata.MEDIA_TYPE_FOLDER_PLAYLISTS),
+            )
+            parentId == ALL_ID -> dao.songsOnce().map { it.toBrowseItem(context, browser) }
+            parentId == FAVS_ID -> dao.favoritesOnce().map { it.toBrowseItem(context, browser) }
+            parentId == RECENT_ID -> dao.recentlyPlayedOnce(CAR_RECENT_LIMIT)
+                .map { it.toBrowseItem(context, browser) }
+            parentId == PLAYLISTS_ID -> dao.playlistsOnce().map {
+                folder("$PLAYLIST_PREFIX${it.id}", it.name, MediaMetadata.MEDIA_TYPE_FOLDER_PLAYLISTS)
             }
-            parentId == ALL_ID -> dao.songsOnce().map { it.toBrowseItem() }
-            parentId == FAVS_ID -> dao.favoritesOnce().map { it.toBrowseItem() }
-            parentId == RECENT_ID -> dao.songsOnce().take(20).map { it.toBrowseItem() }
             parentId.startsWith(PLAYLIST_PREFIX) -> {
                 val playlistId = parentId.removePrefix(PLAYLIST_PREFIX).toLongOrNull()
-                if (playlistId != null) dao.playlistSongsOnce(playlistId).map { it.toBrowseItem() }
+                if (playlistId != null) dao.playlistSongsOnce(playlistId)
+                    .map { it.toBrowseItem(context, browser) }
                 else emptyList()
             }
             else -> emptyList()
         }
-        LibraryResult.ofItemList(ImmutableList.copyOf(children), params)
+        // Android Auto y AAOS no implementan paginación del árbol: devolverlo
+        // completo evita que un pageSize pequeño o ignorado oculte canciones.
+        LibraryResult.ofItemList(ImmutableList.copyOf(allChildren), params)
+    }
+
+    override fun onSearch(
+        session: MediaLibraryService.MediaLibrarySession,
+        browser: MediaSession.ControllerInfo,
+        query: String,
+        params: MediaLibraryService.LibraryParams?,
+    ): ListenableFuture<LibraryResult<Void>> = scope.future {
+        val resultCount = searchSongs(query, CarMediaSearch.DEFAULT_LIMIT).size
+        session.notifySearchResultChanged(browser, query, resultCount, params)
+        LibraryResult.ofVoid(params)
+    }
+
+    override fun onGetSearchResult(
+        session: MediaLibraryService.MediaLibrarySession,
+        browser: MediaSession.ControllerInfo,
+        query: String,
+        page: Int,
+        pageSize: Int,
+        params: MediaLibraryService.LibraryParams?,
+    ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> = scope.future {
+        val results = searchSongs(query, CarMediaSearch.DEFAULT_LIMIT)
+            .map { it.toBrowseItem(context, browser) }
+            .page(page, pageSize)
+        LibraryResult.ofItemList(ImmutableList.copyOf(results), params)
     }
 
     override fun onGetItem(
@@ -2509,6 +2551,12 @@ private class LibraryCallback(
         mediaItems: MutableList<MediaItem>,
     ): ListenableFuture<MutableList<MediaItem>> = scope.future {
         val base = com.aar.privatemusic.cast.CastState.baseUrl
+        val searchQuery = mediaItems.firstNotNullOfOrNull { it.requestMetadata.searchQuery }
+        if (searchQuery != null) {
+            return@future voiceQueue(searchQuery).map { song ->
+                if (base != null) song.toCastItem(base) else song.toPlayableItem()
+            }.toMutableList()
+        }
         mediaItems.map { item ->
             val requestUri = item.requestMetadata.mediaUri
             when {
@@ -2532,9 +2580,29 @@ private class LibraryCallback(
             }
         }.toMutableList()
     }
+
+    private suspend fun searchSongs(query: String, limit: Int): List<Song> =
+        CarMediaSearch.rank(dao.songsOnce().toCarCandidates(), query, limit)
+
+    private suspend fun voiceQueue(query: String): List<Song> {
+        val normalizedQuery = CarMediaSearch.normalize(query)
+        if (normalizedQuery.isEmpty()) {
+            return dao.recentlyPlayedOnce(CAR_RECENT_LIMIT).ifEmpty {
+                dao.songsOnce().take(CAR_RECENT_LIMIT)
+            }
+        }
+        val playlist = dao.playlistsOnce().firstOrNull {
+            CarMediaSearch.normalize(it.name) == normalizedQuery
+        }
+        return if (playlist != null) {
+            dao.playlistSongsOnce(playlist.id)
+        } else {
+            searchSongs(query, CarMediaSearch.DEFAULT_LIMIT)
+        }
+    }
 }
 
-private fun folder(id: String, title: String): MediaItem =
+private fun folder(id: String, title: String, mediaType: Int): MediaItem =
     MediaItem.Builder()
         .setMediaId(id)
         .setMediaMetadata(
@@ -2542,16 +2610,93 @@ private fun folder(id: String, title: String): MediaItem =
                 .setTitle(title)
                 .setIsBrowsable(true)
                 .setIsPlayable(false)
-                .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
+                .setMediaType(mediaType)
+                .setExtras(categoryExtras())
                 .build()
         )
         .build()
 
-private fun Song.toBrowseItem(): MediaItem =
+private fun Song.toBrowseItem(context: Context, browser: MediaSession.ControllerInfo): MediaItem =
     MediaItem.Builder()
         .setMediaId(id)
-        .setMediaMetadata(baseMetadata(this).setIsBrowsable(false).setIsPlayable(true).build())
+        .setMediaMetadata(
+            baseMetadata(this)
+                .setArtworkUri(context.browseArtworkUri(this, browser))
+                .setExtras(songExtras(File(filePath).canRead()))
+                .setIsBrowsable(false)
+                .setIsPlayable(true)
+                .build()
+        )
         .build()
+
+private fun List<Song>.toCarCandidates(): List<CarMediaSearch.Candidate<Song>> = map { song ->
+    CarMediaSearch.Candidate(song, song.title, song.artist, song.album)
+}
+
+private fun <T> List<T>.page(page: Int, pageSize: Int): List<T> {
+    if (page < 0 || pageSize <= 0) return emptyList()
+    val start = page.toLong() * pageSize.toLong()
+    if (start >= size) return emptyList()
+    val from = start.toInt()
+    val to = (start + pageSize.toLong()).coerceAtMost(size.toLong()).toInt()
+    return subList(from, to)
+}
+
+private fun categoryExtras() = Bundle().apply {
+    putInt(
+        MediaConstants.EXTRAS_KEY_CONTENT_STYLE_BROWSABLE,
+        MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_CATEGORY_LIST_ITEM,
+    )
+    putInt(
+        MediaConstants.EXTRAS_KEY_CONTENT_STYLE_PLAYABLE,
+        MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_LIST_ITEM,
+    )
+}
+
+private fun songExtras(downloaded: Boolean) = Bundle().apply {
+    putInt(
+        MediaConstants.EXTRAS_KEY_CONTENT_STYLE_SINGLE_ITEM,
+        MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_LIST_ITEM,
+    )
+    putLong(
+        MediaConstants.EXTRAS_KEY_DOWNLOAD_STATUS,
+        if (downloaded) MediaConstants.EXTRAS_VALUE_STATUS_DOWNLOADED
+        else MediaConstants.EXTRAS_VALUE_STATUS_NOT_DOWNLOADED,
+    )
+}
+
+/** Convierte sólo carátulas privadas dentro de music/ en URIs temporales para el coche. */
+private fun Context.browseArtworkUri(song: Song, browser: MediaSession.ControllerInfo): Uri? {
+    val art = song.artPath?.let(::File)?.takeIf { it.canRead() }
+    if (art != null) {
+        val canonicalArt = runCatching { art.canonicalFile }.getOrNull()
+        val roots = listOfNotNull(filesDir, getExternalFilesDir(null)).mapNotNull { base ->
+            runCatching { File(base, "music").canonicalFile }.getOrNull()
+        }
+        val isExposable = canonicalArt != null && roots.any { root ->
+            canonicalArt == root || canonicalArt.path.startsWith(root.path + File.separator)
+        }
+        if (isExposable) {
+            val contentUri = runCatching {
+                FileProvider.getUriForFile(this, "$packageName.fileprovider", canonicalArt!!)
+            }.getOrNull()
+            if (contentUri != null && browser.packageName.isNotBlank()) {
+                runCatching {
+                    grantUriPermission(
+                        browser.packageName,
+                        contentUri,
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION,
+                    )
+                }.onFailure {
+                    android.util.Log.w("AndroidAuto", "No se pudo compartir la carátula", it)
+                }
+                return contentUri
+            }
+        }
+    }
+    // Los clientes de coche sólo aceptan carátulas content:// o android.resource://.
+    return null
+}
 
 /**
  * La misma canción, pero como la tiene que ver la tele: servida por HTTP.

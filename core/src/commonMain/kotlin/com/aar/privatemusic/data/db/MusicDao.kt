@@ -122,6 +122,17 @@ interface MusicDao {
     @Query("SELECT * FROM songs WHERE isFavorite = 1 ORDER BY addedAt DESC")
     suspend fun favoritesOnce(): List<Song>
 
+    @Query(
+        """
+        SELECT s.* FROM songs s
+        INNER JOIN (SELECT songId, MAX(playedAt) AS lastPlayed FROM play_history GROUP BY songId) h
+            ON h.songId = s.id
+        ORDER BY h.lastPlayed DESC
+        LIMIT :limit
+        """
+    )
+    suspend fun recentlyPlayedOnce(limit: Int): List<Song>
+
     @Query("SELECT * FROM playlists WHERE deletedAt IS NULL ORDER BY createdAt DESC")
     suspend fun playlistsOnce(): List<Playlist>
 
