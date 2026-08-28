@@ -12,6 +12,7 @@ import com.aar.privatemusic.dsp.Crossfeed
 import com.aar.privatemusic.dsp.EqFilter
 import com.aar.privatemusic.dsp.EqFilterType
 import com.aar.privatemusic.dsp.ParametricEq
+import com.aar.privatemusic.dsp.StereoWidener
 import org.json.JSONArray
 import org.json.JSONObject
 import java.nio.ByteBuffer
@@ -34,17 +35,21 @@ object AudioDsp {
         val preampDb: Double,
         val filters: List<EqFilter>,
         val crossfeedLevel: Int,
+        val stereoSurroundLevel: Int,
+        val systemSpatialAudioActive: Boolean,
     )
 
     @Volatile
-    var snapshot: Snapshot = Snapshot(false, 0.0, emptyList(), 0)
+    var snapshot: Snapshot = Snapshot(false, 0.0, emptyList(), 0, 0, false)
         private set
 
     val version = AtomicInteger(0)
 
+    @Synchronized
     fun reload(context: Context) {
         val parametric = AppSettings.readEqMode(context) == "parametric"
         val eqEnabled = parametric || AppSettings.readEqEnabled(context)
+        val spatialAudioActive = snapshot.systemSpatialAudioActive
         snapshot = Snapshot(
             eqEnabled = eqEnabled,
             preampDb = if (parametric) AppSettings.readEqPreamp(context).toDouble() else 0.0,
@@ -54,7 +59,16 @@ object AudioDsp {
                 else -> EqHolder.filters()
             },
             crossfeedLevel = AppSettings.readCrossfeedLevel(context),
+            stereoSurroundLevel = AppSettings.readStereoSurroundLevel(context),
+            systemSpatialAudioActive = spatialAudioActive,
         )
+        version.incrementAndGet()
+    }
+
+    @Synchronized
+    fun setSystemSpatialAudioActive(active: Boolean) {
+        if (snapshot.systemSpatialAudioActive == active) return
+        snapshot = snapshot.copy(systemSpatialAudioActive = active)
         version.incrementAndGet()
     }
 
@@ -68,7 +82,13 @@ object AudioDsp {
                 DefaultAudioSink.Builder(context)
                     .setEnableFloatOutput(enableFloatOutput)
                     .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
-                    .setAudioProcessors(arrayOf(EqAudioProcessor(), CrossfeedAudioProcessor()))
+                    .setAudioProcessors(
+                        arrayOf(
+                            EqAudioProcessor(),
+                            StereoWidenerAudioProcessor(),
+                            CrossfeedAudioProcessor(),
+                        )
+                    )
                     .build()
         }
 
@@ -138,8 +158,8 @@ private class EqAudioProcessor : BaseAudioProcessor() {
         inputBuffer.order(ByteOrder.LITTLE_ENDIAN).asShortBuffer().get(scratch, 0, shortCount)
         inputBuffer.position(inputBuffer.limit())
 
-        val snap = AudioDsp.snapshot
         val v = AudioDsp.version.get()
+        val snap = AudioDsp.snapshot
         if (v != appliedVersion) {
             if (snap.eqEnabled) {
                 eq.configure(sampleRate, channels, snap.preampDb, snap.filters)
@@ -149,6 +169,53 @@ private class EqAudioProcessor : BaseAudioProcessor() {
             appliedVersion = v
         }
         if (eq.isActive()) eq.process(scratch, shortCount)
+
+        val out = replaceOutputBuffer(remaining)
+        out.order(ByteOrder.LITTLE_ENDIAN).asShortBuffer().put(scratch, 0, shortCount)
+        out.position(remaining)
+        out.flip()
+    }
+}
+
+/** Envolvente estéreo como AudioProcessor de Media3 (PCM 16-bit). */
+private class StereoWidenerAudioProcessor : BaseAudioProcessor() {
+    private val widener = StereoWidener()
+    private var appliedVersion = -1
+    private var sampleRate = 0
+    private var channels = 0
+    private var scratch = ShortArray(0)
+
+    override fun onConfigure(inputAudioFormat: AudioProcessor.AudioFormat): AudioProcessor.AudioFormat {
+        return if (inputAudioFormat.encoding == androidx.media3.common.C.ENCODING_PCM_16BIT) {
+            sampleRate = inputAudioFormat.sampleRate
+            channels = inputAudioFormat.channelCount
+            appliedVersion = -1
+            inputAudioFormat
+        } else {
+            AudioProcessor.AudioFormat.NOT_SET
+        }
+    }
+
+    override fun onFlush() {
+        widener.reset()
+    }
+
+    override fun queueInput(inputBuffer: ByteBuffer) {
+        val remaining = inputBuffer.remaining()
+        if (remaining == 0) return
+        val shortCount = remaining / 2
+        if (scratch.size < shortCount) scratch = ShortArray(shortCount)
+        inputBuffer.order(ByteOrder.LITTLE_ENDIAN).asShortBuffer().get(scratch, 0, shortCount)
+        inputBuffer.position(inputBuffer.limit())
+
+        val v = AudioDsp.version.get()
+        val snap = AudioDsp.snapshot
+        if (v != appliedVersion) {
+            val effectiveLevel = if (snap.systemSpatialAudioActive) 0 else snap.stereoSurroundLevel
+            widener.configure(sampleRate, channels, effectiveLevel)
+            appliedVersion = v
+        }
+        if (widener.isActive()) widener.process(scratch, shortCount)
 
         val out = replaceOutputBuffer(remaining)
         out.order(ByteOrder.LITTLE_ENDIAN).asShortBuffer().put(scratch, 0, shortCount)

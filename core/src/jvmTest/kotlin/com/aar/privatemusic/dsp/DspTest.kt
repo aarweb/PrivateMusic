@@ -1,6 +1,7 @@
 package com.aar.privatemusic.dsp
 
 import kotlin.math.PI
+import kotlin.math.abs
 import kotlin.math.sin
 import kotlin.math.sqrt
 import kotlin.test.Test
@@ -134,6 +135,122 @@ class DspTest {
         val copy = buf.copyOf()
         cf.process(buf, buf.size)
         assertTrue(buf.contentEquals(copy))
+    }
+
+    @Test
+    fun stereoWidenerOffIsBitExactPassthrough() {
+        val widener = StereoWidener().apply { configure(fs, 2, 0) }
+        val buf = shortArrayOf(32767, -32768, 1234, -5678, 0, 1)
+        val copy = buf.copyOf()
+
+        widener.process(buf, buf.size)
+
+        assertTrue(!widener.isActive())
+        assertTrue(buf.contentEquals(copy))
+    }
+
+    @Test
+    fun stereoWidenerMonoIsBitExactPassthrough() {
+        val widener = StereoWidener().apply { configure(fs, 1, 3) }
+        val buf = shortArrayOf(32767, -32768, 1234, -5678, 0)
+        val copy = buf.copyOf()
+
+        widener.process(buf, buf.size)
+
+        assertTrue(!widener.isActive())
+        assertTrue(buf.contentEquals(copy))
+    }
+
+    @Test
+    fun stereoWidenerSideEnergyGrowsWithLevel() {
+        fun sideEnergy(level: Int): Double {
+            val frames = fs / 2
+            val buf = ShortArray(frames * 2)
+            for (frame in 0 until frames) {
+                val side = (sin(2 * PI * 2000.0 * frame / fs) * 8000).toInt().toShort()
+                buf[frame * 2] = side
+                buf[frame * 2 + 1] = (-side.toInt()).toShort()
+            }
+            StereoWidener().apply { configure(fs, 2, level) }.process(buf, buf.size)
+            var energy = 0.0
+            for (frame in 2000 until frames) {
+                val difference = buf[frame * 2].toDouble() - buf[frame * 2 + 1]
+                energy += difference * difference
+            }
+            return energy
+        }
+
+        val soft = sideEnergy(1)
+        val medium = sideEnergy(2)
+        val strong = sideEnergy(3)
+        assertTrue(soft < medium, "nivel suave=$soft debe quedar por debajo de medio=$medium")
+        assertTrue(medium < strong, "nivel medio=$medium debe quedar por debajo de fuerte=$strong")
+    }
+
+    @Test
+    fun stereoWidenerPreservesMonoSumWithoutLimiting() {
+        val frames = fs / 4
+        val buf = ShortArray(frames * 2)
+        for (frame in 0 until frames) {
+            val mid = sin(2 * PI * 440.0 * frame / fs) * 5000
+            val side = sin(2 * PI * 3000.0 * frame / fs) * 4000
+            buf[frame * 2] = (mid + side).toInt().toShort()
+            buf[frame * 2 + 1] = (mid - side).toInt().toShort()
+        }
+        val original = buf.copyOf()
+
+        StereoWidener().apply { configure(fs, 2, 3) }.process(buf, buf.size)
+
+        for (frame in 0 until frames) {
+            val before = original[frame * 2].toInt() + original[frame * 2 + 1].toInt()
+            val after = buf[frame * 2].toInt() + buf[frame * 2 + 1].toInt()
+            assertTrue(abs(after - before) <= 1, "la suma mono cambia en el frame $frame: $before -> $after")
+        }
+    }
+
+    @Test
+    fun stereoWidenerFullScaleUsesCommonPeakProtectionWithoutWrap() {
+        val buf = ShortArray(256 * 2) { index ->
+            if (index % 2 == 0) Short.MAX_VALUE else Short.MIN_VALUE
+        }
+
+        StereoWidener().apply { configure(fs, 2, 3) }.process(buf, buf.size)
+
+        for (frame in 0 until 256) {
+            val left = buf[frame * 2].toInt()
+            val right = buf[frame * 2 + 1].toInt()
+            assertTrue(left > 0 && right < 0, "no debe haber wrap: L=$left R=$right")
+            assertTrue(abs(abs(left) - abs(right)) <= 1, "el escalado común conserva la simetría: L=$left R=$right")
+        }
+    }
+
+    @Test
+    fun stereoWidenerExpandsLowSideFrequenciesLessThanHighOnes() {
+        fun sideGain(freq: Double): Double {
+            val frames = fs
+            val buf = ShortArray(frames * 2)
+            var inputEnergy = 0.0
+            for (frame in 0 until frames) {
+                val side = (sin(2 * PI * freq * frame / fs) * 6000).toInt()
+                buf[frame * 2] = side.toShort()
+                buf[frame * 2 + 1] = (-side).toShort()
+                if (frame >= 4000) inputEnergy += (side * 2.0) * (side * 2.0)
+            }
+            StereoWidener().apply { configure(fs, 2, 3) }.process(buf, buf.size)
+            var outputEnergy = 0.0
+            for (frame in 4000 until frames) {
+                val difference = buf[frame * 2].toDouble() - buf[frame * 2 + 1]
+                outputEnergy += difference * difference
+            }
+            return sqrt(outputEnergy / inputEnergy)
+        }
+
+        val bassGain = sideGain(50.0)
+        val trebleGain = sideGain(4000.0)
+        assertTrue(
+            trebleGain > bassGain + 0.15,
+            "los graves laterales deben ensancharse menos: graves=$bassGain agudos=$trebleGain",
+        )
     }
 
     @Test

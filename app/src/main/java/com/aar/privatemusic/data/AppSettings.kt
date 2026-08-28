@@ -85,6 +85,11 @@ class AppSettings(context: Context) {
     )
     val spatialAudioAuto: StateFlow<Boolean> = _spatialAudioAuto
 
+    private val _stereoSurroundLevel = MutableStateFlow(
+        prefs.getInt(KEY_STEREO_SURROUND_LEVEL, 0).coerceIn(0, 3)
+    )
+    val stereoSurroundLevel: StateFlow<Int> = _stereoSurroundLevel
+
     /** Ajuste máximo de tempo del AutoMix, en porcentaje (10, 15 o 20). */
     private val _autoMixMaxPct = MutableStateFlow(prefs.getInt(KEY_AUTOMIX_MAX, 20))
     val autoMixMaxPct: StateFlow<Int> = _autoMixMaxPct
@@ -251,6 +256,22 @@ class AppSettings(context: Context) {
         _spatialAudioAuto.value = value
     }
 
+    fun setStereoSurroundLevel(value: Int) {
+        val safe = value.coerceIn(0, 3)
+        val edit = prefs.edit().putInt(KEY_STEREO_SURROUND_LEVEL, safe)
+        if (safe > 0) edit.putInt(KEY_CROSSFEED_LEVEL, 0)
+        edit.apply()
+        _stereoSurroundLevel.value = safe
+    }
+
+    fun setCrossfeedLevel(value: Int) {
+        val safe = value.coerceIn(0, 3)
+        val edit = prefs.edit().putInt(KEY_CROSSFEED_LEVEL, safe)
+        if (safe > 0) edit.putInt(KEY_STEREO_SURROUND_LEVEL, 0)
+        edit.apply()
+        if (safe > 0) _stereoSurroundLevel.value = 0
+    }
+
     fun setAutoMixMaxPct(value: Int) {
         prefs.edit().putInt(KEY_AUTOMIX_MAX, value).apply()
         _autoMixMaxPct.value = value
@@ -313,6 +334,8 @@ class AppSettings(context: Context) {
         private const val KEY_LISTENBRAINZ = "listenbrainz_token"
         private const val KEY_AUTOMIX = "automix"
         internal const val KEY_SPATIAL_AUDIO_AUTO = "spatial_audio_auto"
+        private const val KEY_STEREO_SURROUND_LEVEL = "stereo_surround_level"
+        private const val KEY_CROSSFEED_LEVEL = "crossfeed_level"
         private const val KEY_AUTOMIX_MAX = "automix_max_pct"
         private const val KEY_SHARE_PC = "share_with_pc"
         private const val KEY_SYNC_TOKEN = "sync_token"
@@ -436,11 +459,21 @@ class AppSettings(context: Context) {
 
         fun readCrossfeedLevel(context: Context): Int =
             context.getSharedPreferences("settings", Context.MODE_PRIVATE)
-                .getInt("crossfeed_level", 0)
+                .getInt(KEY_CROSSFEED_LEVEL, 0)
+                .coerceIn(0, 3)
 
         fun writeCrossfeedLevel(context: Context, level: Int) =
             context.getSharedPreferences("settings", Context.MODE_PRIVATE)
-                .edit().putInt("crossfeed_level", level).apply()
+                .edit().putInt(KEY_CROSSFEED_LEVEL, level.coerceIn(0, 3)).apply()
+
+        fun readStereoSurroundLevel(context: Context): Int =
+            context.getSharedPreferences("settings", Context.MODE_PRIVATE)
+                .getInt(KEY_STEREO_SURROUND_LEVEL, 0)
+                .coerceIn(0, 3)
+
+        fun writeStereoSurroundLevel(context: Context, level: Int) =
+            context.getSharedPreferences("settings", Context.MODE_PRIVATE)
+                .edit().putInt(KEY_STEREO_SURROUND_LEVEL, level.coerceIn(0, 3)).apply()
 
         /** Modo de normalización: "rms" (medida propia) o "replaygain" (tag). */
         fun readNormalizeMode(context: Context): String =

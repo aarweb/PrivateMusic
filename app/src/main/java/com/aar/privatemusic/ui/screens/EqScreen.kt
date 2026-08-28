@@ -28,6 +28,8 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
@@ -236,14 +238,18 @@ private fun ParametricEqSection(app: PrivateMusicApp) {
 @Composable
 private fun CrossfeedSection(app: PrivateMusicApp) {
     val context = LocalContext.current
+    val stereoSurroundLevel by app.settings.stereoSurroundLevel.collectAsState()
     var level by remember { mutableIntStateOf(AppSettings.readCrossfeedLevel(context)) }
+    LaunchedEffect(stereoSurroundLevel) {
+        if (stereoSurroundLevel > 0) level = 0
+    }
     Text("Crossfeed (auriculares)", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(top = 20.dp, bottom = 8.dp))
-    Text("Suaviza el estéreo para que no suene metido en la cabeza.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(bottom = 8.dp))
+    Text("Suaviza el estéreo para que no suene metido en la cabeza. Al activarlo, se desactiva Envolvente estéreo.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(bottom = 8.dp))
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         listOf(0 to "Off", 1 to "Suave", 2 to "Medio", 3 to "Fuerte").forEach { (lvl, label) ->
             FilterChip(
                 selected = level == lvl,
-                onClick = { level = lvl; AppSettings.writeCrossfeedLevel(context, lvl); AudioDsp.reload(context) },
+                onClick = { level = lvl; app.settings.setCrossfeedLevel(lvl); AudioDsp.reload(context) },
                 label = { Text(label) },
             )
         }

@@ -144,7 +144,9 @@ class SpatialAudioController(
             canBeSpatialized = false,
             headTrackerAvailable = false,
         )
-        SpatialAudio.publish(resolveSpatialAudioState(inputs))
+        val state = resolveSpatialAudioState(inputs)
+        AudioDsp.setSystemSpatialAudioActive(state.status == SpatialAudioStatus.ACTIVE)
+        SpatialAudio.publish(state)
     }
 
     private fun runOnMain(block: () -> Unit) {
@@ -159,6 +161,7 @@ class SpatialAudioController(
             closed = true
             prefs.unregisterOnSharedPreferenceChangeListener(this)
             platform?.close()
+            AudioDsp.setSystemSpatialAudioActive(false)
         }
     }
 }

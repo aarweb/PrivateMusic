@@ -43,6 +43,7 @@ import com.aar.privatemusic.data.FullBackup
 import com.aar.privatemusic.data.HistoryImport
 import com.aar.privatemusic.data.MusicRepository
 import com.aar.privatemusic.downloader.SpotifySync
+import com.aar.privatemusic.player.AudioDsp
 import com.aar.privatemusic.player.SpatialAudio
 import com.aar.privatemusic.player.SpatialAudioStatus
 import com.aar.privatemusic.util.AppUpdater
@@ -68,6 +69,7 @@ fun SettingsScreen(app: PrivateMusicApp, onOpenStats: () -> Unit, onOpenEq: () -
     val autoMix by app.settings.autoMix.collectAsState()
     val spatialAudioAuto by app.settings.spatialAudioAuto.collectAsState()
     val spatialAudioState by SpatialAudio.state.collectAsState()
+    val stereoSurroundLevel by app.settings.stereoSurroundLevel.collectAsState()
     val shareWithPc by app.settings.shareWithPc.collectAsState()
     val shareAddress by app.libraryShare.address.collectAsState()
     var syncToken by remember { mutableStateOf(app.settings.syncToken) }
@@ -308,6 +310,33 @@ fun SettingsScreen(app: PrivateMusicApp, onOpenStats: () -> Unit, onOpenEq: () -
                 enabled = android.os.Build.VERSION.SDK_INT >= 32,
                 onCheckedChange = { app.settings.setSpatialAudioAuto(it) },
             )
+        }
+
+        Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+            Text("Envolvente estéreo", style = MaterialTheme.typography.bodyLarge)
+            Text(
+                when {
+                    stereoSurroundLevel == 0 -> "Desactivado"
+                    spatialAudioState.status == SpatialAudioStatus.ACTIVE ->
+                        "En pausa temporal porque Android ya espacializa el audio"
+                    else -> "Amplía el escenario de las canciones estéreo"
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Row(Modifier.padding(top = 4.dp)) {
+                listOf(0 to "Off", 1 to "Suave", 2 to "Medio", 3 to "Fuerte").forEach { (level, label) ->
+                    FilterChip(
+                        selected = stereoSurroundLevel == level,
+                        onClick = {
+                            app.settings.setStereoSurroundLevel(level)
+                            AudioDsp.reload(context)
+                        },
+                        label = { Text(label) },
+                        modifier = Modifier.padding(end = 8.dp),
+                    )
+                }
+            }
         }
 
         Row(
