@@ -943,7 +943,10 @@ class MusicRepository(
     }
 
     companion object {
-        private val ARTWORK_LYRICS_EXTENSIONS = setOf("jpg", "jpeg", "png", "webp", "lrc", "txt")
+        private val ARTWORK_LYRICS_EXTENSIONS = setOf(
+            "jpg", "jpeg", "png", "webp", "lrc", "txt",
+            com.aar.privatemusic.lyrics.LyricsTranslationCache.EXTENSION,
+        )
 
         /**
          * Canciones por transacción al rellenar. Ni una (una invalidación por

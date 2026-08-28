@@ -12,8 +12,8 @@ android {
         applicationId = "com.aar.privatemusic"
         minSdk = 26
         targetSdk = 35
-        versionCode = 123
-        versionName = "2.22"
+        versionCode = 124
+        versionName = "2.23"
 
         ndk {
             // arm64 only: every phone since ~2016. Halves the APK (yt-dlp/ffmpeg per ABI).
@@ -103,6 +103,8 @@ dependencies {
     implementation(libs.youtubedl.library)
     implementation(libs.youtubedl.ffmpeg)
     implementation(libs.kotlinx.coroutines)
+    implementation(libs.mlkit.language.id)
+    implementation(libs.mlkit.translate)
     implementation(libs.onnxruntime)
     implementation(libs.media3.cast)
     implementation(libs.nanohttpd)

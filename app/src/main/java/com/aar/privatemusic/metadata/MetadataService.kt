@@ -73,6 +73,7 @@ class MetadataService(
         runCatching {
             File(musicDir, "${song.id}.lrc").delete()
             File(musicDir, "${song.id}.txt").delete()
+            com.aar.privatemusic.lyrics.LyricsTranslationCache(musicDir).invalidate(song.id)
             com.aar.privatemusic.lyrics.LyricsFetcher.getOrFetch(
                 song.copy(title = newTitle, artist = newArtist), musicDir,
             )

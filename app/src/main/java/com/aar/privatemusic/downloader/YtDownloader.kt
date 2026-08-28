@@ -904,6 +904,7 @@ class YtDownloader(
         song.artPath?.let { File(it).delete() }
         // Companion files: cached lyrics and karaoke instrumental (~40 MB).
         File(musicDir, "${song.id}.lrc").delete()
+        com.aar.privatemusic.lyrics.LyricsTranslationCache(musicDir).invalidate(song.id)
         File(musicDir, "${song.id}.karaoke.wav").delete()
         File(musicDir, "${song.id}.karaoke.part").delete()
         File(musicDir, "${song.id}.karaoke_hq.wav").delete()

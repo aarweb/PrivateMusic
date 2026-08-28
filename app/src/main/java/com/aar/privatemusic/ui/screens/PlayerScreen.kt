@@ -225,6 +225,26 @@ fun PlayerScreen(
             withContext(Dispatchers.IO) { runCatching { app.repository.getLyrics(s) }.getOrNull() }
         }
     }
+    val lyricsTranslator = remember(app.repository.musicDir) {
+        com.aar.privatemusic.lyrics.LyricsTranslator(
+            com.aar.privatemusic.lyrics.LyricsTranslationCache(app.repository.musicDir),
+        )
+    }
+    var translatedLyrics by remember(np.songId) {
+        mutableStateOf<com.aar.privatemusic.lyrics.Lyrics?>(null)
+    }
+    var showTranslatedLyrics by remember(np.songId) { mutableStateOf(false) }
+    var translationState by remember(np.songId) {
+        mutableStateOf<com.aar.privatemusic.lyrics.LyricsTranslationState?>(null)
+    }
+    var translationMessage by remember(np.songId) { mutableStateOf<String?>(null) }
+    var translationFailed by remember(np.songId) { mutableStateOf(false) }
+    var translationJob by remember(np.songId) { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    var translationRequestId by remember(np.songId) { androidx.compose.runtime.mutableLongStateOf(0L) }
+    val currentSongId = androidx.compose.runtime.rememberUpdatedState(np.songId)
+    DisposableEffect(np.songId) {
+        onDispose { translationJob?.cancel() }
+    }
 
     LaunchedEffect(isPlaying, np.songId) {
         while (true) {
@@ -591,14 +611,37 @@ fun PlayerScreen(
         val effectiveLyrics = syncedOverride ?: lyrics
         if (showLyrics && effectiveLyrics != null) {
             val base = effectiveLyrics
+            LaunchedEffect(base) {
+                // Una letra recién sincronizada es otra fuente: su hash y su
+                // traducción deben comprobarse de nuevo.
+                translationRequestId++
+                translationJob?.cancel()
+                translatedLyrics = null
+                showTranslatedLyrics = false
+                translationState = null
+                translationMessage = null
+                translationFailed = false
+                translationJob = null
+            }
+            val translated = translatedLyrics
+            val usingTranslation = showTranslatedLyrics && translated != null
+            val displayBase = if (usingTranslation) translated else base
             // Letras en hangul, kana, cirílico…: un toggle para leerlas en latino.
             val romanize by app.settings.romanizeLyrics.collectAsState()
             val lyricStyle by app.settings.lyricStyle.collectAsState()
             val foreign = remember(base) { com.aar.privatemusic.lyrics.Romanizer.needsRomanization(base) }
-            val shown by produceState(initialValue = base, base, romanize, foreign) {
-                value = if (foreign && romanize) {
-                    withContext(Dispatchers.Default) { com.aar.privatemusic.lyrics.Romanizer.romanize(base) }
-                } else base
+            val shown by produceState(
+                initialValue = displayBase,
+                displayBase,
+                romanize,
+                foreign,
+                usingTranslation,
+            ) {
+                value = if (!usingTranslation && foreign && romanize) {
+                    withContext(Dispatchers.Default) {
+                        com.aar.privatemusic.lyrics.Romanizer.romanize(displayBase)
+                    }
+                } else displayBase
             }
             // Letra sin tiempos: se puede cuadrar con la voz de la canción.
             val syncState by com.aar.privatemusic.util.LyricsSyncManager
@@ -606,17 +649,22 @@ fun PlayerScreen(
             LaunchedEffect(syncState.lyrics, song?.id) {
                 // Al terminar, la letra recién sincronizada sustituye a la plana.
                 val generated = syncState.lyrics ?: return@LaunchedEffect
+                song?.id?.let {
+                    com.aar.privatemusic.lyrics.LyricsTranslationCache(app.repository.musicDir)
+                        .invalidate(it)
+                }
                 syncedOverride = generated
                 song?.id?.let { com.aar.privatemusic.util.LyricsSyncManager.clear(it) }
             }
-            Row(
+            androidx.compose.foundation.layout.FlowRow(
                 Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.Center,
-                verticalAlignment = Alignment.CenterVertically,
+                verticalArrangement = Arrangement.Center,
             ) {
                 Box {
                     androidx.compose.material3.AssistChip(
                         onClick = { styleMenuOpen = true },
+                        modifier = Modifier.padding(horizontal = 4.dp),
                         leadingIcon = {
                             Icon(Icons.Filled.Style, contentDescription = null, tint = accent)
                         },
@@ -640,29 +688,129 @@ fun PlayerScreen(
                         }
                     }
                 }
-                Spacer(Modifier.width(8.dp))
+                // Un Job no notifica a Compose cuando cambia isActive. El
+                // estado de traducción sí es observable y se limpia siempre.
+                val busy = translationState != null
+                androidx.compose.material3.FilterChip(
+                    selected = usingTranslation,
+                    enabled = !busy,
+                    modifier = Modifier.padding(horizontal = 4.dp),
+                    onClick = {
+                        if (translatedLyrics != null) {
+                            showTranslatedLyrics = !showTranslatedLyrics
+                        } else {
+                            translationMessage = null
+                            translationFailed = false
+                            translationState =
+                                com.aar.privatemusic.lyrics.LyricsTranslationState.DetectingLanguage
+                            val requestedSongId = np.songId
+                            val requestId = translationRequestId + 1L
+                            translationRequestId = requestId
+                            translationJob = scope.launch {
+                                try {
+                                    val result = lyricsTranslator.translateToSpanish(
+                                        songId = requestedSongId,
+                                        source = base,
+                                        onState = {
+                                            if (currentSongId.value == requestedSongId &&
+                                                translationRequestId == requestId
+                                            ) {
+                                                translationState = it
+                                            }
+                                        },
+                                    )
+                                    // La cancelación suele ganar la carrera, pero
+                                    // esta guarda impide publicar una pista vieja
+                                    // incluso si ML Kit completa al mismo tiempo.
+                                    if (currentSongId.value != requestedSongId ||
+                                        translationRequestId != requestId
+                                    ) return@launch
+                                    when (result) {
+                                        is com.aar.privatemusic.lyrics.LyricsTranslationResult.Translated -> {
+                                            translatedLyrics = result.lyrics
+                                            showTranslatedLyrics = true
+                                        }
+                                        com.aar.privatemusic.lyrics.LyricsTranslationResult.AlreadySpanish -> {
+                                            translationMessage = "La letra ya está en español"
+                                            com.aar.privatemusic.util.Feedback.show("La letra ya está en español")
+                                        }
+                                        is com.aar.privatemusic.lyrics.LyricsTranslationResult.UnsupportedLanguage -> {
+                                            translationFailed = true
+                                            translationMessage =
+                                                "No se admite el idioma detectado (${result.languageTag})"
+                                        }
+                                        com.aar.privatemusic.lyrics.LyricsTranslationResult.EmptyLyrics -> {
+                                            translationFailed = true
+                                            translationMessage = "No hay líneas que se puedan traducir"
+                                        }
+                                        is com.aar.privatemusic.lyrics.LyricsTranslationResult.Failed -> {
+                                            translationFailed = true
+                                            translationMessage =
+                                                "No se pudo traducir. Comprueba la conexión y vuelve a intentarlo"
+                                        }
+                                    }
+                                } finally {
+                                    if (currentSongId.value == requestedSongId &&
+                                        translationRequestId == requestId
+                                    ) {
+                                        translationState = null
+                                        translationJob = null
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    label = {
+                        Text(
+                            when (val state = translationState) {
+                                com.aar.privatemusic.lyrics.LyricsTranslationState.DetectingLanguage ->
+                                    "Detectando idioma…"
+                                com.aar.privatemusic.lyrics.LyricsTranslationState.DownloadingModel ->
+                                    "Descargando modelo…"
+                                is com.aar.privatemusic.lyrics.LyricsTranslationState.Translating ->
+                                    "Traduciendo ${state.completed}/${state.total}…"
+                                null -> when {
+                                    translatedLyrics == null -> "Traducir"
+                                    usingTranslation -> "Original"
+                                    else -> "Traducida"
+                                }
+                            },
+                        )
+                    },
+                )
                 if (foreign) {
                     androidx.compose.material3.FilterChip(
                         selected = romanize,
                         onClick = { app.settings.setRomanizeLyrics(!romanize) },
+                        modifier = Modifier.padding(horizontal = 4.dp),
                         label = { Text(if (romanize) "Romanizado" else "Romanizar") },
                     )
                 }
                 val songNow = song
-                if (!shown.synced && songNow != null) {
-                    if (foreign) Spacer(Modifier.width(8.dp))
+                if (!base.synced && songNow != null) {
                     androidx.compose.material3.AssistChip(
                         onClick = {
                             if (!syncState.running) {
                                 com.aar.privatemusic.util.LyricsSyncManager.start(
-                                    context, songNow, app.repository.musicDir, shown.lines.map { it.text },
+                                    context, songNow, app.repository.musicDir, base.lines.map { it.text },
                                 )
                             }
                         },
                         enabled = !syncState.running,
+                        modifier = Modifier.padding(horizontal = 4.dp),
                         label = { Text(if (syncState.running) "Sincronizando…" else "Sincronizar letra") },
                     )
                 }
+            }
+            translationMessage?.let { message ->
+                Text(
+                    message,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (translationFailed) MaterialTheme.colorScheme.error
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp),
+                )
             }
             if (syncState.running || syncState.failed) {
                 Text(

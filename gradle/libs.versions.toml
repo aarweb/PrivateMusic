@@ -19,6 +19,8 @@ vlcj = "4.12.1"
 coil = "2.7.0"
 youtubedl = "0.18.1"
 coroutines = "1.9.0"
+mlkitLanguageId = "17.0.6"
+mlkitTranslate = "17.0.3"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -55,6 +57,8 @@ androidx-work = { group = "androidx.work", name = "work-runtime-ktx", version = 
 youtubedl-library = { group = "io.github.junkfood02.youtubedl-android", name = "library", version.ref = "youtubedl" }
 youtubedl-ffmpeg = { group = "io.github.junkfood02.youtubedl-android", name = "ffmpeg", version.ref = "youtubedl" }
 kotlinx-coroutines = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
+mlkit-language-id = { group = "com.google.mlkit", name = "language-id", version.ref = "mlkitLanguageId" }
+mlkit-translate = { group = "com.google.mlkit", name = "translate", version.ref = "mlkitTranslate" }
 # 1.22 es la primera que alinea libonnxruntime4j_jni.so a 16 KB (en 1.20 iba a
 # 4 KB y la app no arrancaba en móviles con páginas de 16 KB). No se sube más
 # arriba a propósito: desde 1.23 el AAR trae un TelemetryInitializer con
