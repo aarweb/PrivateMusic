@@ -20,8 +20,12 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.Album
+import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.MusicNote
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.QueueMusic
 import androidx.compose.material3.Card
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.Dp
@@ -42,6 +46,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -70,7 +75,12 @@ import kotlinx.coroutines.coroutineScope
 import com.aar.privatemusic.downloader.SpotifySync
 import com.aar.privatemusic.downloader.SpotifyTrack
 import com.aar.privatemusic.ui.components.ArtImage
+import com.aar.privatemusic.ui.components.SongOverflowMenu
+import com.aar.privatemusic.ui.components.SongRow
 import com.aar.privatemusic.ui.components.formatDuration
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /** Last search kept across navigation so switching tabs doesn't wipe results. */
@@ -82,6 +92,7 @@ private object SearchCache {
     var playlistUrl: String? = null
     var spotifyTracks: List<SpotifyTrack>? = null
     var deezerTracks: List<com.aar.privatemusic.downloader.DeezerTrack>? = null
+    var onlineQuery = ""
 
     /** Deezer track id -> matched YouTube id (so rows can show download state). */
     val deezerMatches = mutableMapOf<String, String>()
@@ -93,8 +104,15 @@ private object SearchCache {
         playlistUrl = null
         spotifyTracks = null
         deezerTracks = null
+        onlineQuery = ""
     }
 }
+
+private data class GlobalLyricsState(
+    val query: String = "",
+    val hits: List<com.aar.privatemusic.lyrics.LyricSearchHit> = emptyList(),
+    val searching: Boolean = false,
+)
 
 /** Calidad de audio de YouTube (yt-dlp bestaudio): Opus/AAC lossy, ~160 kbps máx. */
 private const val YT_QUALITY = "≤160k"
@@ -106,7 +124,12 @@ private fun deezerQualityLabel(quality: String): String = when (quality) {
 }
 
 @Composable
-fun SearchScreen(app: PrivateMusicApp) {
+fun SearchScreen(
+    app: PrivateMusicApp,
+    onOpenArtist: (String) -> Unit = {},
+    onOpenAlbum: (title: String, artist: String) -> Unit = { _, _ -> },
+    onOpenPlaylist: (Long) -> Unit = {},
+) {
     var query by remember { mutableStateOf(SearchCache.query) }
     var results by remember { mutableStateOf(SearchCache.results) }
     var searching by remember { mutableStateOf(false) }
@@ -119,8 +142,8 @@ fun SearchScreen(app: PrivateMusicApp) {
     var spotifyTracks by remember { mutableStateOf(SearchCache.spotifyTracks) }
     // Nombre del servicio de origen del enlace ("Spotify", "Deezer"…), para la cabecera.
     var linkServiceName by remember { mutableStateOf<String?>(null) }
-    // Selected source ("yt", "deezer"...); null shows the sources grid.
-    var source by remember { mutableStateOf(SearchCache.source) }
+    // Global is the normal entry point; null still opens the catalog of expert sources.
+    var source by remember { mutableStateOf<String?>(SearchCache.source ?: "global") }
     var deezerTracks by remember { mutableStateOf(SearchCache.deezerTracks) }
     // Deezer tracks currently being matched on YouTube before download.
     var deezerResolving by remember { mutableStateOf(setOf<String>()) }
@@ -132,6 +155,9 @@ fun SearchScreen(app: PrivateMusicApp) {
     var matching by remember { mutableStateOf<Pair<Int, Int>?>(null) }
     var review by remember { mutableStateOf<List<SpotifyReviewItem>>(emptyList()) }
     var reviewPlaylistId by remember { mutableStateOf<Long?>(null) }
+    var onlineQuery by remember { mutableStateOf(SearchCache.onlineQuery) }
+    var onlineSearchGeneration by remember { androidx.compose.runtime.mutableLongStateOf(0L) }
+    var onlineSearchJob by remember { mutableStateOf<Job?>(null) }
     androidx.compose.runtime.SideEffect {
         SearchCache.query = query
         SearchCache.source = source
@@ -140,10 +166,73 @@ fun SearchScreen(app: PrivateMusicApp) {
         SearchCache.playlistUrl = playlistUrl
         SearchCache.spotifyTracks = spotifyTracks
         SearchCache.deezerTracks = deezerTracks
+        SearchCache.onlineQuery = onlineQuery
     }
     val scope = rememberCoroutineScope()
     val keyboard = LocalSoftwareKeyboardController.current
     val context = LocalContext.current
+
+    val localSongs by app.repository.observeSongs().collectAsState(initial = emptyList())
+    val localPlaylists by app.repository.observePlaylists().collectAsState(initial = emptyList())
+    val localSongIds = remember(localSongs) { localSongs.map { it.id } }
+    val trimmedQuery = query.trim()
+    val normalizedGlobalQueryLength = remember(trimmedQuery) {
+        com.aar.privatemusic.lyrics.LyricSearch.normalize(trimmedQuery).length
+    }
+    var globalLyricsState by remember { mutableStateOf(GlobalLyricsState()) }
+
+    LaunchedEffect(source, trimmedQuery, localSongIds) {
+        globalLyricsState = GlobalLyricsState(query = trimmedQuery)
+        if (source != "global" || normalizedGlobalQueryLength < 3) return@LaunchedEffect
+        globalLyricsState = GlobalLyricsState(query = trimmedQuery, searching = true)
+        delay(250)
+        val hits = try {
+            app.lyricsSearchIndex.search(localSongs, trimmedQuery)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            emptyList()
+        }
+        globalLyricsState = GlobalLyricsState(query = trimmedQuery, hits = hits)
+    }
+
+    val validGlobalLyricHits = remember(globalLyricsState, trimmedQuery, source) {
+        if (source == "global" && globalLyricsState.query == trimmedQuery) {
+            globalLyricsState.hits.associateBy { it.songId }
+        } else emptyMap()
+    }
+    val globalLocalResults = remember(
+        source, localSongs, localPlaylists, trimmedQuery, validGlobalLyricHits,
+    ) {
+        if (source == "global" && trimmedQuery.isNotBlank()) {
+            com.aar.privatemusic.data.GlobalSearch.search(
+                songs = localSongs,
+                playlists = localPlaylists,
+                query = trimmedQuery,
+                lyricSongIds = validGlobalLyricHits.keys,
+            )
+        } else {
+            com.aar.privatemusic.data.GlobalSearchResults(
+                songs = emptyList(),
+                albums = emptyList(),
+                artists = emptyList(),
+                playlists = emptyList(),
+            )
+        }
+    }
+
+    LaunchedEffect(source, trimmedQuery) {
+        val staleGlobalRequest = source == "global" &&
+            onlineQuery.isNotBlank() && onlineQuery != trimmedQuery
+        if (source != "global" || staleGlobalRequest) {
+            onlineSearchGeneration++
+            onlineSearchJob?.cancel()
+            searching = false
+            error = null
+            results = emptyList()
+            if (source != "global") onlineSearchJob = null
+        }
+    }
 
     val downloads by app.downloader.downloads.collectAsState()
     val torrentDownloads by app.torrents.downloads.collectAsState()
@@ -210,6 +299,45 @@ fun SearchScreen(app: PrivateMusicApp) {
 
     fun runSearch() {
         if (query.isBlank() || searching) return
+        val requestedQuery = query.trim()
+        if (source == "global" && requestedQuery.startsWith("http", ignoreCase = true)) {
+            // La vista YouTube conserva el importador rico de enlaces y playlists.
+            source = "yt"
+        } else if (source == "global") {
+            keyboard?.hide()
+            val requestGeneration = ++onlineSearchGeneration
+            onlineSearchJob?.cancel()
+            onlineQuery = requestedQuery
+            searching = true
+            error = null
+            results = emptyList()
+            playlistTitle = null
+            playlistUrl = null
+            actionMessage = null
+            spotifyTracks = null
+            deezerTracks = null
+            subsonicTracks = null
+            onlineSearchJob = scope.launch {
+                runCatching { app.downloader.search(requestedQuery) }
+                    .onSuccess { found ->
+                        if (source == "global" && query.trim() == requestedQuery &&
+                            onlineSearchGeneration == requestGeneration
+                        ) {
+                            results = found
+                            searching = false
+                        }
+                    }
+                    .onFailure { failure ->
+                        if (source == "global" && query.trim() == requestedQuery &&
+                            onlineSearchGeneration == requestGeneration
+                        ) {
+                            error = "Error al buscar online: ${failure.message}"
+                            searching = false
+                        }
+                    }
+            }
+            return
+        }
         keyboard?.hide()
         searching = true
         error = null
@@ -409,6 +537,9 @@ fun SearchScreen(app: PrivateMusicApp) {
 
     // Sources catalog: adding one here adds its card to the grid.
     val sources = listOf(
+        SearchSource("global", "Búsqueda global · Biblioteca, letras y online", androidx.compose.ui.graphics.Color(0xFF6750A4)) {
+            Icon(Icons.Filled.Search, null, tint = androidx.compose.ui.graphics.Color.White)
+        },
         SearchSource("ytmusic", "YouTube Music", androidx.compose.ui.graphics.Color(0xFFFF0000)) {
             Icon(Icons.Filled.MusicNote, null, tint = androidx.compose.ui.graphics.Color.White)
         },
@@ -435,7 +566,9 @@ fun SearchScreen(app: PrivateMusicApp) {
         },
     )
 
-    androidx.activity.compose.BackHandler(enabled = source != null) { source = null }
+    androidx.activity.compose.BackHandler(enabled = source != null && source != "global") {
+        source = null
+    }
 
     if (source == null) {
         androidx.compose.foundation.lazy.grid.LazyVerticalGrid(
@@ -466,6 +599,9 @@ fun SearchScreen(app: PrivateMusicApp) {
                         subsonicTracks = null
                         error = null
                         actionMessage = null
+                        onlineQuery = ""
+                        onlineSearchGeneration++
+                        onlineSearchJob?.cancel()
                     }
                     source = s.id
                 }
@@ -492,13 +628,23 @@ fun SearchScreen(app: PrivateMusicApp) {
         }
         OutlinedTextField(
             value = query,
-            onValueChange = { query = it },
+            onValueChange = { newQuery ->
+                if (source == "global" && newQuery.trim() != onlineQuery) {
+                    onlineSearchGeneration++
+                    onlineSearchJob?.cancel()
+                    searching = false
+                    error = null
+                    results = emptyList()
+                }
+                query = newQuery
+            },
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp, vertical = 8.dp),
             placeholder = {
                 Text(
                     when (source) {
+                        "global" -> "Canciones, letras, álbumes, artistas o playlists…"
                         "deezer" -> "Buscar en Deezer…"
                         "deezerhq" -> "Buscar en Deezer (descarga HQ)…"
                         "ytmusic" -> "Buscar en YouTube Music…"
@@ -553,7 +699,192 @@ fun SearchScreen(app: PrivateMusicApp) {
             }
         }
 
-        when {
+        if (source == "global") {
+            val hasLocalResults = globalLocalResults.songs.isNotEmpty() ||
+                globalLocalResults.albums.isNotEmpty() ||
+                globalLocalResults.artists.isNotEmpty() ||
+                globalLocalResults.playlists.isNotEmpty()
+            val searchingLyrics = globalLyricsState.query == trimmedQuery &&
+                globalLyricsState.searching
+            LazyColumn(modifier = Modifier.fillMaxSize()) {
+                if (trimmedQuery.isBlank()) {
+                    item(key = "global-help") {
+                        Column(
+                            modifier = Modifier.padding(24.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                            Text(
+                                "Busca en toda tu música",
+                                style = MaterialTheme.typography.titleMedium,
+                            )
+                            Text(
+                                "Encontrarás canciones, texto de letras, álbumes, artistas y " +
+                                    "playlists al escribir. Pulsa Buscar para añadir también " +
+                                    "resultados online.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            OutlinedButton(onClick = { source = null }) {
+                                Text("Elegir una fuente especializada")
+                            }
+                        }
+                    }
+                } else {
+                    if (!hasLocalResults && !searchingLyrics) {
+                        item(key = "global-no-local") {
+                            Text(
+                                "No hay coincidencias en tu biblioteca.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                            )
+                        }
+                    }
+
+                    if (globalLocalResults.songs.isNotEmpty()) {
+                        item(key = "global-songs-title") {
+                            GlobalSectionHeader("Canciones", Icons.Filled.LibraryMusic)
+                        }
+                        items(
+                            globalLocalResults.songs,
+                            key = { "global-song-${it.id}" },
+                            contentType = { "global-song" },
+                        ) { song ->
+                            SongRow(
+                                song = song,
+                                isCurrent = song.id == nowPlaying?.songId,
+                                supportingText = validGlobalLyricHits[song.id]?.let { hit ->
+                                    if (hit.translated) "Traducción: “${hit.snippet}”"
+                                    else "“${hit.snippet}”"
+                                },
+                                onClick = {
+                                    val queue = globalLocalResults.songs
+                                    val index = queue.indexOfFirst { it.id == song.id }
+                                    app.playerController.playQueue(queue, index.coerceAtLeast(0))
+                                },
+                                onSwipeToQueue = {
+                                    app.playerController.addToQueue(song)
+                                    com.aar.privatemusic.util.Feedback.show("Añadida a la cola")
+                                },
+                                trailing = { SongOverflowMenu(app, song) },
+                            )
+                        }
+                    }
+
+                    if (searchingLyrics) {
+                        item(key = "global-lyrics-progress") {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(18.dp),
+                                    strokeWidth = 2.dp,
+                                )
+                                Text(
+                                    "Buscando también dentro de las letras…",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    }
+
+                    if (globalLocalResults.albums.isNotEmpty()) {
+                        item(key = "global-albums-title") {
+                            GlobalSectionHeader("Álbumes", Icons.Filled.Album)
+                        }
+                        items(globalLocalResults.albums, key = {
+                            "global-album-${it.key.artist}-${it.key.title}"
+                        }) { album ->
+                            GlobalAlbumRow(album) {
+                                onOpenAlbum(album.key.title, album.key.artist)
+                            }
+                        }
+                    }
+
+                    if (globalLocalResults.artists.isNotEmpty()) {
+                        item(key = "global-artists-title") {
+                            GlobalSectionHeader("Artistas", Icons.Filled.Person)
+                        }
+                        items(globalLocalResults.artists, key = { "global-artist-${it.name}" }) { artist ->
+                            GlobalArtistRow(artist) { onOpenArtist(artist.name) }
+                        }
+                    }
+
+                    if (globalLocalResults.playlists.isNotEmpty()) {
+                        item(key = "global-playlists-title") {
+                            GlobalSectionHeader("Playlists", Icons.Filled.QueueMusic)
+                        }
+                        items(globalLocalResults.playlists, key = { "global-playlist-${it.id}" }) { playlist ->
+                            GlobalPlaylistRow(playlist) { onOpenPlaylist(playlist.id) }
+                        }
+                    }
+
+                    item(key = "global-online-title") {
+                        GlobalSectionHeader("Resultados online", Icons.Filled.Search)
+                    }
+                    when {
+                        searching && onlineQuery == trimmedQuery -> item(key = "global-online-loading") {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(20.dp),
+                                    strokeWidth = 2.dp,
+                                )
+                                Text("Buscando online…")
+                            }
+                        }
+                        onlineQuery != trimmedQuery -> item(key = "global-online-help") {
+                            Text(
+                                "Pulsa Buscar en el teclado o en la lupa para consultar online.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                            )
+                        }
+                        error != null -> item(key = "global-online-error") {
+                            Text(
+                                error.orEmpty(),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                            )
+                        }
+                        results.isEmpty() -> item(key = "global-online-empty") {
+                            Text(
+                                "No se encontraron resultados online.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                            )
+                        }
+                    }
+
+                    if (onlineQuery == trimmedQuery) {
+                        items(results, key = { "global-online-${it.id}" }) { result ->
+                            SearchResultRow(
+                                result = result,
+                                inLibrary = result.id in libraryIds,
+                                state = downloads[result.id],
+                                qualityLabel = YT_QUALITY,
+                                previewResolving = previewLoadingId == result.id,
+                                previewPlaying = nowPlaying?.songId == "preview:${result.id}" && isPlaying,
+                                previewLoaded = nowPlaying?.songId == "preview:${result.id}",
+                                onPreview = { togglePreview(result) },
+                                onDownload = { app.downloader.enqueue(result) },
+                                onCancel = { app.downloader.cancel(result.id) },
+                                onLongPress = { checkChapters(result) },
+                            )
+                        }
+                    }
+                }
+            }
+        } else when {
             searching -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator()
             }
@@ -977,6 +1308,130 @@ private fun SpotifyReviewDialog(
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("Cerrar") } },
     )
+}
+
+@Composable
+private fun GlobalSectionHeader(
+    title: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 16.dp, end = 16.dp, top = 18.dp, bottom = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+        Text(title, style = MaterialTheme.typography.titleMedium)
+    }
+}
+
+@Composable
+private fun GlobalAlbumRow(
+    album: com.aar.privatemusic.data.AlbumCollection,
+    onClick: () -> Unit,
+) {
+    val coverSong = album.songs.firstOrNull { !it.artPath.isNullOrBlank() }
+        ?: album.songs.firstOrNull()
+    GlobalCatalogRow(
+        title = album.key.title,
+        subtitle = "${album.key.artist} · ${album.songs.size} canciones",
+        artModel = coverSong?.artPath?.let(::java.io.File) ?: coverSong?.thumbnailUrl,
+        fallbackIcon = Icons.Filled.Album,
+        contentDescription = "Abrir álbum ${album.key.title}",
+        onClick = onClick,
+    )
+}
+
+@Composable
+private fun GlobalArtistRow(
+    artist: com.aar.privatemusic.data.GlobalArtistResult,
+    onClick: () -> Unit,
+) {
+    val coverSong = artist.songs.firstOrNull { !it.artPath.isNullOrBlank() }
+        ?: artist.songs.firstOrNull()
+    GlobalCatalogRow(
+        title = artist.name,
+        subtitle = "${artist.songs.size} canciones",
+        artModel = coverSong?.artPath?.let(::java.io.File) ?: coverSong?.thumbnailUrl,
+        fallbackIcon = Icons.Filled.Person,
+        contentDescription = "Abrir artista ${artist.name}",
+        onClick = onClick,
+    )
+}
+
+@Composable
+private fun GlobalPlaylistRow(
+    playlist: com.aar.privatemusic.data.db.Playlist,
+    onClick: () -> Unit,
+) {
+    GlobalCatalogRow(
+        title = playlist.name,
+        subtitle = playlist.description?.takeIf { it.isNotBlank() } ?: "Playlist",
+        artModel = playlist.coverPath?.let(::java.io.File),
+        fallbackIcon = Icons.Filled.QueueMusic,
+        contentDescription = "Abrir playlist ${playlist.name}",
+        onClick = onClick,
+    )
+}
+
+@Composable
+private fun GlobalCatalogRow(
+    title: String,
+    subtitle: String,
+    artModel: Any?,
+    fallbackIcon: androidx.compose.ui.graphics.vector.ImageVector,
+    contentDescription: String,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(
+                onClickLabel = contentDescription,
+                onClick = onClick,
+            )
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (artModel != null) {
+            ArtImage(artModel, 48.dp)
+        } else {
+            Box(
+                modifier = Modifier
+                    .size(48.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    fallbackIcon,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .padding(start = 12.dp),
+        ) {
+            Text(
+                title,
+                style = MaterialTheme.typography.bodyLarge,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
 }
 
 /** A searchable catalog: id, display name, brand color and badge icon. */

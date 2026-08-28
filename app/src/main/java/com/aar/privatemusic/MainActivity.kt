@@ -298,7 +298,20 @@ private fun MainScaffold(app: PrivateMusicApp) {
                     onOpenLibrary = { navController.navigate("library") },
                 )
             }
-            composable("search") { SearchScreen(app) }
+            composable("search") {
+                SearchScreen(
+                    app = app,
+                    onOpenArtist = { name ->
+                        navController.navigate("artist/" + android.net.Uri.encode(name))
+                    },
+                    onOpenAlbum = { title, artist ->
+                        navController.navigate(
+                            "album/${android.net.Uri.encode(artist)}/${android.net.Uri.encode(title)}"
+                        )
+                    },
+                    onOpenPlaylist = { id -> navController.navigate("playlist/$id") },
+                )
+            }
             composable("library") {
                 LibraryScreen(
                     app,
