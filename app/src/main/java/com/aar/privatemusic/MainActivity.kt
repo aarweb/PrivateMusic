@@ -332,6 +332,11 @@ private fun MainScaffold(app: PrivateMusicApp) {
                     app,
                     artistName = name,
                     onBack = { navController.popBackStack() },
+                    onOpenAlbum = { title, artist ->
+                        navController.navigate(
+                            "album/${android.net.Uri.encode(artist)}/${android.net.Uri.encode(title)}"
+                        )
+                    },
                 )
             }
             composable("album/{artist}/{title}") { entry ->

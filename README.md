@@ -30,7 +30,7 @@ Requiere Android 8.0+ (arm64).
 - Comparte cualquier enlace desde otra app hacia PrivateMusic.
 
 **Biblioteca y playlists**
-- Favoritos, historial, ordenación, snooze de canciones y vista propia de álbumes en la Biblioteca.
+- Favoritos, historial, ordenación, snooze de canciones y fichas completas de artistas y álbumes en la Biblioteca.
 - **Explorar por géneros, décadas, años y carpetas**, con reproducción completa o aleatoria. Lee los tags locales y permite completar bajo demanda los géneros que falten con MusicBrainz.
 - **Búsqueda global unificada**: encuentra al instante canciones, álbumes, artistas, géneros, playlists y texto de letras locales; al enviar la consulta añade resultados online debajo sin ocultar tu biblioteca.
 - Playlists normales (drag & drop, portadas personalizadas, pins), **carpetas** para organizarlas, **smart playlists** por reglas y automáticas (Más escuchadas, Olvidadas, Top de tu temporada, **Mix de hoy**).
