@@ -2,6 +2,7 @@ package com.aar.privatemusic.downloader
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import org.json.JSONException
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
@@ -32,11 +33,23 @@ data class DeezerTrack(
  */
 object DeezerSource {
 
+    private val tokenPattern = Regex("""[\p{L}\p{N}]+""")
+
     suspend fun search(query: String, limit: Int = 25): List<DeezerTrack> =
         withContext(Dispatchers.IO) {
-            val q = URLEncoder.encode(query, "UTF-8")
-            val json = fetch("https://api.deezer.com/search?q=$q&limit=$limit")
-            val data = JSONObject(json).optJSONArray("data") ?: return@withContext emptyList()
+            val primary = searchOnce(query, limit)
+            val fallback = fallbackTokens(query, primary).flatMap { searchOnce(it, limit) }
+            mergeResults(query, primary, fallback, limit)
+        }
+
+    private fun searchOnce(query: String, limit: Int): List<DeezerTrack> {
+        val q = URLEncoder.encode(query, "UTF-8")
+        return parseSearch(fetch("https://api.deezer.com/search?q=$q&limit=$limit"))
+    }
+
+    internal fun parseSearch(json: String): List<DeezerTrack> {
+        return try {
+            val data = JSONObject(json).optJSONArray("data") ?: return emptyList()
             (0 until data.length()).mapNotNull { i ->
                 val t = data.optJSONObject(i) ?: return@mapNotNull null
                 val title = t.optString("title")
@@ -54,7 +67,52 @@ object DeezerSource {
                     previewUrl = t.optString("preview"),
                 )
             }
+        } catch (_: JSONException) {
+            emptyList()
         }
+    }
+
+    internal fun queryTokens(query: String): List<String> =
+        tokenPattern.findAll(query).map { it.value.lowercase() }.toList()
+
+    /** Sólo amplía consultas libres que todavía no tienen una coincidencia completa. */
+    internal fun fallbackTokens(query: String, primary: List<DeezerTrack>): List<String> {
+        if ('"' in query || '\'' in query || ':' in query) return emptyList()
+        val tokens = queryTokens(query)
+        if (tokens.size < 2) return emptyList()
+        val hasCompleteMatch = primary.any { track ->
+            val present = queryTokens("${track.title} ${track.artist}").toSet()
+            tokens.all { it in present }
+        }
+        if (hasCompleteMatch) return emptyList()
+
+        val distinct = tokens.distinct()
+        return distinct.filter { it.codePointCount(0, it.length) >= 4 }
+            .ifEmpty { distinct.filter { it.codePointCount(0, it.length) >= 3 } }
+            .take(3)
+    }
+
+    /** Conserva la primera aparición de cada id y el orden de llegada en los empates. */
+    internal fun mergeResults(
+        query: String,
+        primary: List<DeezerTrack>,
+        fallback: List<DeezerTrack>,
+        limit: Int,
+    ): List<DeezerTrack> {
+        val tokens = queryTokens(query).toSet()
+        return (primary + fallback).distinctBy { it.id }
+            .map { track ->
+                val titleTokens = queryTokens(track.title).toSet()
+                val allTokens = titleTokens + queryTokens(track.artist)
+                Triple(track, tokens.count { it in allTokens }, tokens.count { it in titleTokens })
+            }
+            .sortedWith(
+                compareByDescending<Triple<DeezerTrack, Int, Int>> { it.second }
+                    .thenByDescending { it.third },
+            )
+            .take(limit)
+            .map { it.first }
+    }
 
     /**
      * Busca en Deezer la pista que corresponde a [title]/[artist]. Devuelve el
@@ -94,7 +152,7 @@ object DeezerSource {
         conn.readTimeout = 15_000
         conn.setRequestProperty(
             "User-Agent",
-            "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
         )
         return conn.inputStream.bufferedReader().readText().also { conn.disconnect() }
     }
