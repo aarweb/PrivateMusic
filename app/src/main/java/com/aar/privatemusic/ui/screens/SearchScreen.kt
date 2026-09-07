@@ -12,23 +12,20 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.background
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Album
 import androidx.compose.material.icons.filled.LibraryMusic
-import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.QueueMusic
-import androidx.compose.material3.Card
+import androidx.compose.material3.FilterChip
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.unit.Dp
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.ErrorOutline
@@ -68,7 +65,6 @@ import com.aar.privatemusic.downloader.DeezerTrack
 import com.aar.privatemusic.downloader.DownloadState
 import com.aar.privatemusic.downloader.SearchResult
 import com.aar.privatemusic.downloader.PlaylistLinkResolver
-import com.aar.privatemusic.downloader.SpotifyResolver
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -82,12 +78,13 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.supervisorScope
 import java.io.File
 
 /** Last search kept across navigation so switching tabs doesn't wipe results. */
 private object SearchCache {
     var query = ""
-    var source: String? = null
+    var source = "global"
     var results: List<SearchResult> = emptyList()
     var playlistTitle: String? = null
     var playlistUrl: String? = null
@@ -97,16 +94,6 @@ private object SearchCache {
 
     /** Deezer track id -> matched YouTube id (so rows can show download state). */
     val deezerMatches = mutableMapOf<String, String>()
-
-    fun clearResults() {
-        query = ""
-        results = emptyList()
-        playlistTitle = null
-        playlistUrl = null
-        spotifyTracks = null
-        deezerTracks = null
-        onlineQuery = ""
-    }
 }
 
 private data class GlobalLyricsState(
@@ -143,8 +130,7 @@ fun SearchScreen(
     var spotifyTracks by remember { mutableStateOf(SearchCache.spotifyTracks) }
     // Nombre del servicio de origen del enlace ("Spotify", "Deezer"…), para la cabecera.
     var linkServiceName by remember { mutableStateOf<String?>(null) }
-    // Global is the normal entry point; null still opens the catalog of expert sources.
-    var source by remember { mutableStateOf<String?>(SearchCache.source ?: "global") }
+    var source by remember { mutableStateOf(SearchCache.source) }
     var deezerTracks by remember { mutableStateOf(SearchCache.deezerTracks) }
     // Deezer tracks currently being matched on YouTube before download.
     var deezerResolving by remember { mutableStateOf(setOf<String>()) }
@@ -159,6 +145,10 @@ fun SearchScreen(
     var onlineQuery by remember { mutableStateOf(SearchCache.onlineQuery) }
     var onlineSearchGeneration by remember { androidx.compose.runtime.mutableLongStateOf(0L) }
     var onlineSearchJob by remember { mutableStateOf<Job?>(null) }
+    var youtubeLoading by remember { mutableStateOf(false) }
+    var youtubeError by remember { mutableStateOf<String?>(null) }
+    var deezerLoading by remember { mutableStateOf(false) }
+    var deezerError by remember { mutableStateOf<String?>(null) }
     androidx.compose.runtime.SideEffect {
         SearchCache.query = query
         SearchCache.source = source
@@ -222,19 +212,6 @@ fun SearchScreen(
         }
     }
 
-    LaunchedEffect(source, trimmedQuery) {
-        val staleGlobalRequest = source == "global" &&
-            onlineQuery.isNotBlank() && onlineQuery != trimmedQuery
-        if (source != "global" || staleGlobalRequest) {
-            onlineSearchGeneration++
-            onlineSearchJob?.cancel()
-            searching = false
-            error = null
-            results = emptyList()
-            if (source != "global") onlineSearchJob = null
-        }
-    }
-
     val downloads by app.downloader.downloads.collectAsState()
     val torrentDownloads by app.torrents.downloads.collectAsState()
     val archiveDownloads by app.archive.downloads.collectAsState()
@@ -287,7 +264,6 @@ fun SearchScreen(
             if (url != null) {
                 app.playerController.playStream(result.id, result.title, result.artist, url, result.thumbnailUrl)
             } else {
-                error = null
                 actionMessage = "No se pudo reproducir \"${result.title}\""
             }
             previewLoadingId = null
@@ -298,48 +274,46 @@ fun SearchScreen(
         q.contains("list=") || q.contains("/playlist") ||
             q.contains("youtube.com/@") || q.contains("/channel/")
 
-    fun runSearch() {
-        if (query.isBlank() || searching) return
+    fun clearSearch() {
+        onlineSearchGeneration++
+        onlineSearchJob?.cancel()
+        onlineSearchJob = null
+        onlineQuery = ""
+        searching = false
+        error = null
+        youtubeLoading = false
+        youtubeError = null
+        deezerLoading = false
+        deezerError = null
+        results = emptyList()
+        deezerTracks = null
+        subsonicTracks = null
+        spotifyTracks = null
+        playlistTitle = null
+        playlistUrl = null
+        linkServiceName = null
+        actionMessage = null
+    }
+
+    // All catalog requests share this job and identity, including section retries.
+    fun runSearch(
+        targetSource: String,
+        retrySource: String? = null,
+    ) {
         val requestedQuery = query.trim()
-        if (source == "global" && requestedQuery.startsWith("http", ignoreCase = true)) {
-            // La vista YouTube conserva el importador rico de enlaces y playlists.
-            source = "yt"
-        } else if (source == "global") {
-            keyboard?.hide()
-            val requestGeneration = ++onlineSearchGeneration
-            onlineSearchJob?.cancel()
-            onlineQuery = requestedQuery
-            searching = true
-            error = null
-            results = emptyList()
-            playlistTitle = null
-            playlistUrl = null
-            actionMessage = null
-            spotifyTracks = null
-            deezerTracks = null
-            subsonicTracks = null
-            onlineSearchJob = scope.launch {
-                runCatching { app.downloader.search(requestedQuery) }
-                    .onSuccess { found ->
-                        if (source == "global" && query.trim() == requestedQuery &&
-                            onlineSearchGeneration == requestGeneration
-                        ) {
-                            results = found
-                            searching = false
-                        }
-                    }
-                    .onFailure { failure ->
-                        if (source == "global" && query.trim() == requestedQuery &&
-                            onlineSearchGeneration == requestGeneration
-                        ) {
-                            error = "Error al buscar online: ${failure.message}"
-                            searching = false
-                        }
-                    }
-            }
-            return
-        }
+        if (requestedQuery.isBlank()) return
+        val requestedSource = targetSource
+        val requestGeneration = ++onlineSearchGeneration
+        val isGlobalText = requestedSource == "global" &&
+            !requestedQuery.startsWith("http", ignoreCase = true) &&
+            !PlaylistLinkResolver.isSupportedLink(requestedQuery)
+        // Preserve the other section on retry; restart it only if it was cancelled in flight.
+        val retry = isGlobalText && onlineQuery == requestedQuery && retrySource != null
+        val searchYoutube = !retry || retrySource == "yt" || youtubeLoading
+        val searchDeezer = !retry || retrySource == "deezer" || deezerLoading
+        onlineSearchJob?.cancel()
         keyboard?.hide()
+        onlineQuery = requestedQuery
         searching = true
         error = null
         playlistTitle = null
@@ -347,110 +321,131 @@ fun SearchScreen(
         actionMessage = null
         spotifyTracks = null
         linkServiceName = null
-        deezerTracks = null
         subsonicTracks = null
-        scope.launch {
-            if (source == "1337x") {
-                // El scraper ya devuelve lista vacía si falla la red o el parseo.
-                val torrents =
-                    com.aar.privatemusic.downloader.Torrent1337xSource.search(query.trim(), limit = 30)
-                results = torrents
-                if (torrents.isEmpty()) error = "Sin resultados de torrents de música"
-                searching = false
-                return@launch
-            }
-            if (source == "bandcamp") {
-                runCatching { com.aar.privatemusic.downloader.BandcampSource.search(query.trim(), limit = 30) }
-                    .onSuccess {
-                        results = it
-                        if (it.isEmpty()) error = "Sin resultados en Bandcamp"
+        if (searchYoutube) {
+            results = emptyList()
+            youtubeError = null
+        }
+        if (searchDeezer) {
+            deezerTracks = null
+            deezerError = null
+        }
+        youtubeLoading = isGlobalText && searchYoutube
+        deezerLoading = isGlobalText && searchDeezer
+
+        fun isCurrent() = source == requestedSource && query.trim() == requestedQuery &&
+            onlineSearchGeneration == requestGeneration
+
+        onlineSearchJob = scope.launch {
+            try {
+                if (isGlobalText) {
+                    supervisorScope {
+                        if (searchYoutube) launch {
+                            try {
+                                val found = app.downloader.search(requestedQuery)
+                                if (isCurrent()) results = found
+                            } catch (cancelled: CancellationException) {
+                                throw cancelled
+                            } catch (failure: Exception) {
+                                if (isCurrent()) youtubeError = failure.message ?: "No se pudo completar la consulta"
+                            } finally {
+                                if (isCurrent()) youtubeLoading = false
+                            }
+                        }
+                        if (searchDeezer) launch {
+                            try {
+                                val found = DeezerSource.search(requestedQuery)
+                                if (isCurrent()) deezerTracks = found
+                            } catch (cancelled: CancellationException) {
+                                throw cancelled
+                            } catch (failure: Exception) {
+                                if (isCurrent()) deezerError = failure.message ?: "No se pudo completar la consulta"
+                            } finally {
+                                if (isCurrent()) deezerLoading = false
+                            }
+                        }
                     }
-                    .onFailure { error = "Error al buscar en Bandcamp: ${it.message}" }
-                searching = false
-                return@launch
-            }
-            if (source == "subsonic") {
-                if (app.settings.subsonicConfig() == null) {
-                    error = "Configura tu servidor en Ajustes → Servidor de música"
-                    searching = false
-                    return@launch
-                }
-                runCatching { app.subsonic.search(query.trim(), limit = 40) }
-                    .onSuccess {
-                        results = emptyList()
-                        subsonicTracks = it
-                        if (it.isEmpty()) error = "Sin resultados en tu servidor"
+                } else if (PlaylistLinkResolver.isSupportedLink(requestedQuery)) {
+                    val svc = PlaylistLinkResolver.serviceOf(requestedQuery)
+                    val svcName = when (svc) {
+                        com.aar.privatemusic.downloader.LinkService.DEEZER -> "Deezer"
+                        com.aar.privatemusic.downloader.LinkService.APPLE_MUSIC -> "Apple Music"
+                        com.aar.privatemusic.downloader.LinkService.TIDAL -> "Tidal"
+                        else -> "Spotify"
                     }
-                    .onFailure { error = "Error al buscar en el servidor: ${it.message}" }
-                searching = false
-                return@launch
-            }
-            if (source == "archive") {
-                runCatching {
-                    com.aar.privatemusic.downloader.InternetArchiveSource.search(query.trim(), limit = 30)
-                }
-                    .onSuccess {
-                        results = it
-                        if (it.isEmpty()) error = "Sin resultados en Internet Archive"
-                    }
-                    .onFailure { error = "Error al buscar en Internet Archive: ${it.message}" }
-                searching = false
-                return@launch
-            }
-            if ((source == "deezer" || source == "deezerhq") && !query.trim().startsWith("http") &&
-                !PlaylistLinkResolver.isSupportedLink(query.trim())
-            ) {
-                if (source == "deezerhq" && app.settings.deezerArl.value.isBlank()) {
-                    error = "Inicia sesión en Deezer en Ajustes para descargar en HQ"
-                    searching = false
-                    return@launch
-                }
-                runCatching { com.aar.privatemusic.downloader.DeezerSource.search(query.trim()) }
-                    .onSuccess { results = emptyList(); deezerTracks = it }
-                    .onFailure { error = "Error al buscar en Deezer: ${it.message}" }
-                searching = false
-                return@launch
-            }
-            if (PlaylistLinkResolver.isSupportedLink(query.trim())) {
-                val svc = PlaylistLinkResolver.serviceOf(query.trim())
-                val svcName = when (svc) {
-                    com.aar.privatemusic.downloader.LinkService.DEEZER -> "Deezer"
-                    com.aar.privatemusic.downloader.LinkService.APPLE_MUSIC -> "Apple Music"
-                    com.aar.privatemusic.downloader.LinkService.TIDAL -> "Tidal"
-                    else -> "Spotify"
-                }
-                runCatching { PlaylistLinkResolver.resolve(query.trim()) }
-                    .onSuccess { pl ->
-                        results = emptyList()
+                    val pl = PlaylistLinkResolver.resolve(requestedQuery)
+                    if (isCurrent()) {
                         spotifyTracks = pl.tracks
                         linkServiceName = svcName
                         playlistTitle = pl.name
-                        playlistUrl = query.trim()
-                        // Sólo Spotify tiene el tope de 100 del embed; avisar sin engañar.
+                        playlistUrl = requestedQuery
                         if (pl.truncated && svc == com.aar.privatemusic.downloader.LinkService.SPOTIFY) {
                             actionMessage = "Spotify sólo deja leer ${pl.tracks.size} pistas por " +
                                 "playlist; si tiene más, el resto se quedará fuera"
                         }
                     }
-                    .onFailure { error = "Error al leer $svcName: ${it.message}" }
-            } else if (isPlaylistUrl(query.trim())) {
-                runCatching { app.downloader.resolvePlaylist(query.trim()) }
-                    .onSuccess { (title, entries) ->
-                        results = entries
-                        playlistTitle = title
-                        playlistUrl = query.trim()
+                } else when (requestedSource) {
+                    "1337x" -> {
+                        val found = com.aar.privatemusic.downloader.Torrent1337xSource.search(requestedQuery, limit = 30)
+                        if (isCurrent()) results = found
                     }
-                    .onFailure { error = "Error al resolver la playlist: ${it.message}" }
-            } else if (source == "ytmusic") {
-                runCatching { com.aar.privatemusic.downloader.YouTubeMusicSource.search(query.trim()) }
-                    .onSuccess { results = it }
-                    .onFailure { error = "Error al buscar en YouTube Music: ${it.message}" }
-            } else {
-                runCatching { app.downloader.search(query) }
-                    .onSuccess { results = it }
-                    .onFailure { error = "Error al buscar: ${it.message}" }
+                    "bandcamp" -> {
+                        val found = com.aar.privatemusic.downloader.BandcampSource.search(requestedQuery, limit = 30)
+                        if (isCurrent()) results = found
+                    }
+                    "subsonic" -> {
+                        if (app.settings.subsonicConfig() == null) {
+                            if (isCurrent()) error = "Configura tu servidor en Ajustes → Servidor de música"
+                        } else {
+                            val found = app.subsonic.search(requestedQuery, limit = 40)
+                            if (isCurrent()) subsonicTracks = found
+                        }
+                    }
+                    "archive" -> {
+                        val found = com.aar.privatemusic.downloader.InternetArchiveSource.search(requestedQuery, limit = 30)
+                        if (isCurrent()) results = found
+                    }
+                    else -> {
+                        when {
+                            (requestedSource == "deezer" || requestedSource == "deezerhq") &&
+                                !requestedQuery.startsWith("http", ignoreCase = true) -> {
+                                // The public catalog does not require an ARL, even in HQ.
+                                val found = DeezerSource.search(requestedQuery)
+                                if (isCurrent()) deezerTracks = found
+                            }
+                            isPlaylistUrl(requestedQuery) -> {
+                                val (title, entries) = app.downloader.resolvePlaylist(requestedQuery)
+                                if (isCurrent()) {
+                                    results = entries
+                                    playlistTitle = title
+                                    playlistUrl = requestedQuery
+                                }
+                            }
+                            requestedSource == "ytmusic" -> {
+                                val found = com.aar.privatemusic.downloader.YouTubeMusicSource.search(requestedQuery)
+                                if (isCurrent()) results = found
+                            }
+                            else -> {
+                                val found = app.downloader.search(requestedQuery)
+                                if (isCurrent()) results = found
+                            }
+                        }
+                    }
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                if (isCurrent()) error = failure.message ?: "No se pudo completar la consulta"
+            } finally {
+                if (isCurrent()) searching = false
             }
-            searching = false
+        }
+    }
+
+    // A request cancelled by navigation must not look like a completed empty search.
+    LaunchedEffect(Unit) {
+        if (onlineQuery.isNotBlank() && onlineQuery == query.trim()) {
+            runSearch(targetSource = source)
         }
     }
 
@@ -536,107 +531,105 @@ fun SearchScreen(
         }
     }
 
-    // Sources catalog: adding one here adds its card to the grid.
-    val sources = listOf(
-        SearchSource("global", "Búsqueda global · Biblioteca, letras y online", androidx.compose.ui.graphics.Color(0xFF6750A4)) {
-            Icon(Icons.Filled.Search, null, tint = androidx.compose.ui.graphics.Color.White)
-        },
-        SearchSource("ytmusic", "YouTube Music", androidx.compose.ui.graphics.Color(0xFFFF0000)) {
-            Icon(Icons.Filled.MusicNote, null, tint = androidx.compose.ui.graphics.Color.White)
-        },
-        SearchSource("yt", "YouTube", androidx.compose.ui.graphics.Color(0xFF606060)) {
-            Icon(Icons.Filled.PlayArrow, null, tint = androidx.compose.ui.graphics.Color.White)
-        },
-        SearchSource("deezer", "Deezer", androidx.compose.ui.graphics.Color(0xFFA238FF)) {
-            Icon(Icons.Filled.GraphicEq, null, tint = androidx.compose.ui.graphics.Color.White)
-        },
-        SearchSource("deezerhq", "Deezer HQ", androidx.compose.ui.graphics.Color(0xFFFF6B00)) {
-            Icon(Icons.Filled.Download, null, tint = androidx.compose.ui.graphics.Color.White)
-        },
-        SearchSource("1337x", "1337x · Torrents música", androidx.compose.ui.graphics.Color(0xFFE0592A)) {
-            Icon(Icons.Filled.Search, null, tint = androidx.compose.ui.graphics.Color.White)
-        },
-        SearchSource("archive", "Internet Archive · FLAC gratis", androidx.compose.ui.graphics.Color(0xFF2C7BB6)) {
-            Icon(Icons.Filled.Download, null, tint = androidx.compose.ui.graphics.Color.White)
-        },
-        SearchSource("subsonic", "Tu servidor · Subsonic/Navidrome", androidx.compose.ui.graphics.Color(0xFF1DB954)) {
-            Icon(Icons.Filled.GraphicEq, null, tint = androidx.compose.ui.graphics.Color.White)
-        },
-        SearchSource("bandcamp", "Bandcamp", androidx.compose.ui.graphics.Color(0xFF1DA0C3)) {
-            Icon(Icons.Filled.Search, null, tint = androidx.compose.ui.graphics.Color.White)
-        },
-    )
-
-    androidx.activity.compose.BackHandler(enabled = source != null && source != "global") {
-        source = null
+    val sources = remember {
+        listOf(
+            SearchSource("global", "Global", "Biblioteca y letras al escribir; Deezer y YouTube al pulsar Buscar. También puedes pegar enlaces."),
+            SearchSource("ytmusic", "YouTube Music", "Busca canciones en YouTube Music; escucha y descarga el audio disponible en YouTube."),
+            SearchSource("yt", "YouTube", "Busca vídeos o pega enlaces de vídeos, playlists y canales. Mantén pulsado un resultado para buscar capítulos."),
+            SearchSource("deezer", "Deezer", "Catálogo y preescuchas de Deezer. Las descargas buscan una coincidencia en YouTube."),
+            SearchSource("deezerhq", "Deezer HQ", "Busca el catálogo sin iniciar sesión. Para descargar directamente de Deezer necesitas una sesión en Ajustes; calidad según tu plan."),
+            SearchSource("1337x", "1337x", "Busca torrents de música en 1337x. No hay preescucha; disponibilidad y calidad dependen del torrent."),
+            SearchSource("archive", "Archive", "Busca música en Internet Archive. Preescucha la primera pista; formatos y calidad dependen del archivo."),
+            SearchSource("subsonic", "Servidor", "Busca y descarga música de tu servidor Subsonic o Navidrome configurado en Ajustes."),
+            SearchSource("bandcamp", "Bandcamp", "Busca música en Bandcamp. La preescucha y la descarga dependen de lo disponible para cada publicación."),
+        )
     }
-
-    if (source == null) {
-        androidx.compose.foundation.lazy.grid.LazyVerticalGrid(
-            columns = androidx.compose.foundation.lazy.grid.GridCells.Fixed(2),
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(2) }) {
-                Text(
-                    "¿Dónde quieres buscar?",
-                    style = MaterialTheme.typography.titleMedium,
-                    modifier = Modifier.padding(bottom = 4.dp),
-                )
-            }
-            items(sources.size, key = { sources[it].id }) { i ->
-                val s = sources[i]
-                SourceCard(s) {
-                    if (SearchCache.source != s.id) {
-                        SearchCache.clearResults()
-                        query = ""
-                        results = emptyList()
-                        playlistTitle = null
-                        playlistUrl = null
-                        spotifyTracks = null
-                        deezerTracks = null
-                        subsonicTracks = null
-                        error = null
-                        actionMessage = null
-                        onlineQuery = ""
-                        onlineSearchGeneration++
-                        onlineSearchJob?.cancel()
-                    }
-                    source = s.id
-                }
-            }
-        }
-        return
-    }
-
     val current = sources.first { it.id == source }
+    // One row implementation for the Deezer catalog in Global, Deezer and Deezer HQ.
+    val deezerRow: @Composable (DeezerTrack) -> Unit = { track ->
+        val dzId = "dz${track.id}"
+        val display = SearchResult(
+            id = dzId,
+            title = track.title,
+            artist = if (track.album.isBlank()) track.artist
+            else "${track.artist} · ${track.album}",
+            durationSec = track.durationSec,
+            thumbnailUrl = track.coverUrl,
+        )
+        // "deezerhq": descarga directa FLAC/MP3 con la sesión del
+        // usuario. "deezer": empareja en YouTube (audio DRM).
+        val isHq = source == "deezerhq"
+        val hqKey = app.deezerDownloader.stateKey(track.id)
+        val matchedId = SearchCache.deezerMatches[dzId]
+        SearchResultRow(
+            result = display,
+            inLibrary = if (isHq) hqKey in libraryIds
+            else matchedId != null && matchedId in libraryIds,
+            state = if (isHq) deezerDownloads[hqKey] else when {
+                dzId in deezerResolving -> DownloadState.Queued
+                else -> matchedId?.let { downloads[it] }
+            },
+            // HQ: la calidad de tu plan; si no, audio de YouTube.
+            qualityLabel = if (isHq) deezerQualityLabel(deezerQuality) else YT_QUALITY,
+            previewResolving = false,
+            previewPlaying = nowPlaying?.songId == "preview:$dzId" && isPlaying,
+            previewLoaded = nowPlaying?.songId == "preview:$dzId",
+            onPreview = {
+                if (nowPlaying?.songId == "preview:$dzId") {
+                    app.playerController.togglePlayPause()
+                } else if (track.previewUrl.isNotBlank()) {
+                    app.playerController.playStream(
+                        dzId, track.title, track.artist,
+                        track.previewUrl, track.coverUrl,
+                    )
+                } else {
+                    actionMessage = "Esta pista no tiene preescucha"
+                }
+            },
+            onDownload = {
+                if (isHq) {
+                    if (app.settings.deezerArl.value.isBlank()) {
+                        actionMessage = "Inicia sesión en Deezer en Ajustes para descargar en HQ"
+                    } else {
+                        app.deezerDownloader.enqueue(track, app.settings.deezerQuality.value)
+                        actionMessage = "Descargando \"${track.title}\" de Deezer…"
+                    }
+                } else if (dzId !in deezerResolving) {
+                    // Deezer audio is DRM'd: match the track on YouTube
+                    // and download that, keeping Deezer's clean metadata.
+                    deezerResolving = deezerResolving + dzId
+                    scope.launch {
+                        val match = app.downloader.searchBestMatch(
+                            track.searchQuery, track.durationSec,
+                        )
+                        if (match == null) {
+                            actionMessage =
+                                "Sin resultado en YouTube para \"${track.title}\""
+                        } else {
+                            SearchCache.deezerMatches[dzId] = match.id
+                            app.downloader.enqueue(
+                                SearchResult(
+                                    id = match.id,
+                                    title = "${track.artist} - ${track.title}",
+                                    artist = track.artist,
+                                    durationSec = track.durationSec,
+                                    thumbnailUrl = track.coverUrl
+                                        .ifBlank { match.thumbnailUrl },
+                                )
+                            )
+                        }
+                        deezerResolving = deezerResolving - dzId
+                    }
+                }
+            },
+        )
+    }
     Column(modifier = Modifier.fillMaxSize()) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.padding(start = 4.dp, top = 4.dp),
-        ) {
-            IconButton(onClick = { source = null }) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Fuentes")
-            }
-            SourceBadge(current)
-            Text(
-                current.name,
-                style = MaterialTheme.typography.titleMedium,
-                modifier = Modifier.padding(start = 8.dp),
-            )
-        }
         OutlinedTextField(
             value = query,
+            label = { Text("Buscar música") },
             onValueChange = { newQuery ->
-                if (source == "global" && newQuery.trim() != onlineQuery) {
-                    onlineSearchGeneration++
-                    onlineSearchJob?.cancel()
-                    searching = false
-                    error = null
-                    results = emptyList()
-                }
+                if (newQuery.trim() != query.trim()) clearSearch()
                 query = newQuery
             },
             modifier = Modifier
@@ -659,12 +652,38 @@ fun SearchScreen(
             },
             singleLine = true,
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-            keyboardActions = KeyboardActions(onSearch = { runSearch() }),
+            keyboardActions = KeyboardActions(onSearch = { runSearch(targetSource = source) }),
             trailingIcon = {
-                IconButton(onClick = { runSearch() }) {
+                IconButton(onClick = { runSearch(targetSource = source) }) {
                     Icon(Icons.Filled.Search, contentDescription = "Buscar")
                 }
             },
+        )
+
+        LazyRow(
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            items(sources, key = { it.id }) { candidate ->
+                FilterChip(
+                    selected = source == candidate.id,
+                    onClick = {
+                        if (source != candidate.id) {
+                            clearSearch()
+                            source = candidate.id
+                            if (query.isNotBlank()) runSearch(targetSource = candidate.id)
+                        }
+                    },
+                    label = { Text(candidate.name) },
+                    modifier = Modifier.heightIn(min = 48.dp),
+                )
+            }
+        }
+        Text(
+            current.description,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
         )
 
         if (source == "subsonic") {
@@ -700,7 +719,10 @@ fun SearchScreen(
             }
         }
 
-        if (source == "global") {
+        val isGlobalText = source == "global" &&
+            !trimmedQuery.startsWith("http", ignoreCase = true) &&
+            !PlaylistLinkResolver.isSupportedLink(trimmedQuery)
+        if (isGlobalText) {
             val hasLocalResults = globalLocalResults.songs.isNotEmpty() ||
                 globalLocalResults.albums.isNotEmpty() ||
                 globalLocalResults.artists.isNotEmpty() ||
@@ -725,9 +747,6 @@ fun SearchScreen(
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
-                            OutlinedButton(onClick = { source = null }) {
-                                Text("Elegir una fuente especializada")
-                            }
                         }
                     }
                 } else {
@@ -823,47 +842,39 @@ fun SearchScreen(
                         }
                     }
 
-                    item(key = "global-online-title") {
-                        GlobalSectionHeader("Resultados online", Icons.Filled.Search)
+                    item(key = "global-deezer-title") {
+                        GlobalSectionHeader(
+                            "Deezer · ${deezerTracks?.size ?: 0}",
+                            Icons.Filled.GraphicEq,
+                        )
+                        SearchStatus(
+                            sourceName = "Deezer",
+                            searched = onlineQuery == trimmedQuery,
+                            loading = deezerLoading,
+                            error = deezerError,
+                            empty = deezerTracks.isNullOrEmpty(),
+                            onRetry = {
+                                runSearch(targetSource = "global", retrySource = "deezer")
+                            },
+                        )
                     }
-                    when {
-                        searching && onlineQuery == trimmedQuery -> item(key = "global-online-loading") {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-                                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(20.dp),
-                                    strokeWidth = 2.dp,
-                                )
-                                Text("Buscando online…")
-                            }
+                    if (onlineQuery == trimmedQuery) {
+                        items(deezerTracks.orEmpty(), key = { "global-dz-${it.id}" }) { track ->
+                            deezerRow(track)
                         }
-                        onlineQuery != trimmedQuery -> item(key = "global-online-help") {
-                            Text(
-                                "Pulsa Buscar en el teclado o en la lupa para consultar online.",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                            )
-                        }
-                        error != null -> item(key = "global-online-error") {
-                            Text(
-                                error.orEmpty(),
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.error,
-                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                            )
-                        }
-                        results.isEmpty() -> item(key = "global-online-empty") {
-                            Text(
-                                "No se encontraron resultados online.",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                            )
-                        }
+                    }
+                    item(key = "global-youtube-title") {
+                        GlobalSectionHeader("YouTube · ${results.size}", Icons.Filled.PlayArrow)
+                        SearchStatus(
+                            sourceName = "YouTube",
+                            searched = onlineQuery == trimmedQuery,
+                            loading = youtubeLoading,
+                            error = youtubeError,
+                            empty = results.isEmpty(),
+                            onRetry = {
+                                runSearch(targetSource = "global", retrySource = "yt")
+                            },
+                        )
                     }
 
                     if (onlineQuery == trimmedQuery) {
@@ -886,11 +897,17 @@ fun SearchScreen(
                 }
             }
         } else when {
-            searching -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator()
-            }
-            error != null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text(error!!, color = MaterialTheme.colorScheme.error)
+            searching || error != null ||
+                (results.isEmpty() && spotifyTracks.isNullOrEmpty() &&
+                    deezerTracks.isNullOrEmpty() && subsonicTracks.isNullOrEmpty()) -> {
+                SearchStatus(
+                    sourceName = current.name,
+                    searched = onlineQuery.isNotBlank() && onlineQuery == trimmedQuery,
+                    loading = searching,
+                    error = error,
+                    empty = true,
+                    onRetry = { runSearch(targetSource = source) },
+                )
             }
             else -> LazyColumn {
                 playlistTitle?.let { title ->
@@ -975,78 +992,7 @@ fun SearchScreen(
                 }
                 deezerTracks?.let { tracks ->
                     items(tracks, key = { "dz-${it.id}" }) { track ->
-                        val dzId = "dz${track.id}"
-                        val display = SearchResult(
-                            id = dzId,
-                            title = track.title,
-                            artist = if (track.album.isBlank()) track.artist
-                            else "${track.artist} · ${track.album}",
-                            durationSec = track.durationSec,
-                            thumbnailUrl = track.coverUrl,
-                        )
-                        // "deezerhq": descarga directa FLAC/MP3 con la sesión del
-                        // usuario. "deezer": empareja en YouTube (audio DRM).
-                        val isHq = source == "deezerhq"
-                        val hqKey = app.deezerDownloader.stateKey(track.id)
-                        val matchedId = SearchCache.deezerMatches[dzId]
-                        SearchResultRow(
-                            result = display,
-                            inLibrary = if (isHq) hqKey in libraryIds
-                            else matchedId != null && matchedId in libraryIds,
-                            state = if (isHq) deezerDownloads[hqKey] else when {
-                                dzId in deezerResolving -> DownloadState.Queued
-                                else -> matchedId?.let { downloads[it] }
-                            },
-                            // HQ: la calidad de tu plan; si no, audio de YouTube.
-                            qualityLabel = if (isHq) deezerQualityLabel(deezerQuality) else YT_QUALITY,
-                            previewResolving = false,
-                            previewPlaying = nowPlaying?.songId == "preview:$dzId" && isPlaying,
-                            previewLoaded = nowPlaying?.songId == "preview:$dzId",
-                            onPreview = {
-                                if (nowPlaying?.songId == "preview:$dzId") {
-                                    app.playerController.togglePlayPause()
-                                } else if (track.previewUrl.isNotBlank()) {
-                                    app.playerController.playStream(
-                                        dzId, track.title, track.artist,
-                                        track.previewUrl, track.coverUrl,
-                                    )
-                                } else {
-                                    actionMessage = "Esta pista no tiene preescucha"
-                                }
-                            },
-                            onDownload = {
-                                if (isHq) {
-                                    app.deezerDownloader.enqueue(track, app.settings.deezerQuality.value)
-                                    actionMessage = "Descargando \"${track.title}\" de Deezer…"
-                                } else if (dzId !in deezerResolving) {
-                                    // Deezer audio is DRM'd: match the track on YouTube
-                                    // and download that, keeping Deezer's clean metadata.
-                                    deezerResolving = deezerResolving + dzId
-                                    scope.launch {
-                                        val match = app.downloader.searchBestMatch(
-                                            track.searchQuery, track.durationSec,
-                                        )
-                                        if (match == null) {
-                                            actionMessage =
-                                                "Sin resultado en YouTube para \"${track.title}\""
-                                        } else {
-                                            SearchCache.deezerMatches[dzId] = match.id
-                                            app.downloader.enqueue(
-                                                SearchResult(
-                                                    id = match.id,
-                                                    title = "${track.artist} - ${track.title}",
-                                                    artist = track.artist,
-                                                    durationSec = track.durationSec,
-                                                    thumbnailUrl = track.coverUrl
-                                                        .ifBlank { match.thumbnailUrl },
-                                                )
-                                            )
-                                        }
-                                        deezerResolving = deezerResolving - dzId
-                                    }
-                                }
-                            },
-                        )
+                        deezerRow(track)
                     }
                 }
                 subsonicTracks?.let { tracks ->
@@ -1435,53 +1381,53 @@ private fun GlobalCatalogRow(
     }
 }
 
-/** A searchable catalog: id, display name, brand color and badge icon. */
-private data class SearchSource(
-    val id: String,
-    val name: String,
-    val color: androidx.compose.ui.graphics.Color,
-    val icon: @Composable () -> Unit,
-)
-
+/** The idle state gives guidance; empty is shown only after a completed request. */
 @Composable
-private fun SourceBadge(source: SearchSource, size: Dp = 28.dp) {
-    Box(
-        contentAlignment = Alignment.Center,
-        modifier = Modifier
-            .size(size)
-            .clip(CircleShape)
-            .background(source.color),
-    ) { source.icon() }
-}
-
-@Composable
-private fun SourceCard(source: SearchSource, onClick: () -> Unit) {
-    // "1337x · Torrents música" cabía en dos líneas y descuadraba la rejilla.
-    // El nombre manda; lo de después del punto medio es una aclaración.
-    val name = source.name.substringBefore(" · ")
-    val hint = source.name.substringAfter(" · ", "")
-    Card(onClick = onClick, shape = MaterialTheme.shapes.medium) {
-        Column(Modifier.fillMaxWidth().padding(14.dp)) {
-            SourceBadge(source, size = 36.dp)
-            Text(
-                name,
-                style = MaterialTheme.typography.titleSmall,
-                maxLines = 1,
-                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                modifier = Modifier.padding(top = 10.dp),
-            )
-            if (hint.isNotEmpty()) {
-                Text(
-                    hint,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                )
+private fun SearchStatus(
+    sourceName: String,
+    searched: Boolean,
+    loading: Boolean,
+    error: String?,
+    empty: Boolean,
+    onRetry: () -> Unit,
+) {
+    if (searched && !loading && error == null && !empty) return
+    Column(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        when {
+            loading -> Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
+                Text("Buscando en $sourceName…")
             }
+            error != null -> {
+                Text(
+                    "$sourceName: $error",
+                    color = MaterialTheme.colorScheme.error,
+                )
+                TextButton(onClick = onRetry) { Text("Reintentar en $sourceName") }
+            }
+            !searched -> Text(
+                "Escribe una consulta y pulsa Buscar para consultar $sourceName.",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            empty -> Text(
+                "Sin resultados en $sourceName.",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }
+
+private data class SearchSource(
+    val id: String,
+    val name: String,
+    val description: String,
+)
 
 /** Etiqueta compacta (fuente o calidad) mostrada junto al subtítulo del resultado. */
 @Composable
