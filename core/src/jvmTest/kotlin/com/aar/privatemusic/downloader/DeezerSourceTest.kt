@@ -1,7 +1,10 @@
 package com.aar.privatemusic.downloader
 
+import org.json.JSONObject
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class DeezerSourceTest {
@@ -194,6 +197,39 @@ class DeezerSourceTest {
         assertTrue(DeezerSource.fallbackTokens("Yo Tu 12", emptyList()).isEmpty())
         // Cada letra suplementaria ocupa dos unidades UTF-16, pero es un solo carácter.
         assertTrue(DeezerSource.fallbackTokens("𐐀𐐁 yo", emptyList()).isEmpty())
+    }
+
+    @Test
+    fun `reconoce enlaces de Deezer sin aceptar dominios parecidos`() {
+        assertTrue(DeezerSource.isDeezerLink("https://www.deezer.com/es/track/4299455132"))
+        assertTrue(DeezerSource.isDeezerLink("https://link.deezer.com/s/34uVlHsXGYXpA9wRNHcAb"))
+        assertFalse(DeezerSource.isDeezerLink("https://deezer.com.example.org/track/4299455132"))
+        assertFalse(DeezerSource.isDeezerLink("http://www.deezer.com/track/4299455132"))
+    }
+
+    @Test
+    fun `extrae el id de una pista directa con o sin idioma`() {
+        assertEquals(4299455132L, DeezerSource.trackIdFromUrl("https://www.deezer.com/es/track/4299455132?utm=x"))
+        assertEquals(42L, DeezerSource.trackIdFromUrl("https://deezer.com/track/42"))
+        assertNull(DeezerSource.trackIdFromUrl("https://www.deezer.com/es/album/4299455132"))
+    }
+
+    @Test
+    fun `convierte una ficha directa y encuentra tokens del album`() {
+        val parsed = DeezerSource.parseTrack(JSONObject(
+            """{
+                "id":4299455132,"title":"After","duration":189,
+                "artist":{"name":"Conep"},
+                "album":{"title":"After (feat. Young Miko)","cover_big":"https://img/cover.jpg"},
+                "preview":"https://audio/preview.mp3"
+            }""".trimIndent(),
+        ))
+
+        assertEquals(4299455132L, parsed?.id)
+        assertEquals("After (feat. Young Miko)", parsed?.album)
+        assertTrue(DeezerSource.matchesQuery(parsed!!, DeezerSource.queryTokens("After Conep")))
+        assertTrue(DeezerSource.matchesQuery(parsed, DeezerSource.queryTokens("After Young Miko")))
+        assertFalse(DeezerSource.matchesQuery(parsed, DeezerSource.queryTokens("After Bad Bunny")))
     }
 
     private fun track(id: Long, title: String, artist: String) = DeezerTrack(

@@ -5,6 +5,7 @@ import kotlinx.coroutines.withContext
 import org.json.JSONException
 import org.json.JSONObject
 import java.net.HttpURLConnection
+import java.net.URI
 import java.net.URL
 import java.net.URLEncoder
 import kotlin.math.abs
@@ -34,12 +35,38 @@ data class DeezerTrack(
 object DeezerSource {
 
     private val tokenPattern = Regex("""[\p{L}\p{N}]+""")
+    private val trackPath = Regex("""/(?:[a-z]{2}(?:-[a-z]{2})?/)?track/(\d+)(?:/|$)""", RegexOption.IGNORE_CASE)
+
+    /** Reconoce enlaces oficiales y los enlaces cortos que genera Compartir en Deezer. */
+    fun isDeezerLink(text: String): Boolean = runCatching {
+        val uri = URI(text.trim())
+        uri.scheme.equals("https", ignoreCase = true) && isDeezerHost(uri.host)
+    }.getOrDefault(false)
+
+    /** Extrae el id de una URL de pista ya expandida, con o sin prefijo de idioma. */
+    internal fun trackIdFromUrl(text: String): Long? = runCatching {
+        val uri = URI(text.trim())
+        if (!uri.scheme.equals("https", ignoreCase = true) || !isDeezerHost(uri.host)) return@runCatching null
+        trackPath.find(uri.path.orEmpty())?.groupValues?.get(1)?.toLongOrNull()
+    }.getOrNull()
 
     suspend fun search(query: String, limit: Int = 25): List<DeezerTrack> =
         withContext(Dispatchers.IO) {
-            val primary = searchOnce(query, limit)
-            val fallback = fallbackTokens(query, primary).flatMap { searchOnce(it, limit) }
-            mergeResults(query, primary, fallback, limit)
+            val input = query.trim()
+            if (isDeezerLink(input)) {
+                val id = trackIdFromUrl(input)
+                    ?: trackIdFromUrl(expandLink(input))
+                    ?: throw IllegalArgumentException("El enlace de Deezer no apunta a una canción")
+                return@withContext listOfNotNull(fetchTrack(id))
+            }
+
+            val primary = searchOnce(input, limit)
+            val fallback = fallbackTokens(input, primary).flatMap { searchOnce(it, limit) }
+            // El índice general puede devolver una canción homónima antigua y no
+            // incluir aún el lanzamiento nuevo. El catálogo del artista sí contiene
+            // todas sus versiones, incluso cuando ya hubo una coincidencia completa.
+            val catalog = runCatching { searchArtistCatalog(input, limit) }.getOrDefault(emptyList())
+            mergeResults(input, catalog + primary, fallback, limit)
         }
 
     private fun searchOnce(query: String, limit: Int): List<DeezerTrack> {
@@ -50,26 +77,103 @@ object DeezerSource {
     internal fun parseSearch(json: String): List<DeezerTrack> {
         return try {
             val data = JSONObject(json).optJSONArray("data") ?: return emptyList()
-            (0 until data.length()).mapNotNull { i ->
-                val t = data.optJSONObject(i) ?: return@mapNotNull null
-                val title = t.optString("title")
-                if (title.isBlank()) return@mapNotNull null
-                val album = t.optJSONObject("album")
-                DeezerTrack(
-                    id = t.optLong("id"),
-                    title = title,
-                    artist = t.optJSONObject("artist")?.optString("name").orEmpty()
-                        .ifBlank { "Desconocido" },
-                    album = album?.optString("title").orEmpty(),
-                    durationSec = t.optInt("duration", 0),
-                    coverUrl = album?.optString("cover_big").orEmpty()
-                        .ifBlank { album?.optString("cover_medium").orEmpty() },
-                    previewUrl = t.optString("preview"),
-                )
-            }
+            (0 until data.length()).mapNotNull { i -> parseTrack(data.optJSONObject(i)) }
         } catch (_: JSONException) {
             emptyList()
         }
+    }
+
+    internal fun parseTrack(t: JSONObject?): DeezerTrack? {
+        t ?: return null
+        val id = t.optLong("id")
+        val title = t.optString("title")
+        if (id <= 0 || title.isBlank()) return null
+        val album = t.optJSONObject("album")
+        return DeezerTrack(
+            id = id,
+            title = title,
+            artist = t.optJSONObject("artist")?.optString("name").orEmpty()
+                .ifBlank { "Desconocido" },
+            album = album?.optString("title").orEmpty(),
+            durationSec = t.optInt("duration", 0),
+            coverUrl = album?.optString("cover_big").orEmpty()
+                .ifBlank { album?.optString("cover_medium").orEmpty() },
+            previewUrl = t.optString("preview"),
+        )
+    }
+
+    private fun fetchTrack(id: Long): DeezerTrack? {
+        val root = JSONObject(fetch("https://api.deezer.com/track/$id"))
+        if (root.has("error")) return null
+        return parseTrack(root)
+    }
+
+    private fun searchArtistCatalog(query: String, limit: Int): List<DeezerTrack> {
+        if ('"' in query || '\'' in query || ':' in query) return emptyList()
+        val queryTokens = queryTokens(query)
+        if (queryTokens.size < 2) return emptyList()
+        val edgeSize = minOf(3, queryTokens.size - 1)
+        val artistQueries = listOf(
+            query,
+            queryTokens.takeLast(edgeSize).joinToString(" "),
+            queryTokens.take(edgeSize).joinToString(" "),
+        ).distinct()
+
+        val artists = artistQueries.firstNotNullOfOrNull { candidate ->
+            val q = URLEncoder.encode(candidate, "UTF-8")
+            val data = JSONObject(fetch("https://api.deezer.com/search/artist?q=$q&limit=8"))
+                .optJSONArray("data") ?: return@firstNotNullOfOrNull null
+            (0 until data.length()).mapNotNull { i ->
+                val artist = data.optJSONObject(i) ?: return@mapNotNull null
+                val id = artist.optLong("id")
+                val tokens = queryTokens(artist.optString("name"))
+                if (id <= 0 || tokens.isEmpty() || !queryTokens.containsAll(tokens)) null else id to tokens
+            }.take(3).takeIf { it.isNotEmpty() }
+        }.orEmpty()
+
+        val recovered = mutableListOf<DeezerTrack>()
+        for ((artistId, artistTokens) in artists) {
+            val titleTokens = queryTokens.filterNot { it in artistTokens }
+            if (titleTokens.isEmpty()) continue
+            val albums = JSONObject(fetch("https://api.deezer.com/artist/$artistId/albums?limit=100"))
+                .optJSONArray("data") ?: continue
+            val matchingAlbums = (0 until albums.length()).mapNotNull(albums::optJSONObject)
+                .filter { queryTokens(it.optString("title")).containsAll(titleTokens) }
+                .take(5)
+            for (album in matchingAlbums) {
+                val albumId = album.optLong("id")
+                if (albumId <= 0) continue
+                val tracks = JSONObject(fetch("https://api.deezer.com/album/$albumId/tracks?limit=100"))
+                    .optJSONArray("data") ?: continue
+                for (i in 0 until tracks.length()) {
+                    val raw = tracks.optJSONObject(i) ?: continue
+                    raw.put("album", JSONObject().apply {
+                        put("title", album.optString("title"))
+                        put("cover_big", album.optString("cover_big"))
+                        put("cover_medium", album.optString("cover_medium"))
+                    })
+                    parseTrack(raw)?.takeIf { matchesQuery(it, queryTokens) }?.let(recovered::add)
+                    if (recovered.size >= limit) return recovered
+                }
+            }
+        }
+        return recovered
+    }
+
+    internal fun matchesQuery(track: DeezerTrack, tokens: List<String>): Boolean {
+        val searchable = queryTokens("${track.title} ${track.artist} ${track.album}")
+        return tokens.isNotEmpty() && searchable.containsAll(tokens)
+    }
+
+    /** Sigue el redirect de un enlace corto cuyo host inicial pertenece a Deezer. */
+    private fun expandLink(url: String): String {
+        val conn = URL(url).openConnection() as HttpURLConnection
+        conn.instanceFollowRedirects = true
+        conn.connectTimeout = 15_000
+        conn.readTimeout = 15_000
+        conn.setRequestProperty("User-Agent", USER_AGENT)
+        conn.responseCode
+        return conn.url.toString().also { conn.disconnect() }
     }
 
     internal fun queryTokens(query: String): List<String> =
@@ -146,14 +250,19 @@ object DeezerSource {
     private fun normalize(s: String): String =
         s.lowercase().replace(Regex("""[^a-z0-9]"""), "")
 
+    private fun isDeezerHost(host: String?): Boolean {
+        val normalized = host?.lowercase() ?: return false
+        return normalized == "deezer.com" || normalized.endsWith(".deezer.com")
+    }
+
     private fun fetch(url: String): String {
         val conn = URL(url).openConnection() as HttpURLConnection
         conn.connectTimeout = 15_000
         conn.readTimeout = 15_000
-        conn.setRequestProperty(
-            "User-Agent",
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        )
+        conn.setRequestProperty("User-Agent", USER_AGENT)
         return conn.inputStream.bufferedReader().readText().also { conn.disconnect() }
     }
+
+    private const val USER_AGENT =
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 }

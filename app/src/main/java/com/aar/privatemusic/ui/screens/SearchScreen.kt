@@ -384,6 +384,9 @@ fun SearchScreen(
                                 "playlist; si tiene más, el resto se quedará fuera"
                         }
                     }
+                } else if (DeezerSource.isDeezerLink(requestedQuery)) {
+                    val found = DeezerSource.search(requestedQuery)
+                    if (isCurrent()) deezerTracks = found
                 } else when (requestedSource) {
                     "1337x" -> {
                         val found = com.aar.privatemusic.downloader.Torrent1337xSource.search(requestedQuery, limit = 30)
