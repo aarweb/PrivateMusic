@@ -35,6 +35,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.aar.privatemusic.PrivateMusicApp
+import com.aar.privatemusic.ui.components.rememberSongListState
 import com.aar.privatemusic.data.BrowseCollection
 import com.aar.privatemusic.data.LibraryBrowseLogic
 import com.aar.privatemusic.data.db.Song
@@ -395,7 +396,8 @@ private fun BrowseGroupDetail(
                 BrowseMessage("Este grupo ya no contiene canciones.")
             }
         } else {
-            LazyColumn(Modifier.fillMaxSize()) {
+            val songListState = rememberSongListState(songs.isNotEmpty())
+            LazyColumn(Modifier.fillMaxSize(), state = songListState) {
                 items(songs, key = { it.id }, contentType = { "browse-song" }) { song ->
                     SongRow(
                         song = song,

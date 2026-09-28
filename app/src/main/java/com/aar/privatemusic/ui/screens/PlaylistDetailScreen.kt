@@ -50,6 +50,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.aar.privatemusic.PrivateMusicApp
+import com.aar.privatemusic.ui.components.SongListRefreshRate
 import com.aar.privatemusic.ui.components.AddToPlaylistDialog
 import com.aar.privatemusic.ui.components.ArtImage
 import com.aar.privatemusic.ui.components.MusicCreditsDialog
@@ -141,6 +142,7 @@ fun PlaylistDetailScreen(app: PrivateMusicApp, playlistId: Long, onBack: () -> U
     BackHandler(enabled = selectionMode) { exitSelection() }
 
     val lazyListState = rememberLazyListState()
+    SongListRefreshRate(lazyListState, songs.isNotEmpty())
     val reorderableState = rememberReorderableLazyListState(lazyListState) { from, to ->
         // Por clave y no por índice: los índices de la lista perezosa cuentan
         // también la cabecera, así que usarlos movía la canción de al lado.

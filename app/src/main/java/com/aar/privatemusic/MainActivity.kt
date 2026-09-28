@@ -3,12 +3,20 @@ package com.aar.privatemusic
 import android.Manifest
 import android.content.Intent
 import android.os.Build
+import android.os.PowerManager
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.IntentFilter
+import android.hardware.display.DisplayManager
+import android.view.Display
 import android.os.Bundle
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import com.aar.privatemusic.downloader.PlaylistLinkResolver
 import com.aar.privatemusic.downloader.SpotifyResolver
 import com.aar.privatemusic.util.UpdateGate
@@ -35,6 +43,8 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
@@ -46,6 +56,10 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.aar.privatemusic.ui.components.MiniPlayer
+import com.aar.privatemusic.ui.components.LocalSongListRefreshRequests
+import com.aar.privatemusic.util.RefreshMode
+import com.aar.privatemusic.util.RefreshRatePolicy
+import com.aar.privatemusic.util.RefreshRateRequests
 import com.aar.privatemusic.ui.screens.ArtistScreen
 import com.aar.privatemusic.ui.screens.AlbumScreen
 import com.aar.privatemusic.ui.screens.AutoPlaylistScreen
@@ -104,7 +118,9 @@ class MainActivity : ComponentActivity() {
                 }
             }
             PrivateMusicTheme(themeMode) {
-                MainScaffold(app)
+                SongListRefreshRateProvider {
+                    MainScaffold(app)
+                }
             }
         }
     }
@@ -143,6 +159,69 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+}
+
+@Composable
+private fun MainActivity.SongListRefreshRateProvider(content: @Composable () -> Unit) {
+    val requests = remember(this) {
+        RefreshRateRequests(window.attributes.preferredRefreshRate) { rate ->
+            val attributes = window.attributes
+            if (attributes.preferredRefreshRate != rate) {
+                attributes.preferredRefreshRate = rate
+                window.attributes = attributes
+            }
+        }
+    }
+    DisposableEffect(this, requests) {
+        val displays = getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
+        val power = getSystemService(Context.POWER_SERVICE) as PowerManager
+        fun refreshDisplay() {
+            val display = runCatching { window.decorView.display ?: displays.getDisplay(Display.DEFAULT_DISPLAY) }
+                .getOrNull()
+            val maximum = runCatching {
+                val activeDisplay = display ?: return@runCatching null
+                val current = activeDisplay.mode
+                fun android.view.Display.Mode.toPolicy() = RefreshMode(
+                    physicalWidth, physicalHeight, refreshRate,
+                    if (Build.VERSION.SDK_INT >= 31) alternativeRefreshRates.toList() else emptyList(),
+                )
+                RefreshRatePolicy.fastestAtCurrentResolution(
+                    current.toPolicy(), activeDisplay.supportedModes.map { it.toPolicy() },
+                )
+            }.getOrNull()
+            requests.setMaximum(maximum)
+        }
+        val displayListener = object : DisplayManager.DisplayListener {
+            override fun onDisplayAdded(displayId: Int) = refreshDisplay()
+            override fun onDisplayRemoved(displayId: Int) = refreshDisplay()
+            override fun onDisplayChanged(displayId: Int) = refreshDisplay()
+        }
+        val powerReceiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                requests.setPowerSaver(power.isPowerSaveMode)
+            }
+        }
+        val lifecycleObserver = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_RESUME -> { requests.setResumed(true); refreshDisplay() }
+                Lifecycle.Event.ON_PAUSE -> requests.setResumed(false)
+                else -> Unit
+            }
+        }
+        requests.setPowerSaver(power.isPowerSaveMode)
+        refreshDisplay()
+        requests.setResumed(lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED))
+        lifecycle.addObserver(lifecycleObserver)
+        displays.registerDisplayListener(displayListener, null)
+        registerReceiver(powerReceiver, IntentFilter(PowerManager.ACTION_POWER_SAVE_MODE_CHANGED))
+        onDispose {
+            unregisterReceiver(powerReceiver)
+            displays.unregisterDisplayListener(displayListener)
+            lifecycle.removeObserver(lifecycleObserver)
+            requests.close()
+        }
+    }
+    CompositionLocalProvider(LocalSongListRefreshRequests provides requests, content = content)
 }
 
 private data class Tab(val route: String, val label: String, val icon: @Composable () -> Unit)

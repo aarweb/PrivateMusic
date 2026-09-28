@@ -31,6 +31,7 @@ Requiere Android 8.0+ (arm64).
 
 **Biblioteca y playlists**
 - Favoritos, historial, ordenación, snooze de canciones y fichas completas de artistas y álbumes en la Biblioteca.
+- Solicitud de refresco máximo mientras desplazas listas con canciones, incluida la inercia; vuelve a la preferencia previa al detenerse y respeta el ahorro de batería.
 - **Explorar por géneros, décadas, años y carpetas**, con reproducción completa o aleatoria. Lee los tags locales y permite completar bajo demanda los géneros que falten con MusicBrainz.
 - **Búsqueda global unificada**: encuentra al instante canciones, álbumes, artistas, géneros, playlists y texto de letras locales; al enviar la consulta añade resultados online debajo sin ocultar tu biblioteca.
 - Playlists normales (drag & drop, portadas personalizadas, pins), **carpetas** para organizarlas, **smart playlists** por reglas y automáticas (Más escuchadas, Olvidadas, Top de tu temporada, **Mix de hoy**).
@@ -86,6 +87,11 @@ incluya toda la playlist y que apagar Aleatorio restaure el orden y conserve
 la posición de una reproducción pausada.
 
 El caso, la causa y los resultados se documentan en [QA del modo aleatorio](docs/qa/aleatorio.md).
+
+Las listas solicitan a Android la mayor tasa de refresco válida para la resolución
+actual durante el desplazamiento; el sistema decide la frecuencia física final.
+El indicador de Canvas comprueba los archivos en segundo plano. Las pruebas y los
+límites de la validación están en [QA de fluidez de listas](docs/qa/fluidez-listas.md).
 
 ## Stack
 

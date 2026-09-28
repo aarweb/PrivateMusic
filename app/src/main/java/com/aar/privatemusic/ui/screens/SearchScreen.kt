@@ -60,6 +60,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.platform.LocalContext
 import com.aar.privatemusic.PrivateMusicApp
+import com.aar.privatemusic.ui.components.rememberSongListState
 import com.aar.privatemusic.downloader.DeezerSource
 import com.aar.privatemusic.downloader.DeezerTrack
 import com.aar.privatemusic.downloader.DownloadState
@@ -732,7 +733,8 @@ fun SearchScreen(
                 globalLocalResults.playlists.isNotEmpty()
             val searchingLyrics = globalLyricsState.query == trimmedQuery &&
                 globalLyricsState.searching
-            LazyColumn(modifier = Modifier.fillMaxSize()) {
+            val songListState = rememberSongListState(globalLocalResults.songs.isNotEmpty())
+            LazyColumn(modifier = Modifier.fillMaxSize(), state = songListState) {
                 if (trimmedQuery.isBlank()) {
                     item(key = "global-help") {
                         Column(

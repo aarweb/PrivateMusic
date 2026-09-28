@@ -36,6 +36,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.aar.privatemusic.PrivateMusicApp
+import com.aar.privatemusic.ui.components.rememberSongListState
 import com.aar.privatemusic.data.AlbumCollection
 import com.aar.privatemusic.data.ArtistLogic
 import com.aar.privatemusic.ui.components.ArtImage
@@ -74,7 +75,8 @@ fun ArtistScreen(
     val cover = coverSong?.artPath?.let(::File)
         ?: coverSong?.thumbnailUrl?.takeIf { it.isNotBlank() }
 
-    LazyColumn(Modifier.fillMaxSize()) {
+    val songListState = rememberSongListState(songs.isNotEmpty())
+    LazyColumn(Modifier.fillMaxSize(), state = songListState) {
         item(key = "artist-header") {
             Row(
                 Modifier.fillMaxWidth().padding(16.dp),

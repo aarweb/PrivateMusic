@@ -26,6 +26,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.aar.privatemusic.PrivateMusicApp
+import com.aar.privatemusic.ui.components.rememberSongListState
 import com.aar.privatemusic.ui.components.SongRow
 
 enum class AutoPlaylistType(val route: String, val title: String) {
@@ -72,7 +73,8 @@ fun AutoPlaylistScreen(app: PrivateMusicApp, type: AutoPlaylistType, onBack: () 
             }
             return
         }
-        LazyColumn(Modifier.fillMaxSize()) {
+        val songListState = rememberSongListState(songs.isNotEmpty())
+        LazyColumn(Modifier.fillMaxSize(), state = songListState) {
             itemsIndexed(songs, key = { _, s -> s.id }) { index, song ->
                 SongRow(
                     song = song,

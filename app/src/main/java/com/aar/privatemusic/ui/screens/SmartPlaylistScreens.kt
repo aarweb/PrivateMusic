@@ -31,6 +31,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.aar.privatemusic.PrivateMusicApp
+import com.aar.privatemusic.ui.components.rememberSongListState
 import com.aar.privatemusic.data.db.SmartPlaylist
 import com.aar.privatemusic.ui.components.SongRow
 import kotlinx.coroutines.launch
@@ -97,7 +98,8 @@ fun SmartPlaylistDetailScreen(
             modifier = Modifier.padding(top = 8.dp),
         )
 
-        LazyColumn(Modifier.fillMaxSize()) {
+        val songListState = rememberSongListState(matching.isNotEmpty())
+        LazyColumn(Modifier.fillMaxSize(), state = songListState) {
             itemsIndexed(matching, key = { _, s -> s.id }) { index, song ->
                 SongRow(
                     song = song,

@@ -32,6 +32,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.aar.privatemusic.PrivateMusicApp
+import com.aar.privatemusic.ui.components.SongListRefreshRate
 import com.aar.privatemusic.ui.components.ArtImage
 import com.aar.privatemusic.ui.components.SongOverflowMenu
 import sh.calvin.reorderable.ReorderableItem
@@ -49,6 +50,7 @@ fun QueueScreen(app: PrivateMusicApp, onBack: () -> Unit, onOpenSavedQueues: () 
     }
 
     val lazyListState = rememberLazyListState()
+    SongListRefreshRate(lazyListState, queue.isNotEmpty())
     val reorderableState = rememberReorderableLazyListState(lazyListState) { from, to ->
         controller.moveQueueItem(from.index, to.index)
     }

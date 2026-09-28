@@ -71,6 +71,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.aar.privatemusic.PrivateMusicApp
+import com.aar.privatemusic.ui.components.rememberSongListState
 import com.aar.privatemusic.data.AlbumCollection
 import com.aar.privatemusic.data.AlbumLogic
 import com.aar.privatemusic.data.db.Song
@@ -559,7 +560,8 @@ fun LibraryScreen(
                 )
             }
         }
-        LazyColumn(Modifier.fillMaxSize()) {
+        val songListState = rememberSongListState(visibleSongs.isNotEmpty())
+        LazyColumn(Modifier.fillMaxSize(), state = songListState) {
             if (failedDownloads.isNotEmpty() && query.isBlank() && !selectionMode) {
                 item(key = "dl-errors-header") {
                     Text(
@@ -589,7 +591,9 @@ fun LibraryScreen(
                     )
                 }
                 item(key = "recent-row") {
+                    val recentListState = rememberSongListState(recent.isNotEmpty())
                     LazyRow(
+                        state = recentListState,
                         contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp),
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                     ) {

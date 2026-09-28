@@ -37,8 +37,12 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.produceState
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -372,6 +376,14 @@ private fun SongRowContent(
     supportingText: String?,
     trailing: (@Composable () -> Unit)?,
 ) {
+    val hasCanvas by key(song.videoPath) {
+        produceState(initialValue = false, key1 = song.videoPath) {
+            val path = song.videoPath
+            value = if (path.isNullOrBlank()) false else withContext(Dispatchers.IO) {
+                runCatching { File(path).let { it.isFile && it.canRead() } }.getOrDefault(false)
+            }
+        }
+    }
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -408,7 +420,7 @@ private fun SongRowContent(
                         modifier = Modifier.size(16.dp).padding(end = 2.dp),
                     )
                 }
-                if (song.videoPath?.let(::File)?.let { it.isFile && it.canRead() } == true) {
+                if (hasCanvas) {
                     Icon(
                         Icons.Filled.Videocam,
                         contentDescription = "Canvas disponible",
