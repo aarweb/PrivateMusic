@@ -647,7 +647,7 @@ class PlayerController(
         val n = c.mediaItemCount
         val start = c.currentMediaItemIndex + 1
         if (n - start < 2) return
-        val upcoming = (start until n).map { c.getMediaItemAt(it) }.shuffled()
+        val upcoming = QueueLogic.reshuffled((start until n).map { c.getMediaItemAt(it) })
         c.removeMediaItems(start, n)
         c.addMediaItems(start, upcoming)
     }
@@ -688,7 +688,7 @@ class PlayerController(
             orderBeforeShuffle = (0 until n).map { c.getMediaItemAt(it) }
             _shuffle.value = true
             if (n - current > 1) {
-                val upcoming = ((current + 1) until n).map { c.getMediaItemAt(it) }.shuffled()
+                val upcoming = QueueLogic.reshuffled(((current + 1) until n).map { c.getMediaItemAt(it) })
                 c.removeMediaItems(current + 1, n)
                 c.addMediaItems(current + 1, upcoming)
             }

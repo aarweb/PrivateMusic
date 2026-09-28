@@ -5,6 +5,7 @@ import com.aar.privatemusic.data.db.PlayEvent
 import com.aar.privatemusic.data.db.Song
 import com.aar.privatemusic.desktop.DesktopSettings
 import com.aar.privatemusic.desktop.audio.AudioEngine
+import com.aar.privatemusic.player.QueueLogic
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -166,14 +167,15 @@ class DesktopPlayer(
 
     fun playQueue(songs: List<Song>, startIndex: Int = 0) {
         if (songs.isEmpty()) return
+        _shuffle.value = false
         _queue.value = songs
         playAt(startIndex.coerceIn(songs.indices))
     }
 
     fun playShuffled(songs: List<Song>) {
         if (songs.isEmpty()) return
-        _shuffle.value = true
         playQueue(songs.shuffled(), 0)
+        _shuffle.value = true
     }
 
     fun addToQueue(song: Song) {
@@ -286,7 +288,7 @@ class DesktopPlayer(
         _shuffle.value = !_shuffle.value
         if (!_shuffle.value || _index.value < 0) return
         val played = _queue.value.take(_index.value + 1)
-        val upcoming = _queue.value.drop(_index.value + 1).shuffled()
+        val upcoming = QueueLogic.reshuffled(_queue.value.drop(_index.value + 1))
         _queue.value = played + upcoming
     }
 

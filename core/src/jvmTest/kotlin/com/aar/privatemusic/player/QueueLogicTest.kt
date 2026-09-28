@@ -1,5 +1,6 @@
 package com.aar.privatemusic.player
 
+import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -101,6 +102,31 @@ class QueueLogicTest {
     }
 
     // ---- Aleatorio: mantener al día la copia del orden original ----
+
+    @Test
+    fun `activar aleatorio cambia siempre dos canciones pendientes distintas`() {
+        val upcoming = listOf("b", "c")
+        for (seed in 0..100) {
+            assertEquals(listOf("c", "b"), QueueLogic.reshuffled(upcoming, Random(seed)))
+        }
+    }
+
+    @Test
+    fun `barajar cambia el orden conservando todas las copias`() {
+        val upcoming = listOf("a", "b", "a", "c")
+        for (seed in 0..100) {
+            val shuffled = QueueLogic.reshuffled(upcoming, Random(seed))
+            assertTrue(shuffled != upcoming)
+            assertEquals(upcoming.sorted(), shuffled.sorted())
+        }
+    }
+
+    @Test
+    fun `sin canciones distintas no hay otro orden posible`() {
+        for (upcoming in listOf(emptyList(), listOf("a"), listOf("a", "a", "a"))) {
+            assertEquals(upcoming, QueueLogic.reshuffled(upcoming, Random(0)))
+        }
+    }
 
     @Test
     fun `encolar a continuacion entra detras de la que suena`() {

@@ -13,6 +13,7 @@ import java.io.File
 import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
@@ -38,8 +39,9 @@ class DesktopPlayerNextTest {
         override var onFinished: (() -> Unit)? = null
 
         var settleCount = 0
+        var playCount = 0
 
-        override fun play(file: File) { playing.value = true }
+        override fun play(file: File) { playCount++; playing.value = true }
         override fun playUrl(url: String) {}
         override fun crossfadeTo(file: File, gain: Float, durationMs: Long, rateOut: Float) {
             fading.value = true
@@ -62,6 +64,56 @@ class DesktopPlayerNextTest {
         id = id, title = id, artist = "x", durationSec = 10,
         filePath = path, artPath = null, thumbnailUrl = null, addedAt = 0,
     )
+
+    @Test
+    fun `activar aleatorio baraja las pendientes sin reiniciar la cancion`() {
+        val dir = Files.createTempDirectory("pmshuffle").toFile()
+        val file = File(dir, "song.mp3").apply { writeText("x") }
+        val database = openMusicDatabase(File(dir, "db"))
+        try {
+            val engine = FakeEngine()
+            val player = DesktopPlayer(engine, database.musicDao(), DesktopSettings(dir))
+            val songs = (0..3).map { song("s$it", file.path) }
+            player.playQueue(songs, 1)
+            engine.position.value = 12_000L
+            val playCount = engine.playCount
+
+            player.toggleShuffle()
+
+            assertTrue(player.shuffle.value)
+            assertEquals(listOf(songs[0], songs[1], songs[3], songs[2]), player.queue.value)
+            assertEquals(1, player.index.value)
+            assertEquals(songs[1], player.current.value)
+            assertEquals(12_000L, engine.positionMs.value)
+            assertEquals(playCount, engine.playCount)
+        } finally {
+            database.close()
+        }
+    }
+
+    @Test
+    fun `reproducir en orden limpia el aleatorio de la cola anterior`() {
+        val dir = Files.createTempDirectory("pmshuffle").toFile()
+        val file = File(dir, "song.mp3").apply { writeText("x") }
+        val database = openMusicDatabase(File(dir, "db"))
+        try {
+            val engine = FakeEngine()
+            val player = DesktopPlayer(engine, database.musicDao(), DesktopSettings(dir))
+            val songs = (0..2).map { song("s$it", file.path) }
+            player.playShuffled(songs)
+            assertTrue(player.shuffle.value)
+
+            player.playQueue(songs)
+            assertFalse(player.shuffle.value)
+            assertEquals(songs, player.queue.value)
+
+            player.toggleShuffle()
+            assertTrue(player.shuffle.value)
+            assertEquals(listOf(songs[0], songs[2], songs[1]), player.queue.value)
+        } finally {
+            database.close()
+        }
+    }
 
     @Test
     fun `siguiente en mitad de un cruce no se salta una cancion`() = runBlocking {

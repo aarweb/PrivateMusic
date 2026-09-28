@@ -1,5 +1,7 @@
 package com.aar.privatemusic.player
 
+import kotlin.random.Random
+
 /**
  * La aritmética de la cola que es nuestra, no de ExoPlayer.
  *
@@ -54,6 +56,21 @@ object QueueLogic {
         if (present.getOrNull(savedIndex) == true) savedPositionMs.coerceAtLeast(0L) else 0L
 
     // ---- Aleatorio ----
+
+    /** Baraja las pendientes y evita devolver el mismo orden si puede cambiar. */
+    fun <T> reshuffled(items: List<T>, random: Random = Random.Default): List<T> {
+        if (items.size < 2) return items.toList()
+        val shuffled = items.shuffled(random).toMutableList()
+        if (shuffled == items) {
+            val different = items.indexOfFirst { it != items.first() }
+            if (different >= 0) {
+                shuffled[0] = items[different]
+                shuffled[different] = items.first()
+            }
+        }
+        return shuffled
+    }
+
     //
     // Mientras el aleatorio está puesto guardamos aparte el orden original, para
     // devolverlo al apagarlo. Esa copia tiene que enterarse de lo que pasa en la
