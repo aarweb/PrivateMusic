@@ -43,6 +43,7 @@ class DesktopPlayer(
 
     private val _shuffle = MutableStateFlow(false)
     val shuffle: StateFlow<Boolean> = _shuffle.asStateFlow()
+    private var orderBeforeShuffle: List<Song>? = null
 
     private val _repeat = MutableStateFlow(RepeatMode.OFF)
     val repeat: StateFlow<RepeatMode> = _repeat.asStateFlow()
@@ -168,6 +169,7 @@ class DesktopPlayer(
     fun playQueue(songs: List<Song>, startIndex: Int = 0) {
         if (songs.isEmpty()) return
         _shuffle.value = false
+        orderBeforeShuffle = null
         _queue.value = songs
         playAt(startIndex.coerceIn(songs.indices))
     }
@@ -175,11 +177,13 @@ class DesktopPlayer(
     fun playShuffled(songs: List<Song>) {
         if (songs.isEmpty()) return
         playQueue(songs.shuffled(), 0)
+        orderBeforeShuffle = songs.toList()
         _shuffle.value = true
     }
 
     fun addToQueue(song: Song) {
         _queue.value = _queue.value + song
+        orderBeforeShuffle = orderBeforeShuffle?.plus(song)
         if (_index.value < 0) playAt(0)
     }
 
@@ -195,6 +199,10 @@ class DesktopPlayer(
     fun removeFromQueue(position: Int) {
         val queue = _queue.value
         if (position !in queue.indices) return
+        orderBeforeShuffle = orderBeforeShuffle?.toMutableList()?.apply {
+            val removed = indexOfFirst { it.id == queue[position].id }
+            if (removed >= 0) removeAt(removed)
+        }
         val playing = _index.value
         _queue.value = queue.toMutableList().apply { removeAt(position) }
 
@@ -283,13 +291,28 @@ class DesktopPlayer(
 
     fun seekTo(ms: Long) = engine.seekTo(ms)
 
-    /** Baraja lo que queda por sonar; lo ya escuchado no se toca. */
+    /** Conserva lo que suena y baraja el resto de la playlist, también desde su última pista. */
     fun toggleShuffle() {
-        _shuffle.value = !_shuffle.value
-        if (!_shuffle.value || _index.value < 0) return
-        val played = _queue.value.take(_index.value + 1)
-        val upcoming = QueueLogic.reshuffled(_queue.value.drop(_index.value + 1))
-        _queue.value = played + upcoming
+        val queue = _queue.value
+        val current = _index.value
+        if (current !in queue.indices) return
+        if (!_shuffle.value) {
+            orderBeforeShuffle = queue.toList()
+            _queue.value = QueueLogic.shuffledQueueOrder(queue.size, current).map { queue[it] }
+            _index.value = 0
+            _shuffle.value = true
+        } else {
+            val original = orderBeforeShuffle
+            orderBeforeShuffle = null
+            _shuffle.value = false
+            if (original != null) {
+                val at = original.indexOfFirst { it.id == queue[current].id }
+                if (at >= 0) {
+                    _queue.value = original
+                    _index.value = at
+                }
+            }
+        }
     }
 
     fun cycleRepeat() {

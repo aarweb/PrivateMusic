@@ -676,22 +676,23 @@ class PlayerController(
      * un orden y sonaba otro; arrastrar una canción no cambiaba nada y el dado
      * tampoco. Reordenando la cola, lo que ves es lo que suena.
      *
-     * Sólo se toca lo que queda por sonar: la canción actual no se interrumpe.
+     * La canción actual pasa al inicio sin interrumpirse. Las demás, incluidas
+     * las situadas antes de ella, forman el nuevo recorrido aleatorio. Elegir
+     * la última canción de una playlist no deja así el modo aleatorio sin cola.
      */
     fun toggleShuffle() {
         val c = controller ?: return
         val n = c.mediaItemCount
         if (n == 0) return
         val current = c.currentMediaItemIndex
+        if (current !in 0 until n) return
 
         if (!_shuffle.value) {
             orderBeforeShuffle = (0 until n).map { c.getMediaItemAt(it) }
             _shuffle.value = true
-            if (n - current > 1) {
-                val upcoming = QueueLogic.reshuffled(((current + 1) until n).map { c.getMediaItemAt(it) })
-                c.removeMediaItems(current + 1, n)
-                c.addMediaItems(current + 1, upcoming)
-            }
+            queuedIds.clear()
+            c.shuffleModeEnabled = false
+            reorderQueue(c, QueueLogic.shuffledQueueOrder(n, current))
             return
         }
 
@@ -715,6 +716,20 @@ class PlayerController(
         val after = original.drop(at + 1)
         if (before.isNotEmpty()) c.addMediaItems(0, before)
         if (after.isNotEmpty()) c.addMediaItems(after)
+    }
+
+    /** Aplica una permutación ya calculada, siguiendo cada copia por su índice original. */
+    private fun reorderQueue(player: Player, order: List<Int>) {
+        val positions = order.indices.toMutableList()
+        order.forEachIndexed { to, originalIndex ->
+            val from = positions.indexOf(originalIndex)
+            if (from != to) {
+                // Mover conserva la pista y su posición; no pasa por la resolución
+                // asíncrona de onAddMediaItems ni deja la cola vacía entre comandos.
+                player.moveMediaItem(from, to)
+                positions.add(to, positions.removeAt(from))
+            }
+        }
     }
 
     /**

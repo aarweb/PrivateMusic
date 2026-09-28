@@ -74,18 +74,30 @@ class DesktopPlayerNextTest {
             val engine = FakeEngine()
             val player = DesktopPlayer(engine, database.musicDao(), DesktopSettings(dir))
             val songs = (0..3).map { song("s$it", file.path) }
-            player.playQueue(songs, 1)
+            player.playQueue(songs, songs.lastIndex)
             engine.position.value = 12_000L
             val playCount = engine.playCount
 
             player.toggleShuffle()
 
             assertTrue(player.shuffle.value)
-            assertEquals(listOf(songs[0], songs[1], songs[3], songs[2]), player.queue.value)
-            assertEquals(1, player.index.value)
-            assertEquals(songs[1], player.current.value)
+            assertEquals(songs.last(), player.queue.value.first())
+            assertEquals(songs.map { it.id }.sorted(), player.queue.value.map { it.id }.sorted())
+            assertEquals(0, player.index.value)
+            assertEquals(songs.last(), player.current.value)
             assertEquals(12_000L, engine.positionMs.value)
             assertEquals(playCount, engine.playCount)
+
+            val nextSong = player.queue.value[1]
+            player.next()
+            assertEquals(nextSong, player.current.value)
+            assertEquals(1, player.index.value)
+
+            player.toggleShuffle()
+            assertFalse(player.shuffle.value)
+            assertEquals(songs, player.queue.value)
+            assertEquals(nextSong, player.current.value)
+            assertEquals(songs.indexOf(nextSong), player.index.value)
         } finally {
             database.close()
         }
@@ -110,6 +122,33 @@ class DesktopPlayerNextTest {
             player.toggleShuffle()
             assertTrue(player.shuffle.value)
             assertEquals(listOf(songs[0], songs[2], songs[1]), player.queue.value)
+        } finally {
+            database.close()
+        }
+    }
+
+    @Test
+    fun `apagar aleatorio conserva las canciones anadidas y quitadas`() {
+        val dir = Files.createTempDirectory("pmshuffle").toFile()
+        val file = File(dir, "song.mp3").apply { writeText("x") }
+        val database = openMusicDatabase(File(dir, "db"))
+        try {
+            val engine = FakeEngine()
+            val player = DesktopPlayer(engine, database.musicDao(), DesktopSettings(dir))
+            val songs = (0..3).map { song("s$it", file.path) }
+            player.playQueue(songs, songs.lastIndex)
+            player.toggleShuffle()
+            player.removeFromQueue(player.queue.value.indexOf(songs[0]))
+            val appended = song("extra", file.path)
+            player.addToQueue(appended)
+            val playCount = engine.playCount
+
+            player.toggleShuffle()
+
+            assertEquals(songs.drop(1) + appended, player.queue.value)
+            assertEquals(songs.last(), player.current.value)
+            assertEquals(2, player.index.value)
+            assertEquals(playCount, engine.playCount)
         } finally {
             database.close()
         }

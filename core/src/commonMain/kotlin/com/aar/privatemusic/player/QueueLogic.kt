@@ -57,6 +57,13 @@ object QueueLogic {
 
     // ---- Aleatorio ----
 
+    /** La pista actual encabeza el nuevo recorrido; el resto de la cola puede sonar después. */
+    fun shuffledQueueOrder(size: Int, currentIndex: Int, random: Random = Random.Default): List<Int> {
+        val indices = (0 until size).toList()
+        if (currentIndex !in indices.indices) return indices
+        return listOf(currentIndex) + reshuffled(indices.filter { it != currentIndex }, random)
+    }
+
     /** Baraja las pendientes y evita devolver el mismo orden si puede cambiar. */
     fun <T> reshuffled(items: List<T>, random: Random = Random.Default): List<T> {
         if (items.size < 2) return items.toList()

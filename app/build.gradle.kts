@@ -12,8 +12,9 @@ android {
         applicationId = "com.aar.privatemusic"
         minSdk = 26
         targetSdk = 35
-        versionCode = 137
-        versionName = "2.36"
+        versionCode = 138
+        versionName = "2.37"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         ndk {
             // arm64 only: every phone since ~2016. Halves the APK (yt-dlp/ffmpeg per ABI).
@@ -77,6 +78,12 @@ android {
 
 dependencies {
     testImplementation(kotlin("test"))
+    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.test:rules:1.6.1")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation(platform(libs.androidx.compose.bom))
+    androidTestImplementation("androidx.compose.ui:ui-test-junit4")
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
     // Audio fingerprinting (Chromaprint via MediaCodec) for the AcoustID fallback.
     implementation("com.github.cy745:fpcalc:1.3")
     implementation(libs.androidx.core.ktx)

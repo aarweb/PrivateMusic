@@ -104,6 +104,34 @@ class QueueLogicTest {
     // ---- Aleatorio: mantener al día la copia del orden original ----
 
     @Test
+    fun `desde la ultima cancion el resto de la playlist queda disponible`() {
+        for (seed in 0..100) {
+            val order = QueueLogic.shuffledQueueOrder(4, 3, Random(seed))
+            assertEquals(3, order.first())
+            assertEquals(listOf(0, 1, 2, 3), order.sorted())
+            assertTrue(order.drop(1) != listOf(0, 1, 2))
+        }
+    }
+
+    @Test
+    fun `cualquier punto de inicio conserva todas las copias una sola vez`() {
+        for (size in 1..12) {
+            for (current in 0 until size) {
+                for (seed in 0..20) {
+                    val order = QueueLogic.shuffledQueueOrder(size, current, Random(seed))
+                    assertEquals(current, order.first())
+                    assertEquals((0 until size).toList(), order.sorted())
+                }
+            }
+        }
+        // Dos copias de la misma canción tienen índices propios.
+        val duplicates = listOf("a", "b", "a")
+        assertEquals(2, QueueLogic.shuffledQueueOrder(duplicates.size, 2, Random(0)).first())
+        assertEquals(emptyList(), QueueLogic.shuffledQueueOrder(0, -1))
+        assertEquals(listOf(0), QueueLogic.shuffledQueueOrder(1, 0))
+    }
+
+    @Test
     fun `activar aleatorio cambia siempre dos canciones pendientes distintas`() {
         val upcoming = listOf("b", "c")
         for (seed in 0..100) {

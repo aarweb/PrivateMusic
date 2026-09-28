@@ -73,6 +73,20 @@ Requiere JDK 17+ y Android SDK 35 (`local.properties` con `sdk.dir`).
 
 Las releases se publican automáticamente con GitHub Actions al subir un tag `v*`.
 
+Con un emulador Android 15 (API 35) x86_64 arrancado, la regresión del modo
+aleatorio se comprueba con los botones reales de la app y audio PCM local:
+
+```bash
+./gradlew :app:connectedDebugAndroidTest -Pemulator -Pandroid.testInstrumentationRunnerArguments.class=com.aar.privatemusic.player.ShufflePlaybackTest
+```
+
+La prueba selecciona la última canción de una playlist, activa Aleatorio y
+recorre la cola con Siguiente. También comprueba que una selección intermedia
+incluya toda la playlist y que apagar Aleatorio restaure el orden y conserve
+la posición de una reproducción pausada.
+
+El caso, la causa y los resultados se documentan en [QA del modo aleatorio](docs/qa/aleatorio.md).
+
 ## Stack
 
 Kotlin · Jetpack Compose (Material 3) · Media3/ExoPlayer (`MediaLibraryService`) · Room · [youtubedl-android](https://github.com/yausername/youtubedl-android) (yt-dlp + ffmpeg) · Coil · WorkManager · DSP propio para análisis de audio (FFT, cromagrama, autocorrelación).
