@@ -1,6 +1,6 @@
 # HiLight durante la reproducción
 
-Versión de entrega: **2.40** (versionCode **141**).
+Versión de entrega: **2.41** (versionCode **142**).
 
 Base: release publicada v2.38 (`df5d0a8`). Desarrollo aislado en `feat/hilight`,
 sin modificar el checkout principal con cambios anteriores.
@@ -24,9 +24,20 @@ magenta, desplazando los colores con cada pulso. El máximo de cada canal pasa
 de 16/255 a 192/255 (12 veces el valor anterior; no implica 12 veces el brillo
 físico). Cada pulso sigue terminando en negro. El servicio Shizuku se versiona
 con la app para reemplazar el código anterior tras actualizar.
-Este cambio permite comprobar si el blanco demasiado tenue causaba la falta
-de luz visible; esa causa aún no está confirmada en el Pixel real.
-No analiza el micrófono ni sincroniza con el ritmo de la canción. Pausa,
+El usuario confirmó que los colores de la 2.40 ya se ven físicamente.
+
+Desde 2.41, los pulsos responden a ataques de energía del audio PCM, con énfasis
+en graves, ventanas de 10 ms y un intervalo mínimo de 180 ms entre destellos.
+No usa micrófono ni un metrónomo fijo: el silencio no genera pulsos. Los eventos
+se comparan con la posición del AudioSink antes de enviarlos a las luces; se
+eliminan al vaciar el audio o saltar, y se descartan si llegan más de 150 ms tarde.
+La cola está limitada a 64 eventos. No modifica las muestras de sonido.
+Analiza PCM de 16 bits y float, también en el segundo reproductor del crossfade;
+una pista con volumen de fundido casi cero no dispara luces. Los formatos
+comprimidos/offload o PCM no admitidos no generan pulsos. La latencia física de
+Bluetooth, del firmware y del LED puede afectar la sincronía; pendiente de
+comprobar en el Pixel. Es detección de ataques, no identificación musical de
+cada tiempo del compás. Pausa,
 buffering sin audio, final de cola, Cast y destrucción del servicio apagan la
 luz. Durante un crossfade cuenta también el reproductor de salida.
 
@@ -40,7 +51,7 @@ luz. Durante un crossfade cuenta también el reproductor de salida.
   se utiliza un servicio Shizuku 13.1.5 autorizado expresamente por el usuario.
   El proveedor está protegido por `INTERACT_ACROSS_USERS_FULL`.
 - El proceso shell accede al servicio lights por Binder; su interfaz propia
-  solo permite comprobar soporte, emitir un pulso fijo y apagar. No acepta
+  solo permite comprobar soporte, emitir un pulso multicolor finito y apagar. No acepta
   comandos de shell, rutas de archivos ni patrones arbitrarios.
 - Las operaciones de hardware se serializan fuera del hilo de reproducción.
   Cada efecto es finito y termina en negro; no se usa repetición infinita.
@@ -64,7 +75,12 @@ Las pruebas Compose cubren ocultación, permiso explícito, estado deshabilitado
 activación y desactivación tras perder acceso. Las capturas de estos estados
 se guardan en el directorio externo `hilight-qa` de la app del emulador.
 
-Resultado local: **58 pruebas unitarias correctas**, y **5 pruebas Compose
+Resultado 2.41: **68 pruebas unitarias correctas**, incluidas diez nuevas
+para detección a 60/120/180 BPM, silencio, tono continuo, estéreo en oposición
+de fase, muestras float inválidas, espera de reproducción, descarte de eventos
+antiguos y cola acotada. La compilación release se verifica antes de publicar.
+
+Verificación de interfaz realizada en 2.39: **5 pruebas Compose
 correctas en cada tamaño, 390×844 y 768×1024**, con capturas del componente
 renderizado revisadas. `lintDebug` terminó sin errores en los archivos HiLight;
 el informe general conserva 157 errores en líneas ya presentes en v2.38.

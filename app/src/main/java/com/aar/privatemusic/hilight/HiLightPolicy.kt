@@ -2,7 +2,6 @@ package com.aar.privatemusic.hilight
 
 internal object HiLightPolicy {
     const val API = 37
-    const val HEARTBEAT_MS = 990L
     const val LEASE_MS = 2_500L
 
     fun isCandidate(sdk: Int, manufacturer: String, model: String): Boolean =

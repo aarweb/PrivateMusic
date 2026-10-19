@@ -93,7 +93,10 @@ object AudioDsp {
                             CrossfeedAudioProcessor(),
                         )
                     )
-                    .build()
+                    .build().let { sink ->
+                        val lights = (context.applicationContext as com.aar.privatemusic.PrivateMusicApp).hiLight
+                        if (lights.visible) HiLightAudioSink(sink, lights) else sink
+                    }
         }
 
     // --- (de)serialización de los filtros paramétricos ---

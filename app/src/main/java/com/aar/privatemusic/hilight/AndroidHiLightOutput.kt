@@ -50,9 +50,9 @@ internal class AndroidHiLightOutput private constructor(private val port: Port) 
             val point = sequenceBuilderClass.getMethod("addControlPoint", Long::class.javaPrimitiveType, Int::class.javaPrimitiveType)
             point.invoke(sequence, 0L, 0xff000000.toInt())
             // Rotate saturated colours across the array, with a 75% channel peak (was 6%).
-            // Each finite pulse still ends in black; this is not beat analysis.
-            point.invoke(sequence, frames(198), colors[(index + colorOffset) % colors.size])
-            point.invoke(sequence, frames(594), 0xff000000.toInt())
+            // Each finite pulse still ends in black; the PCM onset detector triggers each pulse.
+            point.invoke(sequence, frames(33), colors[(index + colorOffset) % colors.size])
+            point.invoke(sequence, frames(231), 0xff000000.toInt())
             effectBuilderClass.getMethod("addLightSequence", Light::class.java, sequenceClass)
                 .invoke(effect, light, sequenceBuilderClass.getMethod("build").invoke(sequence))
         }

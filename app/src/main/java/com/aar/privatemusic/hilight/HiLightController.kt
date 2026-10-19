@@ -15,9 +15,6 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.collectLatest
-import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import rikka.shizuku.Shizuku
 
@@ -77,17 +74,15 @@ class HiLightController(private val context: Context, private val settings: AppS
             scope.launch {
                 settings.hiLightEnabled.collect { commands.send(Command.Enabled(it)) }
             }
-            scope.launch {
-                combine(settings.hiLightEnabled, playback) { optedIn, localPlaying -> optedIn && localPlaying }
-                    .distinctUntilChanged().collectLatest { active ->
-                        if (active) while (true) {
-                            delay(HiLightPolicy.HEARTBEAT_MS)
-                            commands.send(Command.Tick)
-                        }
-                    }
-            }
+
         }
     }
+
+    fun wantsAudioBeats(): Boolean = visible && settings.hiLightEnabled.value
+    fun onAudioBeat() {
+        if (wantsAudioBeats() && playback.value) commands.trySend(Command.Beat(android.os.SystemClock.elapsedRealtime()))
+    }
+    private var lastBeatAt = Long.MIN_VALUE / 2
 
     fun refresh() { if (visible) commands.trySend(Command.Refresh) }
     fun setPlaying(value: Boolean) {
@@ -175,11 +170,17 @@ class HiLightController(private val context: Context, private val settings: AppS
                 runCatching { Shizuku.unbindUserService(args, connection, true) }
                 mutableStatus.value = HiLightStatus.ERROR
             }
-            Command.Tick -> Unit
+            is Command.Beat -> Unit
         }
         val ready = output != null
         if (HiLightPolicy.shouldIlluminate(settings.hiLightEnabled.value, playback.value, ready)) {
-            output?.pulse()
+            if (command is Command.Beat) {
+                val now = android.os.SystemClock.elapsedRealtime()
+                if (now - command.at <= 150 && now - lastBeatAt >= 180) {
+                    output?.pulse()
+                    lastBeatAt = now
+                }
+            }
             mutableStatus.value = HiLightStatus.ACTIVE
         } else if (ready && mutableStatus.value == HiLightStatus.ACTIVE) {
             output?.stop()
@@ -218,7 +219,7 @@ class HiLightController(private val context: Context, private val settings: AppS
 
     private sealed interface Command {
         data object Refresh : Command
-        data object Tick : Command
+        data class Beat(val at: Long) : Command
         data object Disconnected : Command
         data object Denied : Command
         data class Enabled(val value: Boolean) : Command
