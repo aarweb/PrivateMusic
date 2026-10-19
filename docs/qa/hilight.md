@@ -1,6 +1,6 @@
 # HiLight durante la reproducción
 
-Versión de entrega: **2.39** (versionCode **140**).
+Versión de entrega: **2.40** (versionCode **141**).
 
 Base: release publicada v2.38 (`df5d0a8`). Desarrollo aislado en `feat/hilight`,
 sin modificar el checkout principal con cambios anteriores.
@@ -18,7 +18,14 @@ activa el interruptor. Tras reiniciar el móvil puede ser necesario iniciar
 Shizuku de nuevo. Denegar el permiso mantiene la música funcionando y las
 luces deshabilitadas; siempre se permite apagar una preferencia ya guardada.
 
-Es un pulso tenue mientras se reproduce audio local, incluidos auriculares.
+Es un pulso multicolor mientras se reproduce audio local, incluidos auriculares.
+Los ocho LED recorren rojo, naranja, amarillo, verde, cian, azul, violeta y
+magenta, desplazando los colores con cada pulso. El máximo de cada canal pasa
+de 16/255 a 192/255 (12 veces el valor anterior; no implica 12 veces el brillo
+físico). Cada pulso sigue terminando en negro. El servicio Shizuku se versiona
+con la app para reemplazar el código anterior tras actualizar.
+Este cambio permite comprobar si el blanco demasiado tenue causaba la falta
+de luz visible; esa causa aún no está confirmada en el Pixel real.
 No analiza el micrófono ni sincroniza con el ritmo de la canción. Pausa,
 buffering sin audio, final de cola, Cast y destrucción del servicio apagan la
 luz. Durante un crossfade cuenta también el reproductor de salida.

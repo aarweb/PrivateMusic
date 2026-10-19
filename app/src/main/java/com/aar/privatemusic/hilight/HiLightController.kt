@@ -41,7 +41,7 @@ class HiLightController(private val context: Context, private val settings: AppS
     private val owner = Binder()
     private val args by lazy {
         Shizuku.UserServiceArgs(ComponentName(context, HiLightUserService::class.java))
-            .daemon(false).processNameSuffix("hilight").version(1)
+            .daemon(false).processNameSuffix("hilight").version(com.aar.privatemusic.BuildConfig.VERSION_CODE)
     }
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName, service: IBinder) {

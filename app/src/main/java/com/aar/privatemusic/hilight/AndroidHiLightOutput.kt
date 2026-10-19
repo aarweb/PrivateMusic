@@ -26,6 +26,12 @@ internal class AndroidHiLightOutput private constructor(private val port: Port) 
     }
     val supported: Boolean = lights.size == 8
     private var opened = false
+    private var colorOffset = 0
+    private val colors = intArrayOf(
+        0xffc00000.toInt(), 0xffc06000.toInt(), 0xffc0c000.toInt(),
+        0xff00c000.toInt(), 0xff00c0c0.toInt(), 0xff0060c0.toInt(),
+        0xff6000c0.toInt(), 0xffc000c0.toInt(),
+    )
 
     override fun pulse() {
         check(supported)
@@ -34,7 +40,7 @@ internal class AndroidHiLightOutput private constructor(private val port: Port) 
             port.open()
         }
         val effect = effectBuilderClass.getConstructor().newInstance()
-        for (light in lights) {
+        for ((index, light) in lights.sortedBy { it.id }.withIndex()) {
             val period = (Light::class.java.getMethod("getMinUpdatePeriodMillis")
                 .invoke(light) as Number).toLong().coerceIn(1, 250)
             fun frames(ms: Long) = maxOf(period, ms / period * period)
@@ -43,8 +49,9 @@ internal class AndroidHiLightOutput private constructor(private val port: Port) 
                 .invoke(sequence, sequenceClass.getField("INTERPOLATION_MODE_LINEAR").getInt(null))
             val point = sequenceBuilderClass.getMethod("addControlPoint", Long::class.javaPrimitiveType, Int::class.javaPrimitiveType)
             point.invoke(sequence, 0L, 0xff000000.toInt())
-            // A dim neutral pulse, not a microphone/beat analyser. Ends in black in < 1 s.
-            point.invoke(sequence, frames(198), 0xff101010.toInt())
+            // Rotate saturated colours across the array, with a 75% channel peak (was 6%).
+            // Each finite pulse still ends in black; this is not beat analysis.
+            point.invoke(sequence, frames(198), colors[(index + colorOffset) % colors.size])
             point.invoke(sequence, frames(594), 0xff000000.toInt())
             effectBuilderClass.getMethod("addLightSequence", Light::class.java, sequenceClass)
                 .invoke(effect, light, sequenceBuilderClass.getMethod("build").invoke(sequence))
@@ -52,6 +59,7 @@ internal class AndroidHiLightOutput private constructor(private val port: Port) 
         effectBuilderClass.getMethod("setIterations", Int::class.javaPrimitiveType).invoke(effect, 1)
         effectBuilderClass.getMethod("setPreemptive", Boolean::class.javaPrimitiveType).invoke(effect, true)
         port.effect(effectBuilderClass.getMethod("build").invoke(effect), effectClass)
+        colorOffset = (colorOffset + 1) % colors.size
     }
 
     override fun stop() {
