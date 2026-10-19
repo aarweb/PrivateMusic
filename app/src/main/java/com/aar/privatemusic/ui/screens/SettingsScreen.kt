@@ -1240,6 +1240,8 @@ fun SettingsScreen(app: PrivateMusicApp, onOpenStats: () -> Unit, onOpenEq: () -
             modifier = Modifier.padding(bottom = 8.dp),
         )
 
+        HiLightSetting(app)
+
         val keepScreenOn by app.settings.keepScreenOn.collectAsState()
         Row(
             Modifier.fillMaxWidth().padding(vertical = 8.dp),

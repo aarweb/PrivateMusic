@@ -28,6 +28,8 @@ class PrivateMusicApp : Application() {
 
     val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
+    val hiLight by lazy { com.aar.privatemusic.hilight.HiLightController(this, settings) }
+
     lateinit var settings: AppSettings
         private set
     lateinit var downloader: YtDownloader

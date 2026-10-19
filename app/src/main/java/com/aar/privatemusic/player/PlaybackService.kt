@@ -220,6 +220,7 @@ class PlaybackService : MediaLibraryService() {
             }
         })
         tailPlayer?.addListener(object : Player.Listener {
+            override fun onEvents(player: Player, events: Player.Events) { updateHiLightPlayback() }
             override fun onPlayerError(error: PlaybackException) {
                 tailPlayerErrorGeneration = if (tailPlayerErrorGeneration == Long.MAX_VALUE) {
                     Long.MIN_VALUE
@@ -236,6 +237,7 @@ class PlaybackService : MediaLibraryService() {
             }
         })
         player.addListener(object : Player.Listener {
+            override fun onEvents(player: Player, events: Player.Events) { updateHiLightPlayback() }
             override fun onPlayerError(error: PlaybackException) {
                 // Stream previews use signed URLs that expire; a dead preview item
                 // would otherwise fail silently forever from the notification.
@@ -2413,10 +2415,24 @@ class PlaybackService : MediaLibraryService() {
         super.onTaskRemoved(rootIntent)
     }
 
+    private fun updateHiLightPlayback() {
+        val local = localPlayer
+        (application as com.aar.privatemusic.PrivateMusicApp).hiLight.setPlaying(
+            com.aar.privatemusic.hilight.HiLightPolicy.localPlayback(
+                wantsPlay = local?.playWhenReady == true,
+                mainPlaying = local?.isPlaying == true,
+                tailPlaying = tailPlayer?.isPlaying == true,
+                cast = castPlayer != null && mediaSession?.player === castPlayer,
+                destroyed = serviceDestroyed,
+            ),
+        )
+    }
+
     override fun onDestroy() {
         // Invalidate first: no suspended handoff may commit during teardown.
         playbackHandoff.begin()
         serviceDestroyed = true
+        updateHiLightPlayback()
         spatialAudioController?.close()
         spatialAudioController = null
         NativeAudioState.clear()

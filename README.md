@@ -49,6 +49,7 @@ Requiere Android 8.0+ (arm64).
 - **Letras sincronizadas offline** (LRCLIB, cacheadas al descargar) con salto por línea.
 - **Crossfade real con solape**: las dos canciones suenan a la vez con curvas equal-power cruzadas (doble reproductor), y **AutoMix** iguala el BPM de la saliente con la entrante mediante time-stretch sin cambiar el tono. Normalización de volumen (RMS medido por canción), ecualizador con presets, sleep timer con fade-out.
 - Pantalla del reproductor con color dinámico de la carátula.
+- **HiLight al reproducir (experimental)**: pulso suave en Pixel 11 Pro, Pro XL y Pro Fold con Android 17. En Ajustes → Aplicación; oculto en otros móviles y deshabilitado hasta verificar acceso y ocho LED compatibles. En el firmware que restringe el control requiere Shizuku. [Configuración y verificación](docs/qa/hilight.md).
 
 **Inteligencia on-device (sin nube)**
 - Análisis de cada canción al descargarla: **BPM**, **tonalidad Camelot** y huella sónica.

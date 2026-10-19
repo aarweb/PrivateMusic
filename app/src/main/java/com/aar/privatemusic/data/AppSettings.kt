@@ -64,6 +64,14 @@ class AppSettings(context: Context) {
     private val _keepScreenOn = MutableStateFlow(prefs.getBoolean(KEY_KEEP_SCREEN_ON, false))
     val keepScreenOn: StateFlow<Boolean> = _keepScreenOn
 
+    private val _hiLightEnabled = MutableStateFlow(prefs.getBoolean("hilight_enabled", false))
+    val hiLightEnabled: StateFlow<Boolean> = _hiLightEnabled
+
+    fun setHiLightEnabled(value: Boolean) {
+        prefs.edit().putBoolean("hilight_enabled", value).apply()
+        _hiLightEnabled.value = value
+    }
+
     fun setKeepScreenOn(value: Boolean) {
         prefs.edit().putBoolean(KEY_KEEP_SCREEN_ON, value).apply()
         _keepScreenOn.value = value
